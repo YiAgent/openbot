@@ -1,8 +1,8 @@
 # Eval Task State
 
 **Last updated**: 2026-05-15
-**Active branch**: eval/E1  <!-- E0 done; next session branches eval/E1 from main after PR merges -->
-**Next task**: E1-T01  <!-- pending: open & merge `eval/E0 → main` first -->
+**Active branch**: eval/E1-T01..T10 (Graphite stack on eval/E0)
+**Next task**: E1-T02
 
 ## Done
 <!-- chronological, append-only. Format: - [x] <id> — <YYYY-MM-DD> — handoff: handoffs/<id>.md -->
@@ -11,6 +11,7 @@
 - [x] E0-T03 — 2026-05-15 — handoff: handoffs/E0-T03.md
 - [x] E0-T04 — 2026-05-15 — handoff: handoffs/E0-T04.md
 - [x] E0-T05 — 2026-05-15 — handoff: handoffs/E0-T05.md  (E0 milestone complete)
+- [x] E1-T01 — 2026-05-15 — handoff: handoffs/E1-T01.md
 
 ## Blocked
 <!-- Format: <id> — blocker note -->
