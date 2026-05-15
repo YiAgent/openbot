@@ -20,9 +20,12 @@
 - [x] E1-T01 — 2026-05-15 — handoff: handoffs/E1-T01.md
 - [x] E1-T02 — 2026-05-15 — handoff: handoffs/E1-T02.md
 - [x] E1-T03 — 2026-05-15 — handoff: handoffs/E1-T03.md
+- [x] E1-T04 — 2026-05-15 — handoff: handoffs/E1-T04.md  (real artifact export + 3/3 live LangSmith tests)
 - [x] E1-T05 — 2026-05-15 — handoff: handoffs/E1-T05.md
 - [x] E1-T06 — 2026-05-15 — handoff: handoffs/E1-T06.md  (`deepagents_baseline` provider complete; future `openbot_prod` provider remains separate work)
 - [x] E1-T07 — 2026-05-15 — handoff: handoffs/E1-T07.md
+- [x] E1-T09 — 2026-05-15 — handoff: handoffs/E1-T09.md  (local + direct-LangSmith summary paths)
+- [x] E1-T10 — 2026-05-15 — handoff: handoffs/E1-T10.md  (dual-project routing verified live)
 - [x] E2-T12 — 2026-05-15 — handoff: handoffs/E2-T12.md  (prompt_injection_v1, 24 cases, 6 categories)
 - [x] E2-T13 — 2026-05-15 — handoff: handoffs/E2-T13.md  (safety scorer with breach-category attribution)
 - [x] E2-T14 — 2026-05-15 — handoff: handoffs/E2-T14.md  (redteam task: 21/24 fail-safe; 3 context-blind FPs)
@@ -30,10 +33,7 @@
 
 ## Partial
 <!-- Format: <id> — open acceptance gap -->
-- E1-T04 — artifact surface exists, but `export_artifact()` still needs the real implementation + live LangSmith round-trip.
-- E1-T08 — synthetic smoke path runs, but full LangSmith trace / sample metadata / real artifact closure is not yet complete.
-- E1-T09 — local `.eval` → markdown export works, but LangSmith-source export remains open.
-- E1-T10 — routing code is present, but manual internal-vs-public project verification is still open.
+- E1-T08 — synthetic smoke path, artifacts, LangSmith sync, and validation now run end-to-end; cost remains provider-dependent and is explicitly reported as `unavailable` when the provider does not emit price data.
 
 ## Blocked
 <!-- Format: <id> — blocker note -->

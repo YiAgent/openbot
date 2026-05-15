@@ -58,10 +58,13 @@ The intended comparison is **same dataset + same scorer + same judge + same repo
 
 当前已具备本地 smoke 能力；后续 suite 继续按 `docs/eval/task-list.md` 上线：
 
-- **本地 smoke baseline**：`inspect eval evals/tasks/review_martian.py --task review_martian_baseline --limit 5`
+- **本地 smoke baseline**：`inspect eval 'evals/tasks/review_martian.py@review_martian_baseline' --limit 5`
 - **公开 benchmark**（E2-T11 之后）：`inspect eval inspect_evals/swe_bench_lite --solver evals.solvers.openbot_fix`
 - **CI 触发**（E3 之后）：PR matcher / cron 由 `.github/workflows/eval.yml` 调度
-- **LangSmith 校验**（每次 run）：`python scripts/validate_langsmith_run.py <run_id>`
+- **把本地 `.eval` 同步到 LangSmith**：
+  `uv run python -m evals.scripts.export_run_summary <path.eval> --push-langsmith --project openbot-eval-internal --dataset-sha256 <sha256> --mode smoke`
+- **LangSmith 校验**（每次 run）：`uv run python scripts/validate_langsmith_run.py <run_id>`
+- **直接从 LangSmith 出 summary**：`uv run python -m evals.scripts.export_run_summary --from-langsmith <run_id>`
 
 ## 边界提示
 
