@@ -20,7 +20,10 @@ _SECRET = "test-secret"
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SECRET)
     get_settings.cache_clear()
-    yield TestClient(app)
+    # `with TestClient(...)` triggers the FastAPI lifespan — needed so
+    # `app.state.github_adapter` is constructed from the patched env.
+    with TestClient(app) as c:
+        yield c
     get_settings.cache_clear()
 
 
@@ -60,7 +63,7 @@ def test_webhook_accepts_valid_signature(client: TestClient) -> None:
     assert data["status"] == "accepted"
     assert data["kind"] == "issue.opened"
     assert data["delivery_id"] == "deliv-1"
-    assert data["relevant"] == "true"
+    assert data["relevant"] is True
 
 
 def test_webhook_accepts_but_marks_irrelevant_unknown_event(client: TestClient) -> None:
@@ -68,12 +71,13 @@ def test_webhook_accepts_but_marks_irrelevant_unknown_event(client: TestClient) 
     response = client.post("/webhook/github", content=body, headers=_sign(body, event="star"))
 
     assert response.status_code == 202
-    assert response.json()["relevant"] == "false"
+    assert response.json()["relevant"] is False
 
 
 def test_webhook_503_when_secret_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENBOT_GITHUB_WEBHOOK_SECRET", raising=False)
     get_settings.cache_clear()
-    response = TestClient(app).post("/webhook/github", content=b"{}")
+    with TestClient(app) as c:
+        response = c.post("/webhook/github", content=b"{}")
     assert response.status_code == 503
     get_settings.cache_clear()

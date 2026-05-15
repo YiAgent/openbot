@@ -25,6 +25,8 @@ dependencies = [
     "pydantic-settings>=2.14.1",
     # HTTP — GitHub API + outbound (PRD §4.x)
     "httpx>=0.28.1",
+    # GitHub App JWT signing (RS256) — installation token flow
+    "pyjwt[crypto]>=2.9",
 ]
 
 [project.urls]

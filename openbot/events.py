@@ -50,6 +50,10 @@ class UnifiedEvent:
     issue_number: int | None = None
     pr_number: int | None = None
     comment_body: str | None = None
+    # Channel-specific token scope. For GitHub, the App installation id —
+    # required to mint an installation token before any write-back API call.
+    # Present in every authentic GitHub webhook payload under `installation.id`.
+    installation_id: int | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @property
