@@ -306,6 +306,8 @@ git clone https://github.com/<you>/openbot && cd openbot
 
 ## 8. Quality & Evaluation
 
+完整 spec 见 [eval PRD](./openbot-eval-prd.md)；本节给出主 PRD 视角的浓缩摘要，详细 milestone / 治理 / budget / online eval 留在 eval PRD。
+
 > 浓缩自 `CICD_AND_EVALS_CN.md` / `eval-setup-recommendation.md` / `github-bot-evaluation-benchmarks.md`。
 
 ### 8.1 评估框架选型
@@ -313,7 +315,7 @@ git clone https://github.com/<you>/openbot && cd openbot
 | 角色 | 选型 | 理由 |
 |---|---|---|
 | **Eval 主框架** | **Inspect AI**（UK AISI 开源） | agent-native、内置 SWE-bench task、sandbox 抽象、免费 |
-| **Trace / 观测** | **Langfuse self-hosted** + LangSmith free tier 备用 | docker 一行、自托管对齐项目精神 |
+| **Trace / 观测** | **LangSmith**（主选）+ Langfuse self-hosted（可选替代） | 与 LangChain / LangGraph 原生集成，dataset / experiment / online eval / annotation queue 一体化；若后续更重视自托管，再切 Langfuse |
 | **判分** | golden set + **LLM-as-judge (Claude Opus 4.7)** + 测试驱动（SWE-bench 模式） | 文本相似度对代码无效；LLM judge 跟人类口味对齐 |
 
 **明确反对**：BLEU / ROUGE 用于评 code —— 对代码语义无效。
@@ -500,6 +502,7 @@ Plugin PR review checklist：
 
 **内部演进文档**
 
+- [Eval PRD（§8 完整 spec）](./openbot-eval-prd.md)
 - [v0.1 PRD](../research/openbot-prd-v0.1.md) · [v0.2 PRD](../research/openbot-prd-v0.2.md) · [v0.3 PRD](../research/openbot-prd-v0.3.md)
 - [80 问拷问清单](../research/openbot-interrogation.md)
 
