@@ -19,7 +19,7 @@ classifiers = [
 dependencies = [
     # Web server — PRD §5.1 ingress is FastAPI
     "fastapi>=0.136.1",
-    "uvicorn[standard]>=0.32",
+    "uvicorn[standard]>=0.47.0",
     # Config — single source via .env (PRD §7)
     "pydantic>=2.13.4",
     "pydantic-settings>=2.6",
