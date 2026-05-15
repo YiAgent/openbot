@@ -94,3 +94,7 @@ docker-compose.override.yml
 # Memory / scratch — local-only
 .remember/
 .scratch/
+
+# Large benchmark datasets — committed in gzipped form; the plain JSONL is
+# lazily materialized at task load time (evals/tasks/review_martian.py).
+evals/datasets/martian_2026w20.jsonl

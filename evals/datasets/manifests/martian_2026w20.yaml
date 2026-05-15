@@ -1,0 +1,28 @@
+# evals/datasets/manifests/martian_2026w20.yaml
+#
+# Real Martian Code Review Benchmark (offline 50 PR set), pinned
+# to upstream commit 807d46980c33. Replaces the v0.1 smoke
+# fixture for the E2 baseline run (E2-T02).
+#
+name: martian_2026w20
+version: 1
+created_at: "2026-05-15"
+source: "https://github.com/withmartian/code-review-benchmark"
+upstream_commit: "807d46980c3390efbe8324c0b7a05fe3aa60c455"
+sampling_rule: "All 50 PRs from cal.com / discourse / grafana / keycloak / sentry"
+sample_count: 50
+sha256: "4b432111fbbe854a8c56fcd403e06681dd4bf9d3a5b32a04be8358f1c7573709"
+golden_generation: "upstream human-verified golden comments"
+public: true
+license: "MIT (upstream withmartian/code-review-benchmark)"
+related_suites: [review_martian]
+deprecated: false
+notes: |
+  Reproduce with:
+      uv run python -m evals.scripts.build_martian_dataset
+
+  Upstream gold comments do not specify file/line, so each finding's
+  ``file`` is empty and ``line`` is null. The LLM judge in
+  ``evals.scorers.review_overlap`` is the intended matcher; the
+  heuristic judge used by ``review_martian_smoke`` will under-count
+  on this dataset by design.

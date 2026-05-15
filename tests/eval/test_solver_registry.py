@@ -27,9 +27,18 @@ def test_unknown_solver_id_raises_clear_error() -> None:
 
 
 def test_review_task_metadata_records_solver_identity() -> None:
-    from evals.tasks.review_martian import build_review_martian_task
+    from evals.tasks.review_martian import (
+        _SMOKE_DATASET_PATH,
+        _SMOKE_DATASET_VERSION,
+        build_review_martian_task,
+    )
 
-    task = build_review_martian_task(solver_id="deepagents_baseline")
+    task = build_review_martian_task(
+        solver_id="deepagents_baseline",
+        dataset_path=_SMOKE_DATASET_PATH,
+        dataset_version=_SMOKE_DATASET_VERSION,
+    )
 
     assert task.metadata["solver_id"] == "deepagents_baseline"
     assert task.metadata["solver_family"] == "baseline"
+    assert task.metadata["dataset_version"] == _SMOKE_DATASET_VERSION
