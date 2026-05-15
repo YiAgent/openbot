@@ -17,7 +17,7 @@ jobs:
   # Guard：检测是否已有 Python 代码 / pyproject.toml
   # 没有代码时只输出 placeholder，让 PR 不会因 CI 失败而 block
   detect:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       has_python: ${{ steps.check.outputs.has_python }}
       has_tests: ${{ steps.check.outputs.has_tests }}
@@ -39,7 +39,7 @@ jobs:
   lint:
     needs: detect
     if: needs.detect.outputs.has_python == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -57,7 +57,7 @@ jobs:
   test:
     needs: detect
     if: needs.detect.outputs.has_python == 'true' && needs.detect.outputs.has_tests == 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -75,6 +75,6 @@ jobs:
   placeholder:
     needs: detect
     if: needs.detect.outputs.has_python == 'false'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - run: echo "No Python sources yet — CI lint/test will activate once pyproject.toml lands."
