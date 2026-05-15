@@ -85,3 +85,78 @@ def test_webhook_503_when_secret_unset(monkeypatch: pytest.MonkeyPatch, tmp_path
         response = c.post("/webhook/github", content=b"{}")
     assert response.status_code == 503
     get_settings.cache_clear()
+
+
+# ───── dedup integration ─────
+
+
+def test_webhook_dedup_fallback_open_when_redis_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without OPENBOT_REDIS_URL, both repeats are processed (fall-open).
+
+    Deterministic version of the prior "either-or" test: explicitly scrubs
+    the env so the dedup is guaranteed to be in fall-open mode, and asserts
+    both outcomes are "accepted".
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SECRET)
+    monkeypatch.delenv("OPENBOT_REDIS_URL", raising=False)
+    get_settings.cache_clear()
+
+    body = json.dumps(
+        {
+            "action": "opened",
+            "issue": {"number": 1},
+            "repository": {"full_name": "YiAgent/openbot"},
+            "sender": {"login": "u", "type": "User"},
+        }
+    ).encode()
+    headers = _sign(body) | {"x-github-delivery": "fallback-test-id"}
+
+    try:
+        with TestClient(app) as c:
+            r1 = c.post("/webhook/github", content=body, headers=headers)
+            r2 = c.post("/webhook/github", content=body, headers=headers)
+
+        assert r1.status_code == 202 and r1.json()["status"] == "accepted"
+        assert r2.status_code == 202 and r2.json()["status"] == "accepted"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_webhook_dedup_drops_workflow_when_redis_marks_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a real Redis (fakeredis here), the second delivery short-circuits
+    BEFORE the workflow dispatch — assert status=duplicate, no error."""
+    import fakeredis.aioredis  # local import: dev-only dep
+
+    monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SECRET)
+    get_settings.cache_clear()
+
+    # Patch make_client so the lifespan wires fakeredis instead of real redis.
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    monkeypatch.setenv("OPENBOT_REDIS_URL", "redis://fake")  # any truthy value
+    monkeypatch.setattr("openbot.webapp.make_client", lambda url: fake)
+
+    try:
+        body = json.dumps(
+            {
+                "action": "opened",
+                "issue": {"number": 42},
+                "repository": {"full_name": "YiAgent/openbot"},
+                "sender": {"login": "u", "type": "User"},
+            }
+        ).encode()
+        headers = _sign(body) | {"x-github-delivery": "dup-test-id"}
+
+        with TestClient(app) as c:
+            r1 = c.post("/webhook/github", content=body, headers=headers)
+            r2 = c.post("/webhook/github", content=body, headers=headers)
+
+        assert r1.status_code == 202 and r1.json()["status"] == "accepted"
+        assert r2.status_code == 202 and r2.json()["status"] == "duplicate"
+        assert r2.json()["delivery_id"] == "dup-test-id"
+    finally:
+        get_settings.cache_clear()
