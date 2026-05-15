@@ -206,6 +206,37 @@ def test_parse_missing_installation_is_none() -> None:
     assert event.installation_id is None
 
 
+# ───── sender.type → actor_type / is_from_bot ─────
+
+
+def test_parse_extracts_user_actor_type() -> None:
+    payload = _issue_opened_payload()
+    payload["sender"] = {"login": "yiwang", "type": "User"}
+    body = json.dumps(payload).encode()
+    event = _adapter().parse_event(body, _sign(body))
+    assert event.actor_type == "User"
+    assert event.is_from_bot is False
+
+
+def test_parse_extracts_bot_actor_type() -> None:
+    payload = _issue_opened_payload()
+    payload["sender"] = {"login": "dependabot[bot]", "type": "Bot"}
+    body = json.dumps(payload).encode()
+    event = _adapter().parse_event(body, _sign(body))
+    assert event.actor_type == "Bot"
+    assert event.is_from_bot is True
+
+
+def test_parse_missing_actor_type_defaults_to_none() -> None:
+    payload = _issue_opened_payload()
+    # sender has login but no type field (defensive)
+    payload["sender"] = {"login": "someone"}
+    body = json.dumps(payload).encode()
+    event = _adapter().parse_event(body, _sign(body))
+    assert event.actor_type is None
+    assert event.is_from_bot is False
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Write-back: reply / add_label / remove_label / get_actor_role
 # All requests go through httpx.MockTransport — no real network.

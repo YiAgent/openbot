@@ -20,6 +20,7 @@ def _event(
     issue_number: int | None = 7,
     installation_id: int | None = _INSTALL_ID,
     actor: str = "yiwang",
+    actor_type: str | None = "User",
 ) -> UnifiedEvent:
     return UnifiedEvent(
         channel="github",
@@ -27,6 +28,7 @@ def _event(
         kind=kind,
         repo="YiAgent/openbot",
         actor=actor,
+        actor_type=actor_type,
         issue_number=issue_number,
         installation_id=installation_id,
     )
@@ -101,6 +103,42 @@ async def test_skips_when_issue_number_missing(
         await maybe_run_triage(adapter, _event(issue_number=None))
     adapter.reply.assert_not_awaited()
     assert any(r.message == "triage_skipped_missing_context" for r in caplog.records)
+
+
+async def test_does_not_ack_bot_authored_issue(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Bot-authored issues (dependabot, our own bot, etc.) get no ACK.
+
+    Two reasons documented on the workflow:
+      1. ACK'ing routine dependabot issues is noise without value.
+      2. Defense-in-depth against any future workflow that opens issues
+         under our own App identity — an ACK would echo-loop.
+    """
+    adapter = _adapter()
+    bot_event = _event(actor="dependabot[bot]", actor_type="Bot")
+    assert bot_event.is_from_bot is True  # sanity
+
+    with caplog.at_level(logging.INFO, logger="openbot.workflows.triage"):
+        await maybe_run_triage(adapter, bot_event)
+
+    adapter.reply.assert_not_awaited()
+    assert any(r.message == "triage_skipped_bot_actor" for r in caplog.records)
+
+
+async def test_acks_human_authored_issue_with_explicit_user_type() -> None:
+    """Belt-and-suspenders: events with actor_type='User' must still ACK."""
+    adapter = _adapter()
+    await maybe_run_triage(adapter, _event(actor_type="User"))
+    adapter.reply.assert_awaited_once()
+
+
+async def test_acks_when_actor_type_missing() -> None:
+    """Defensive: if actor_type is None (older / partial payload), do NOT
+    over-skip — only Bot is skipped, not "unknown"."""
+    adapter = _adapter()
+    await maybe_run_triage(adapter, _event(actor_type=None))
+    adapter.reply.assert_awaited_once()
 
 
 # ───── failure handling ─────

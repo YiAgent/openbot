@@ -50,6 +50,11 @@ class UnifiedEvent:
     issue_number: int | None = None
     pr_number: int | None = None
     comment_body: str | None = None
+    # GitHub `sender.type` — typically "User" or "Bot" (also "Organization" rarely).
+    # Workflows that respond to comments / PRs MUST gate on `not is_from_bot` to
+    # avoid echo loops: a bot's own reply fires another comment.created webhook,
+    # which would re-enter the same workflow indefinitely if unfiltered.
+    actor_type: str | None = None
     # Channel-specific token scope. For GitHub, the App installation id —
     # required to mint an installation token before any write-back API call.
     # Present in every authentic GitHub webhook payload under `installation.id`.
@@ -60,3 +65,14 @@ class UnifiedEvent:
     def is_relevant(self) -> bool:
         """Whether the Router should dispatch a workflow."""
         return self.kind is not EventKind.UNKNOWN
+
+    @property
+    def is_from_bot(self) -> bool:
+        """True iff the event was authored by a GitHub App bot identity.
+
+        Resolves True for `openbot-dev[bot]`, `dependabot[bot]`,
+        `github-actions[bot]`, etc.; False for any human account regardless of
+        login suffix. The check is on `actor_type`, not login pattern — login
+        suffixes are not part of GitHub's API contract; `sender.type` is.
+        """
+        return self.actor_type == "Bot"

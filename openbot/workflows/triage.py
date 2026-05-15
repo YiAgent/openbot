@@ -43,6 +43,18 @@ async def maybe_run_triage(adapter: GitHubAdapter, event: UnifiedEvent) -> None:
     if event.kind is not EventKind.ISSUE_OPENED:
         return
 
+    if event.is_from_bot:
+        # Two reasons to skip bot-authored issues:
+        #   1. dependabot / github-actions / coderabbit etc. open routine
+        #      issues; auto-ACK'ing them adds noise without value.
+        #   2. defense-in-depth against echo loops if a future workflow
+        #      ever opens issues under our own App identity.
+        _logger.info(
+            "triage_skipped_bot_actor",
+            extra={"delivery_id": event.delivery_id, "actor": event.actor},
+        )
+        return
+
     if event.installation_id is None or event.issue_number is None:
         # Defensive: PRD §5.1 guarantees these for authentic issue events, but
         # log if a real webhook ever lacks them so we can spot it in audit.

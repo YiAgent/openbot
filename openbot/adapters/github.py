@@ -99,7 +99,9 @@ class GitHubAdapter(ChannelAdapter):
         kind = _EVENT_TABLE.get((event_type, action), EventKind.UNKNOWN)
 
         repo = (payload.get("repository") or {}).get("full_name") or ""
-        actor = (payload.get("sender") or {}).get("login") or ""
+        sender = payload.get("sender") or {}
+        actor = sender.get("login") or ""
+        actor_type = sender.get("type") or None
 
         issue = payload.get("issue") or {}
         pull_request = payload.get("pull_request") or {}
@@ -126,6 +128,7 @@ class GitHubAdapter(ChannelAdapter):
             kind=kind,
             repo=repo,
             actor=actor,
+            actor_type=actor_type,
             issue_number=issue_number,
             pr_number=pr_number,
             comment_body=comment_body,
