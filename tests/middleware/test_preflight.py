@@ -1,0 +1,243 @@
+"""Pre-flight runner + announce_once helper — harness spec §3 M3 / §9.2.
+
+Slice A only exercises the FRAMEWORK; real gates land in slice B/C.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+from unittest.mock import AsyncMock
+
+import fakeredis.aioredis
+import pytest
+
+from openbot.config_repo import baked_in_defaults
+from openbot.events import EventKind, UnifiedEvent
+from openbot.llm.router import Feature
+from openbot.middleware import (
+    MiddlewareDecision,
+    MiddlewareResult,
+    PreflightContext,
+    announce_once,
+    run_preflight,
+)
+from openbot.persistence.models import WorkflowPhase
+from openbot.router import Dispatch, derive_task_id
+from openbot.workflows import maybe_run_triage
+
+
+def _event() -> UnifiedEvent:
+    return UnifiedEvent(
+        channel="github",
+        delivery_id="deliv-1",
+        kind=EventKind.ISSUE_OPENED,
+        repo="org/r",
+        actor="u",
+        actor_type="User",
+        issue_number=1,
+        installation_id=99,
+    )
+
+
+def _ctx(
+    *,
+    adapter: Any | None = None,
+    redis: Any | None = None,
+) -> PreflightContext:
+    event = _event()
+    return PreflightContext(
+        event=event,
+        dispatch=Dispatch(Feature.TRIAGE, maybe_run_triage, derive_task_id(event)),
+        config=baked_in_defaults(),
+        adapter=adapter or AsyncMock(),
+        session_factory=None,  # slice A: audit-write is a smoke check elsewhere
+        redis=redis,
+    )
+
+
+@dataclass
+class _NamedMiddleware:
+    """Test helper — wraps an async callable with a `.name` attribute."""
+
+    name: str
+    decision: MiddlewareDecision
+    calls: list[str]
+
+    async def __call__(self, ctx: PreflightContext) -> MiddlewareDecision:
+        self.calls.append(self.name)
+        return self.decision
+
+
+# ───── ordering / short-circuit ─────
+
+
+async def test_empty_middleware_chain_returns_proceed() -> None:
+    decision = await run_preflight(_ctx(), [])
+    assert decision.result is MiddlewareResult.PROCEED
+
+
+async def test_runs_in_order_until_first_block() -> None:
+    calls: list[str] = []
+    mws = [
+        _NamedMiddleware("a", MiddlewareDecision.proceed(), calls),
+        _NamedMiddleware(
+            "b",
+            MiddlewareDecision(result=MiddlewareResult.BLOCKED, reason="b_blocked"),
+            calls,
+        ),
+        # `c` must not run — short-circuited by `b`.
+        _NamedMiddleware("c", MiddlewareDecision.proceed(), calls),
+    ]
+    decision = await run_preflight(_ctx(), mws)
+    assert decision.result is MiddlewareResult.BLOCKED
+    assert decision.reason == "b_blocked"
+    assert calls == ["a", "b"]
+
+
+async def test_proceeds_when_no_middleware_blocks() -> None:
+    calls: list[str] = []
+    mws = [
+        _NamedMiddleware("a", MiddlewareDecision.proceed(), calls),
+        _NamedMiddleware("b", MiddlewareDecision.proceed(), calls),
+    ]
+    decision = await run_preflight(_ctx(), mws)
+    assert decision.result is MiddlewareResult.PROCEED
+    assert calls == ["a", "b"]
+
+
+async def test_raising_middleware_does_not_break_chain() -> None:
+    """A buggy gate must not become a 5xx that GitHub retries forever."""
+    calls: list[str] = []
+
+    class _Boom:
+        name = "boom"
+
+        async def __call__(self, ctx: PreflightContext) -> MiddlewareDecision:
+            raise RuntimeError("explode")
+
+    mws = [
+        _Boom(),
+        _NamedMiddleware("after", MiddlewareDecision.proceed(), calls),
+    ]
+    decision = await run_preflight(_ctx(), mws)
+    assert decision.result is MiddlewareResult.PROCEED
+    # The "after" middleware still got its turn.
+    assert calls == ["after"]
+
+
+# ───── BLOCKED side effects: comment + audit ─────
+
+
+async def test_blocked_with_comment_posts_via_adapter() -> None:
+    adapter = AsyncMock()
+    adapter.reply = AsyncMock(return_value={"id": 1})
+    ctx = _ctx(adapter=adapter)
+    mws = [
+        _NamedMiddleware(
+            "x",
+            MiddlewareDecision(
+                result=MiddlewareResult.BLOCKED,
+                reason="x_blocked",
+                comment="hello",
+                audit_phase=WorkflowPhase.REJECTED,
+            ),
+            [],
+        )
+    ]
+    await run_preflight(ctx, mws)
+    adapter.reply.assert_awaited_once()
+    posted_event, posted_msg = adapter.reply.await_args.args
+    assert posted_msg == "hello"
+    assert posted_event is ctx.event
+
+
+async def test_blocked_without_comment_does_not_reply() -> None:
+    adapter = AsyncMock()
+    adapter.reply = AsyncMock()
+    ctx = _ctx(adapter=adapter)
+    mws = [
+        _NamedMiddleware(
+            "x",
+            MiddlewareDecision(result=MiddlewareResult.BLOCKED, reason="silent"),
+            [],
+        )
+    ]
+    await run_preflight(ctx, mws)
+    adapter.reply.assert_not_awaited()
+
+
+# ───── announce_once (§9.2) ─────
+
+
+async def test_announce_once_posts_first_time() -> None:
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    reply = AsyncMock(return_value=None)
+    ok = await announce_once(redis, key="k", ttl_seconds=60, reply=reply)
+    assert ok is True
+    reply.assert_awaited_once()
+
+
+async def test_announce_once_idempotent_within_ttl() -> None:
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    reply = AsyncMock(return_value=None)
+    first = await announce_once(redis, key="k2", ttl_seconds=60, reply=reply)
+    second = await announce_once(redis, key="k2", ttl_seconds=60, reply=reply)
+    assert first is True
+    assert second is False
+    assert reply.await_count == 1
+
+
+async def test_announce_once_falls_closed_when_redis_none() -> None:
+    """No redis → no notification (vs. spamming every webhook)."""
+    reply = AsyncMock(return_value=None)
+    ok = await announce_once(None, key="k3", ttl_seconds=60, reply=reply)
+    assert ok is False
+    reply.assert_not_awaited()
+
+
+async def test_announce_once_swallows_reply_errors() -> None:
+    """Reply failures don't propagate — gate decision already made."""
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    reply = AsyncMock(side_effect=RuntimeError("github 502"))
+    ok = await announce_once(redis, key="k4", ttl_seconds=60, reply=reply)
+    assert ok is False  # reply failed → reported as not-sent
+
+
+# ───── BLOCKED + announce_key dedup ─────
+
+
+async def test_blocked_with_announce_key_posts_only_first_time() -> None:
+    redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    adapter = AsyncMock()
+    adapter.reply = AsyncMock(return_value={"id": 1})
+    ctx = _ctx(adapter=adapter, redis=redis)
+    mw = _NamedMiddleware(
+        "rate",
+        MiddlewareDecision(
+            result=MiddlewareResult.BLOCKED,
+            reason="rate_user",
+            comment="Rate limited",
+            announce_key="rate:user:u:2026-05-15",
+            announce_ttl=86400,
+        ),
+        [],
+    )
+    await run_preflight(ctx, [mw])
+    await run_preflight(ctx, [mw])
+    # Two BLOCKED runs → exactly one user-facing comment.
+    assert adapter.reply.await_count == 1
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("audit_phase", WorkflowPhase.SKIPPED),
+        ("audit_phase", WorkflowPhase.REJECTED),
+    ],
+)
+def test_middleware_decision_is_frozen(field: str, value: Any) -> None:
+    """Decisions must be immutable — no in-place fixup after the runner returns."""
+    decision = MiddlewareDecision(result=MiddlewareResult.BLOCKED, **{field: value})
+    with pytest.raises(Exception):  # noqa: B017 — FrozenInstanceError
+        setattr(decision, field, WorkflowPhase.FAILED)

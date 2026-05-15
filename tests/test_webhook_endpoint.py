@@ -54,25 +54,33 @@ def test_webhook_accepts_valid_signature(client: TestClient) -> None:
             "action": "opened",
             "issue": {"number": 1},
             "repository": {"full_name": "YiAgent/openbot"},
-            "sender": {"login": "u"},
+            "sender": {"login": "u", "type": "User"},
+            "installation": {"id": 12345},
         }
     ).encode()
     response = client.post("/webhook/github", content=body, headers=_sign(body))
 
     assert response.status_code == 202
     data = response.json()
+    # Router matched → harness spec §3 M2: status="accepted" + feature + task_id.
     assert data["status"] == "accepted"
     assert data["kind"] == "issue.opened"
     assert data["delivery_id"] == "deliv-1"
     assert data["relevant"] is True
+    assert data["feature"] == "triage"
+    assert len(data["task_id"]) == 32  # sha256-hex truncated (spec §9.1)
 
 
 def test_webhook_accepts_but_marks_irrelevant_unknown_event(client: TestClient) -> None:
     body = b'{"action":"created"}'
     response = client.post("/webhook/github", content=body, headers=_sign(body, event="star"))
 
+    # Unknown event types: Router returns None → "ignored" status (vs the
+    # pre-router "accepted but irrelevant" wording). Still 202 for GitHub.
     assert response.status_code == 202
-    assert response.json()["relevant"] is False
+    payload = response.json()
+    assert payload["status"] == "ignored"
+    assert payload["relevant"] is False
 
 
 def test_webhook_503_when_secret_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -110,6 +118,7 @@ def test_webhook_dedup_fallback_open_when_redis_unset(
             "issue": {"number": 1},
             "repository": {"full_name": "YiAgent/openbot"},
             "sender": {"login": "u", "type": "User"},
+            "installation": {"id": 99},
         }
     ).encode()
     headers = _sign(body) | {"x-github-delivery": "fallback-test-id"}
@@ -147,6 +156,7 @@ def test_webhook_dedup_drops_workflow_when_redis_marks_duplicate(
                 "issue": {"number": 42},
                 "repository": {"full_name": "YiAgent/openbot"},
                 "sender": {"login": "u", "type": "User"},
+                "installation": {"id": 77},
             }
         ).encode()
         headers = _sign(body) | {"x-github-delivery": "dup-test-id"}
