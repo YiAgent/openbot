@@ -6,6 +6,7 @@ import hmac
 import json
 from collections.abc import Iterator
 from hashlib import sha256
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -74,7 +75,10 @@ def test_webhook_accepts_but_marks_irrelevant_unknown_event(client: TestClient) 
     assert response.json()["relevant"] is False
 
 
-def test_webhook_503_when_secret_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_webhook_503_when_secret_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Isolate from any ambient .env on disk — pydantic-settings looks for ./.env
+    # relative to cwd. chdir to a clean tmp dir so only env vars matter.
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("OPENBOT_GITHUB_WEBHOOK_SECRET", raising=False)
     get_settings.cache_clear()
     with TestClient(app) as c:
