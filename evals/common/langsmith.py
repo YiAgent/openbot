@@ -1,23 +1,25 @@
 """LangSmith client wrapper — eval PRD §10.1 / §10.2 / §13.2.
 
-Three responsibilities:
-  - init_client()         → returns a LangSmith Client (read API key from env)
-  - log_run_metadata()    → validates every PRD §10.1 field is present, else raises
-  - log_sample()          → validates every PRD §10.2 field is present, else raises
+Four responsibilities:
+  - init_client(*, public)              → returns a LangSmith Client (env-driven)
+  - init_client_for_dataset(version)    → routes via manifest.public (PRD §13.2)
+  - log_run_metadata()                  → validates PRD §10.1 fields, else raises
+  - log_sample()                        → validates PRD §10.2 fields, else raises
 
 The actual LangSmith client lives in `langsmith.Client` (already an indirect
 dep via inspect-ai). For tests, inject a mock client — both `log_*` functions
 take it as their first arg.
 
-Project routing (PRD §13.2): if `dataset_version` resolves to a public dataset,
-route to `LANGSMITH_PROJECT_PUBLIC`; else `LANGSMITH_PROJECT_INTERNAL`. The
-routing predicate is wired in E1-T10 — until then `init_client(public=False)`
-just reads `LANGSMITH_PROJECT_INTERNAL`.
+Project routing (PRD §13.2): each dataset manifest carries a `public: bool`
+flag (PRD §7.2 schema). `is_public_dataset(version)` reads the manifest and
+returns the flag; `init_client_for_dataset(version)` calls `init_client` with
+that flag so a single dataset id selects the right LangSmith project.
 """
 
 from __future__ import annotations
 
 import os
+import pathlib
 from collections.abc import Mapping
 from typing import Any, Protocol
 
@@ -26,6 +28,9 @@ from evals.common._metadata_spec import (
     REQUIRED_SAMPLE_FIELD_NAMES,
 )
 
+# `evals/datasets/manifests/` lives at repo-root/evals/datasets/manifests/.
+_MANIFEST_DIR = pathlib.Path(__file__).resolve().parent.parent / "datasets" / "manifests"
+
 
 class _LangSmithLike(Protocol):
     """Structural type — anything with the two methods we touch."""
@@ -33,6 +38,30 @@ class _LangSmithLike(Protocol):
     def update_run(self, run_id: str, **kwargs: Any) -> Any: ...
 
     def create_feedback(self, run_id: str, key: str, **kwargs: Any) -> Any: ...
+
+
+def is_public_dataset(dataset_version: str, *, manifest_dir: pathlib.Path | None = None) -> bool:
+    """Read `<dataset_version>.yaml` manifest and return its `public` field.
+
+    PRD §7.2 schema mandates a `public: bool` key on every manifest. Missing
+    manifest or missing field is treated as **internal** (`False`) — fail safe:
+    a misconfigured dataset must never accidentally leak into the public
+    LangSmith project (which is the SOC of PRD §13.2).
+    """
+    root = manifest_dir or _MANIFEST_DIR
+    manifest = root / f"{dataset_version}.yaml"
+    if not manifest.exists():
+        return False
+    text = manifest.read_text(encoding="utf-8")
+    # Hand-rolled minimal YAML scan to avoid pulling in a yaml dep at import time;
+    # the only field we care about is `public: <bool>` at top level.
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line.startswith("public:"):
+            continue
+        value = line.split(":", 1)[1].strip().lower()
+        return value in {"true", "yes", "1"}
+    return False
 
 
 def init_client(*, public: bool = False) -> _LangSmithLike:
@@ -60,6 +89,16 @@ def init_client(*, public: bool = False) -> _LangSmithLike:
     from langsmith import Client
 
     return Client(api_key=api_key)
+
+
+def init_client_for_dataset(dataset_version: str) -> _LangSmithLike:
+    """Sugar: pick the right project based on the dataset's manifest.public flag.
+
+    Caller-friendly entry point — task files (E1-T08+) just say::
+
+        client = init_client_for_dataset(metadata["dataset_version"])
+    """
+    return init_client(public=is_public_dataset(dataset_version))
 
 
 def _missing(required: frozenset[str], provided: Mapping[str, Any]) -> list[str]:
