@@ -96,9 +96,8 @@ async def test_key_expires_after_ttl(fake_redis: Any) -> None:
     # Wait past the TTL — fakeredis honors EX.
     await asyncio.sleep(1.1)
 
-    assert (
-        await dedup.check_and_mark("github", "expiring") is DedupOutcome.FRESH
-    ), "key should have expired by now"
+    outcome_after_ttl = await dedup.check_and_mark("github", "expiring")
+    assert outcome_after_ttl is DedupOutcome.FRESH, "key should have expired by now"
 
 
 async def test_ttl_is_set_on_first_write(fake_redis: Any) -> None:
