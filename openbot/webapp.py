@@ -19,13 +19,14 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
 
 from openbot import __version__
 from openbot.adapters.base import SignatureError
 from openbot.adapters.github import GitHubAdapter
 from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
+from openbot.workflows import maybe_run_triage
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -93,15 +94,20 @@ def health() -> dict[str, str]:
 
 
 @app.post("/webhook/github", status_code=status.HTTP_202_ACCEPTED)
-async def github_webhook(request: Request) -> dict[str, str | int | bool]:
+async def github_webhook(
+    request: Request, background: BackgroundTasks
+) -> dict[str, str | int | bool]:
     """Receive a GitHub webhook.
 
     Order matters (PRD §5.1):
       1. read RAW body bytes — HMAC is computed over them
       2. verify signature (constant-time)
       3. parse → UnifiedEvent
-      4. enqueue + dedup-by-delivery_id (NOT YET — Day 2-3)
+      4. schedule workflow as a background task (runs after we 202)
       5. return 202 immediately so GitHub doesn't retry
+
+    BackgroundTasks is the v0.1 stop-gap; Day 2-3 swaps it for a Redis queue
+    so workflows survive process restarts and dedup-by-delivery_id is real.
     """
     adapter: GitHubAdapter | None = getattr(request.app.state, "github_adapter", None)
     if adapter is None:
@@ -139,6 +145,10 @@ async def github_webhook(request: Request) -> dict[str, str | int | bool]:
             "relevant": event.is_relevant,
         },
     )
+
+    # Dispatch workflows. Each handler decides whether the event qualifies;
+    # `maybe_run_*` are designed to be idempotent + swallow their own failures.
+    background.add_task(maybe_run_triage, adapter, event)
 
     return {
         "status": "accepted",

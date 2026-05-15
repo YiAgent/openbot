@@ -1,0 +1,63 @@
+# OpenBot · local Postgres + Redis for dev.
+#
+# Scope (v0.1 Day 2-3): just the stateful infra; OpenBot itself runs natively
+# via `make dev` against these services. We do NOT containerize OpenBot here —
+# the published Docker image (PRD §7 Docker Hub) lands later with a separate
+# multi-stage Dockerfile.
+#
+# Ports bind to 127.0.0.1 only: no LAN exposure, no accidental "but my DB
+# accepted that connection from a hotel wifi" stories.
+#
+# Schema is owned by the app (no init SQL here yet). PRD §4.5 cost_meter,
+# §4.6 rate_limit_counter, §5.1 thread_metadata land when their consumers do.
+
+name: openbot
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: openbot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: openbot
+      POSTGRES_PASSWORD: openbot          # dev-only literal; prod via Doppler/.env
+      POSTGRES_DB: openbot
+      # Tighter auth even for trusted local — md5 not trust (defense-in-depth).
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - openbot-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openbot -d openbot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: openbot-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - openbot-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  openbot-pg-data:
+  openbot-redis-data:
