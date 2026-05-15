@@ -2,7 +2,7 @@
 
 > 制定日期：2026-05-14
 > 适用场景：个人开发者，单轮 eval 预算 $50–200
-> 配套报告：[robobun & 同类 bot 调研](./robobun-and-similar-bots.md) · [GitHub Bot 评测 benchmark 调研](./github-bot-evaluation-benchmarks.md)
+> 配套报告：[robobun & 同类 bot 调研](./robobun-and-similar-bots.md) · [GitHub Bot 评测 benchmark 调研](./github-bot-evaluation-benchmarks.md) · [Eval Runner 开发计划](./eval-runner-development-plan.md)
 
 ---
 
@@ -14,7 +14,7 @@
 
 ## TL;DR 一句话推荐
 
-**框架用 Inspect AI**（UK AISI 开源，原生 agent + sandbox + SWE-bench task），**tracking 用 Langfuse 自托管**（免费、与 LangGraph 兼容）。三个功能各自的核心 benchmark：
+**框架用 Inspect AI**（UK AISI 开源，原生 agent + sandbox + SWE-bench task），**tracking / experiment 用 LangSmith**（与 LangChain / LangGraph 原生集成）；如果未来更重视自托管，再切 Langfuse。三个功能各自的核心 benchmark：
 
 | 功能 | 核心 benchmark | 单轮成本 | 跑的频率 |
 |---|---|---|---|
@@ -35,20 +35,20 @@
 | 候选 | 推荐？ | 理由 |
 |---|---|---|
 | **Inspect AI** | ✅ 主选 | 免费开源、原生 agent eval、内置 SWE-bench task、Docker sandbox 抽象、能映射到 Open SWE 的 LangGraph + sandbox |
-| LangSmith Evals | 🔶 辅助 | 同 LangGraph 生态，trace 友好；但 free tier 1k traces/月，跑全量 SWE-bench Lite 会超 |
+| LangSmith Evals | 🔶 不是主 runner | 很适合做 dataset / experiment / online eval / human review；但仍不如 Inspect 适合作为统一 agent runner |
 | Braintrust | ❌ | UI 最好，但收费，个人开发者不值 |
 | Promptfoo | 🔶 辅助 | YAML 最低门槛，适合 prompt 微调，但不是 agent-native |
 | OpenAI Evals | ❌ | 单 turn 设计，跑不了 agent trajectory |
 | DeepEval | ❌ | RAG 评测强项，coding agent 不是它专长 |
 
-### Tracking：Langfuse 自托管
+### Tracking / Experiment：LangSmith 主选
 
-- MIT 开源、Docker 一键起、零成本
-- 自动捕获每次 run 的 `(tokens_in, tokens_out, model, $/task, latency)`
-- 支持 LLM-as-judge 评分
-- 与 LangGraph 兼容，trace 嵌套清晰
+- 与 LangChain / LangGraph 原生集成，接 trace 最省胶水代码
+- 同时支持 dataset、offline experiment、online evaluation、annotation queue、pairwise comparison
+- 能直接承接现有 reviewer eval 资产，迁移成本最低
+- 很适合记录 `(tokens_in, tokens_out, model, $/task, latency)` 并对比不同版本实验
 
-如果不想自托管，LangSmith 免费 tier 也够你开发阶段用。
+如果未来更重视**完全自托管**，再把观测层切到 Langfuse；但对当前项目，先用 LangSmith 更务实。
 
 ### 一行装配
 
@@ -56,10 +56,7 @@
 # 主框架
 uv add inspect-ai inspect-evals
 
-# Tracking（二选一）
-# A. Langfuse 自托管
-docker compose -f langfuse-docker-compose.yml up -d
-# B. LangSmith（你已在用）
+# Tracking / Experiment
 export LANGSMITH_API_KEY=...
 
 # 跑现成 SWE-bench Verified task
@@ -268,7 +265,7 @@ inspect eval inspect_evals/swe_bench_verified \
 
 **目标**：能跑通最小 eval loop，对照你目前的 bot 给出第一组 baseline 分数。
 
-- [ ] 装 Inspect AI + Langfuse
+- [ ] 装 Inspect AI + LangSmith
 - [ ] 把 Open SWE 的 `agent.server:get_agent` 包成 Inspect `Solver`（参考 [inspect_evals/swe_bench](https://github.com/UKGovernmentBEIS/inspect_evals/tree/main/src/inspect_evals/swe_bench)）
 - [ ] **建自家 PR shadow set**：从你 bot 服务的目标 repo 抽 30-50 个 merged PR，存成 `internal_prs_v1.jsonl`
 - [ ] **建自家 issue retrospective set**：抽 50-100 个 closed issue 含 label / duplicate-of 关系
@@ -283,7 +280,7 @@ inspect eval inspect_evals/swe_bench_verified \
 - [ ] 跑 Martian Code Review Bench 一次（Sonnet 4.5）
 - [ ] 跑 SWE-bench Lite（Haiku 4.5）
 - [ ] 跑 GitBugs 分类子集（Haiku 4.5）
-- [ ] 设 Langfuse 自动采集 cost / latency / step count
+- [ ] 设 LangSmith 自动采集 cost / latency / step count
 
 **产出**：v0.2 报告含 4 个 benchmark 分数 + cost 表
 
@@ -400,7 +397,7 @@ jobs:
 3. **不要用 BLEU/ROUGE 评 review 或 PR description**——已被反复证明跟人类判断弱相关。用 LLM judge with rubric。
 4. **不要只信一个数字**。SWE-bench Lite、Martian、自家 shadow、online resolution rate 这四类信号要同时存在且互相印证，单一指标一定会被 over-fit。
 5. **不要跑 Multi-SWE-bench**——除非你明确支持 5+ 语言。MVP 阶段单 Python 用 Lite 即可，多 1 个语言加 Aider Polyglot 对应语言切片。
-6. **不要装 Braintrust / DeepEval / Phoenix 一堆框架**——个人开发者一个 Inspect AI + 一个 Langfuse 已经够，多装一个就多一份维护成本。
+6. **不要装 Braintrust / DeepEval / Phoenix 一堆框架**——个人开发者一个 Inspect AI + 一个 LangSmith 已经够，多装一个就多一份维护成本。
 7. **不要漏掉 prompt injection 红队**——你的 bot 一旦能 push commit 或评论里贴 token，必须把 ["Comment and Control"](https://oddguan.com/blog/comment-and-control-prompt-injection-credential-theft-claude-code-gemini-cli-github-copilot/) 范式的 20 条 case 当回归测试。这个不需要外部 benchmark，自己写就行。
 
 ---
@@ -423,7 +420,7 @@ Issue triage /          │  Cupid dedup       │── 每次 prompt 改
                         └─ 自家 retrospective┘
 
 ────────────────────────────────────────────────
-框架：Inspect AI（运行）+ Langfuse（tracking）
+框架：Inspect AI（运行）+ LangSmith（tracking / experiment）
 模型：开发 Haiku 4.5 / 里程碑 Sonnet 4.5
 预算：开发期 ~$300-600/月，稳定期 ~$700-1400/月
 ```
@@ -433,7 +430,8 @@ Issue triage /          │  Cupid dedup       │── 每次 prompt 改
 ## 关键链接（按工具/数据集）
 
 - **Inspect AI**：[inspect.aisi.org.uk](https://inspect.aisi.org.uk/) · [inspect_ai GitHub](https://github.com/UKGovernmentBEIS/inspect_ai) · [inspect_evals](https://github.com/UKGovernmentBEIS/inspect_evals)
-- **Langfuse**：[langfuse.com](https://langfuse.com/) · [self-host docs](https://langfuse.com/self-hosting)
+- **LangSmith**：[smith.langchain.com](https://smith.langchain.com/)
+- **Langfuse**：[langfuse.com](https://langfuse.com/) · [self-host docs](https://langfuse.com/self-hosting)（若后续转向自托管）
 - **Martian Code Review Bench**：[codereview.withmartian.com](https://codereview.withmartian.com/) · [GitHub](https://github.com/withmartian/code-review-benchmark)
 - **SWE-bench**：[swebench.com](https://www.swebench.com/) · [Lite](https://www.swebench.com/lite.html) · [Verified](https://www.swebench.com/verified.html)
 - **Aider Polyglot**：[Leaderboards](https://aider.chat/docs/leaderboards/) · [polyglot-benchmark](https://github.com/Aider-AI/polyglot-benchmark)
