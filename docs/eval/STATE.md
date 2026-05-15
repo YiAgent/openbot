@@ -2,7 +2,7 @@
 
 **Last updated**: 2026-05-15
 **Active branch**: eval/E1-T01..T10 (Graphite stack on eval/E0)
-**Next task**: E1-T04 (will land as ❌ blocked — needs LANGSMITH_API_KEY)
+**Next task**: E1-T05
 
 ## Done
 <!-- chronological, append-only. Format: - [x] <id> — <YYYY-MM-DD> — handoff: handoffs/<id>.md -->
@@ -17,7 +17,7 @@
 
 ## Blocked
 <!-- Format: <id> — blocker note -->
-- _(none)_
+- E1-T04 — needs live LANGSMITH_API_KEY for AC integration test; skeleton only. See handoffs/E1-T04.md.
 
 ## Scope notes
 - Internal-data-dependent tasks are DEFERRED (see [`task-list.md` §"范围调整"](./task-list.md) and [`openbot-eval-prd.md` §4.0](../prd/openbot-eval-prd.md#40-范围调整--internal-data-dependent-suite-全部-deferred2026-05-15-锁定)). 🕒 tasks are SKIPPED when picking next.
