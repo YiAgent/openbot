@@ -47,6 +47,17 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ─── Persistence ───
+    # If unset, webhook dedup falls open (logs WARNING). Production MUST set it.
+    redis_url: str | None = Field(
+        default=None,
+        description=(
+            "Redis connection URL, e.g. redis://localhost:6379/0. "
+            "Used for webhook dedup (now), rate-limit counters (PR 17), "
+            "and the workflow queue (PR 16)."
+        ),
+    )
+
     debug: bool = Field(default=False, description="Verbose logs; never enable in production.")
 
 

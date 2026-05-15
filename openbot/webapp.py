@@ -1,11 +1,13 @@
 """FastAPI application entry point.
 
 PRD §5.1 ingress order:
-    raw body → verify_signature → parse → (dedup) → (enqueue) → 202
+    raw body → verify_signature → parse → dedup → schedule workflow → 202
 
-v0.1 Week 1 wiring: /health + /webhook/github. Dedup-by-delivery-id and
-Redis enqueue land in Day 2-3; for now the endpoint returns 202 once the
-event is normalized to a UnifiedEvent.
+v0.1 wiring: /health + /webhook/github.
+  - Webhook dedup via Redis SET NX EX is live this PR — duplicate retries
+    from GitHub no longer re-run the workflow.
+  - Workflow dispatch still uses FastAPI BackgroundTasks; Redis queue +
+    delivery_id-keyed worker land in PR 16.
 
 Write-back capability (reply / labels / role) is wired only when both
 `OPENBOT_GITHUB_APP_ID` and `OPENBOT_GITHUB_APP_PRIVATE_KEY_PATH` are set.
@@ -26,10 +28,13 @@ from openbot.adapters.base import SignatureError
 from openbot.adapters.github import GitHubAdapter
 from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
+from openbot.persistence import WebhookDedup, make_client
 from openbot.workflows import maybe_run_triage
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+
+    import redis.asyncio as redis_async
 
 _logger = logging.getLogger("openbot.webapp")
 
@@ -49,6 +54,13 @@ def _build_auth(settings: Settings) -> GitHubAppAuth | None:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     auth = _build_auth(settings)
+
+    redis_client: redis_async.Redis | None = (
+        make_client(settings.redis_url) if settings.redis_url else None
+    )
+    app.state.redis = redis_client
+    app.state.dedup = WebhookDedup(redis_client)
+
     app.state.github_auth = auth
     app.state.github_adapter = (
         GitHubAdapter(
@@ -64,6 +76,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "version": __version__,
             "webhook_configured": settings.github_webhook_secret is not None,
             "write_back_configured": auth is not None,
+            "redis_configured": redis_client is not None,
         },
     )
     try:
@@ -74,6 +87,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await adapter.aclose()
         if auth is not None:
             await auth.aclose()
+        if redis_client is not None:
+            await redis_client.aclose()
 
 
 app = FastAPI(
@@ -103,11 +118,12 @@ async def github_webhook(
       1. read RAW body bytes — HMAC is computed over them
       2. verify signature (constant-time)
       3. parse → UnifiedEvent
-      4. schedule workflow as a background task (runs after we 202)
-      5. return 202 immediately so GitHub doesn't retry
+      4. dedup via Redis SET NX EX — duplicate retries short-circuit with 202
+      5. schedule workflow as a background task (runs after we 202)
+      6. return 202 immediately so GitHub doesn't retry
 
-    BackgroundTasks is the v0.1 stop-gap; Day 2-3 swaps it for a Redis queue
-    so workflows survive process restarts and dedup-by-delivery_id is real.
+    BackgroundTasks remains the v0.1 stop-gap; Redis queue + delivery_id-keyed
+    worker land in PR 16 so workflows survive a process restart.
     """
     adapter: GitHubAdapter | None = getattr(request.app.state, "github_adapter", None)
     if adapter is None:
@@ -132,6 +148,27 @@ async def github_webhook(
 
     event = adapter.parse_event(body, headers)
 
+    # Dedup: if GitHub re-delivers the same X-GitHub-Delivery (our slow handler
+    # or any 5xx makes them retry), we still 202 but skip workflow dispatch.
+    # The dedup falls open when Redis is unconfigured/down — see WebhookDedup docstring.
+    dedup: WebhookDedup = request.app.state.dedup
+    dedup_result = await dedup.check_and_mark(event.channel, event.delivery_id)
+    if not dedup_result.fresh:
+        _logger.info(
+            "webhook_duplicate_dropped",
+            extra={
+                "channel": event.channel,
+                "delivery_id": event.delivery_id,
+                "kind": event.kind.value,
+            },
+        )
+        return {
+            "status": "duplicate",
+            "delivery_id": event.delivery_id,
+            "kind": event.kind.value,
+            "relevant": event.is_relevant,
+        }
+
     # Structured audit log — never include body / token / actor email.
     _logger.info(
         "webhook_accepted",
@@ -143,6 +180,7 @@ async def github_webhook(
             "actor": event.actor,
             "installation_id": event.installation_id,
             "relevant": event.is_relevant,
+            "dedup_fallback_open": dedup_result.fallback_open,
         },
     )
 
