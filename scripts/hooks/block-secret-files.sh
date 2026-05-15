@@ -6,6 +6,7 @@ set -euo pipefail
 
 BAD=$(git diff --cached --name-only --diff-filter=A \
   | grep -E '(^|/)(\.env(\..+)?$|.*\.pem$|.*\.key$)' \
+  | grep -vE '\.(example|sample|template|dist)$' \
   || true)
 
 if [ -n "$BAD" ]; then

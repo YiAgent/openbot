@@ -1,0 +1,87 @@
+[project]
+name = "openbot"
+version = "0.0.1"
+description = "Open-source, self-hosted, BYO-API-key GitHub maintenance bot for individual OSS maintainers."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Yi Wang" }]
+keywords = ["github", "bot", "agent", "llm", "code-review", "triage"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Bug Tracking",
+]
+dependencies = [
+    # Web server — PRD §5.1 ingress is FastAPI
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    # Config — single source via .env (PRD §7)
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    # HTTP — GitHub API + outbound (PRD §4.x)
+    "httpx>=0.28",
+]
+
+[project.urls]
+Repository = "https://github.com/YiAgent/openbot"
+Issues = "https://github.com/YiAgent/openbot/issues"
+PRD = "https://github.com/YiAgent/openbot/blob/main/docs/prd/openbot-prd.md"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "httpx>=0.28",            # FastAPI TestClient runtime
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["openbot"]
+
+# ─────── ruff (PRD §8.4 / Open SWE convention) ───────
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", "build", "dist", "docs/research"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "C4",   # flake8-comprehensions
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",  # line too long — `ruff format` enforces
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]  # asserts are the whole point
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+# ─────── pytest ───────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = ["-q", "--strict-markers", "--strict-config"]
+filterwarnings = [
+    "error",                          # warnings are bugs in tests
+    "ignore::DeprecationWarning:httpx.*",
+]
