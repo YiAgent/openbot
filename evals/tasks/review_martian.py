@@ -26,7 +26,7 @@ from inspect_ai.scorer import Score, Target, mean, scorer, stderr
 from inspect_ai.solver import TaskState
 
 from evals.scorers.review_overlap import Finding, JudgeVerdict, compute_review_overlap
-from evals.solvers.openbot_review import openbot_review_solver
+from evals.solvers.registry import get_review_solver
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 _DATASET_VERSION = "martian_smoke_v1"
@@ -116,12 +116,35 @@ def review_overlap_inspect_scorer():  # type: ignore[no-untyped-def]
     return _score
 
 
-@task
-def review_martian_smoke() -> Task:
-    """Run the deepagents reviewer against the martian_smoke_v1 fixture."""
+def build_review_martian_task(*, solver_id: str) -> Task:
+    """Build the shared review task surface for one solver provider."""
+    solver_family = "baseline" if solver_id == "deepagents_baseline" else "production"
+    solver_factory = get_review_solver(solver_id)
     return Task(
         dataset=json_dataset(str(_DATASET_PATH), _record_to_sample),
-        solver=openbot_review_solver(),
+        solver=solver_factory(),
         scorer=review_overlap_inspect_scorer(),
-        metadata={"dataset_version": _DATASET_VERSION},
+        metadata={
+            "dataset_version": _DATASET_VERSION,
+            "solver_id": solver_id,
+            "solver_family": solver_family,
+        },
     )
+
+
+@task
+def review_martian_baseline() -> Task:
+    """Run the durable deepagents baseline against the smoke fixture."""
+    return build_review_martian_task(solver_id="deepagents_baseline")
+
+
+@task
+def review_martian_openbot() -> Task:
+    """Run the future production OpenBot provider on the shared surface."""
+    return build_review_martian_task(solver_id="openbot_prod")
+
+
+@task
+def review_martian_smoke() -> Task:
+    """Backward-compatible alias for the baseline smoke task."""
+    return review_martian_baseline()
