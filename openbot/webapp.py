@@ -29,7 +29,15 @@ from openbot.adapters.github import GitHubAdapter
 from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
 from openbot.config_repo import load_for_repo
-from openbot.middleware import PreflightContext, run_preflight
+from openbot.middleware import (
+    BudgetMiddleware,
+    CancelCommentMiddleware,
+    CancelLabelMiddleware,
+    KillSwitchMiddleware,
+    PreflightContext,
+    RateLimitMiddleware,
+    run_preflight,
+)
 from openbot.persistence import (
     DedupOutcome,
     WebhookDedup,
@@ -303,9 +311,24 @@ async def _run_dispatch(
         redis=getattr(app_instance.state, "redis", None),
     )
 
-    # Slice A: pre-flight middleware list is empty — every dispatched
-    # event reaches its workflow. Slices B+C plug real gates in here.
-    middlewares: list = []
+    # Slice B chain (harness spec §3 M3, locked order):
+    #
+    #   1. KillSwitch       cheapest check; admin emergency stop wins everything
+    #   2. CancelLabel      label-on-issue/PR drop (one GitHub call, cached)
+    #   3. CancelComment    chat-only @openbot stop|cancel (also seeds cancel set)
+    #   4. RateLimit        chat-only daily/hourly quotas
+    #   5. Budget           global hard kill + per-repo monthly soft cap (DB)
+    #
+    # Slice C inserts ForkPRGate + ActorRole between RateLimit and Budget.
+    # The middleware instances are stateless aside from class-level
+    # constants, so reusing one tuple per request is safe and cheap.
+    middlewares: list = [
+        KillSwitchMiddleware(),
+        CancelLabelMiddleware(),
+        CancelCommentMiddleware(),
+        RateLimitMiddleware(),
+        BudgetMiddleware(),
+    ]
     try:
         decision = await run_preflight(ctx, middlewares)
     except Exception:
