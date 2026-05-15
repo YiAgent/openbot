@@ -2,7 +2,7 @@
 
 **Last updated**: 2026-05-15
 **Active branch**: eval/E1-T01..T10 (Graphite stack on eval/E0)
-**Next task**: E1-T07
+**Next task**: E1-T08 (will land as ❌ blocked — depends on E1-T06)
 
 ## Done
 <!-- chronological, append-only. Format: - [x] <id> — <YYYY-MM-DD> — handoff: handoffs/<id>.md -->
@@ -15,6 +15,7 @@
 - [x] E1-T02 — 2026-05-15 — handoff: handoffs/E1-T02.md
 - [x] E1-T03 — 2026-05-15 — handoff: handoffs/E1-T03.md
 - [x] E1-T05 — 2026-05-15 — handoff: handoffs/E1-T05.md
+- [x] E1-T07 — 2026-05-15 — handoff: handoffs/E1-T07.md
 
 ## Blocked
 <!-- Format: <id> — blocker note -->
