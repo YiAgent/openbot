@@ -121,6 +121,19 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _extract_provider_usage(message: Any) -> dict[str, Any] | None:
+    """Best-effort extract provider usage from common LangChain message shapes."""
+    usage = getattr(message, "usage_metadata", None)
+    if isinstance(usage, dict):
+        return dict(usage)
+    response_metadata = getattr(message, "response_metadata", None)
+    if isinstance(response_metadata, dict):
+        nested = response_metadata.get("usage")
+        if isinstance(nested, dict):
+            return dict(nested)
+    return None
+
+
 @dataclass(frozen=True)
 class ReviewResult:
     """Both the raw agent reply and the structured findings parsed from it.
@@ -132,6 +145,7 @@ class ReviewResult:
 
     raw_text: str
     findings: list[Finding] = field(default_factory=list)
+    provider_usage: dict[str, Any] | None = None
 
 
 def review_diff(diff: str, *, model: str = _DEFAULT_REVIEW_MODEL_ID) -> ReviewResult:
@@ -156,7 +170,11 @@ def review_diff(diff: str, *, model: str = _DEFAULT_REVIEW_MODEL_ID) -> ReviewRe
 
     obj = _extract_json_object(text)
     findings = _coerce_findings(obj) if obj else []
-    return ReviewResult(raw_text=text, findings=findings)
+    return ReviewResult(
+        raw_text=text,
+        findings=findings,
+        provider_usage=_extract_provider_usage(last_msg),
+    )
 
 
 # ─── Inspect AI @solver shim ────────────────────────────────────────────────
@@ -184,6 +202,8 @@ def deepagents_baseline_review_solver():  # type: ignore[no-untyped-def]
             state.metadata["candidate_findings_json"] = json.dumps(
                 {"findings": result.findings}, ensure_ascii=False
             )
+            if result.provider_usage is not None:
+                state.metadata["provider_usage"] = result.provider_usage
             # P1 fix (Codex review): keep the raw agent reply as the scoring
             # surface. The previous version overwrote this with the parsed
             # JSON, hiding prose-level canary leaks and prefatory compliance
