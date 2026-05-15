@@ -22,7 +22,7 @@ dependencies = [
     "uvicorn[standard]>=0.47.0",
     # Config — single source via .env (PRD §7)
     "pydantic>=2.13.4",
-    "pydantic-settings>=2.6",
+    "pydantic-settings>=2.14.1",
     # HTTP — GitHub API + outbound (PRD §4.x)
     "httpx>=0.28.1",
 ]
