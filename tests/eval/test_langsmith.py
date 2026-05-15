@@ -123,6 +123,16 @@ def test_log_sample_with_all_fields_passes() -> None:
     client.create_feedback.assert_called_once()
 
 
+def test_log_sample_uses_scalar_primary_score_for_langsmith_feedback() -> None:
+    client = MagicMock()
+    sample = _full_sample()
+
+    ls.log_sample(client, "run-1", sample)
+
+    assert client.create_feedback.call_args.kwargs["score"] == 0.7
+    assert client.create_feedback.call_args.kwargs["value"] == sample
+
+
 @pytest.mark.parametrize("missing_field", sorted(REQUIRED_SAMPLE_FIELD_NAMES))
 def test_log_sample_raises_when_any_required_field_missing(missing_field: str) -> None:
     sample = _full_sample()

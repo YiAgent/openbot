@@ -142,6 +142,6 @@ def log_sample(client: _LangSmithLike, run_id: str, sample: Mapping[str, Any]) -
     client.create_feedback(
         run_id,
         key=f"sample::{sample['sample_id']}",
-        score=sample.get("score_payload"),
+        score=(sample.get("score_payload") or {}).get("f1"),
         value=dict(sample),
     )

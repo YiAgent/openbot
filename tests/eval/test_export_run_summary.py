@@ -6,6 +6,7 @@ from evals.scripts.export_run_summary import (
     _aggregate,
     _aggregate_langsmith_payload,
     _render_markdown,
+    load_langsmith_payload,
     sync_eval_payload_to_langsmith,
 )
 
@@ -169,3 +170,22 @@ def test_sync_eval_payload_to_langsmith_logs_run_and_samples(monkeypatch) -> Non
     assert client.updated_runs[0][0] == run_id
     assert client.feedback[0][1] == "sample::s1"
     assert artifact_refs == [("s1", "diff"), ("s1", "raw_output")]
+
+
+def test_load_langsmith_payload_reads_run_and_sample_feedback() -> None:
+    class FakeFeedback:
+        def __init__(self) -> None:
+            self.key = "sample::s1"
+            self.value = {"sample_id": "s1"}
+
+    class FakeClient:
+        def read_run(self, run_id):
+            return {"id": run_id}
+
+        def list_feedback(self, *, run_ids):
+            assert run_ids == ["run-1"]
+            return [FakeFeedback()]
+
+    payload = load_langsmith_payload(FakeClient(), "run-1")
+
+    assert payload == {"run": {"id": "run-1"}, "samples": [{"sample_id": "s1"}]}
