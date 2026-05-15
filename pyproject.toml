@@ -24,7 +24,7 @@ dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     # HTTP — GitHub API + outbound (PRD §4.x)
-    "httpx>=0.28",
+    "httpx>=0.28.1",
 ]
 
 [project.urls]
@@ -37,7 +37,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.8",
-    "httpx>=0.28",            # FastAPI TestClient runtime
+    "httpx>=0.28.1",            # FastAPI TestClient runtime
 ]
 
 [build-system]
