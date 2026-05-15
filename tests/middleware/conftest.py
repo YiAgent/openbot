@@ -1,0 +1,81 @@
+"""Shared fixtures for middleware tests (slice B+).
+
+`make_ctx` builds a PreflightContext with sensible defaults; tests
+override the bits they care about (feature, redis, session_factory,
+adapter mock surface).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
+
+from openbot.config_repo import baked_in_defaults
+from openbot.events import EventKind, UnifiedEvent
+from openbot.llm.router import Feature
+from openbot.middleware import PreflightContext
+from openbot.router import Dispatch, derive_task_id
+from openbot.workflows import maybe_run_chat, maybe_run_triage
+
+
+def make_event(
+    *,
+    kind: EventKind = EventKind.ISSUE_OPENED,
+    repo: str = "org/r",
+    actor: str = "alice",
+    actor_type: str | None = "User",
+    issue_number: int | None = 7,
+    pr_number: int | None = None,
+    installation_id: int | None = 100,
+    delivery_id: str = "deliv-1",
+    comment_body: str | None = None,
+    raw: dict | None = None,
+) -> UnifiedEvent:
+    return UnifiedEvent(
+        channel="github",
+        delivery_id=delivery_id,
+        kind=kind,
+        repo=repo,
+        actor=actor,
+        actor_type=actor_type,
+        issue_number=issue_number,
+        pr_number=pr_number,
+        installation_id=installation_id,
+        comment_body=comment_body,
+        raw=raw or {},
+    )
+
+
+def make_ctx(
+    event: UnifiedEvent | None = None,
+    *,
+    feature: Feature = Feature.TRIAGE,
+    adapter: Any | None = None,
+    redis: Any | None = None,
+    session_factory: Any | None = None,
+    config: Any = None,
+) -> PreflightContext:
+    """Build a PreflightContext with a default adapter mock."""
+    event = event or make_event()
+    handler = maybe_run_chat if feature is Feature.CHAT else maybe_run_triage
+    return PreflightContext(
+        event=event,
+        dispatch=Dispatch(feature, handler, derive_task_id(event)),
+        config=config or baked_in_defaults(),
+        adapter=adapter or AsyncMock(),
+        session_factory=session_factory,
+        redis=redis,
+    )
+
+
+@pytest.fixture
+def event_factory():
+    """Test-local factory exposing make_event for fluent overrides."""
+    return make_event
+
+
+@pytest.fixture
+def ctx_factory():
+    return make_ctx
