@@ -6,6 +6,7 @@ import hmac
 import json
 from collections.abc import Iterator
 from hashlib import sha256
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -74,8 +75,12 @@ def test_webhook_accepts_but_marks_irrelevant_unknown_event(client: TestClient) 
     assert response.json()["relevant"] is False
 
 
-def test_webhook_503_when_secret_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_webhook_503_when_secret_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Pydantic-settings also reads repo-root `.env` — chdir away so the dev
+    # secret there can't satisfy the setting and we genuinely test the
+    # "no webhook secret configured" branch (PRD §5.1: lifespan → adapter is None → 503).
     monkeypatch.delenv("OPENBOT_GITHUB_WEBHOOK_SECRET", raising=False)
+    monkeypatch.chdir(tmp_path)
     get_settings.cache_clear()
     with TestClient(app) as c:
         response = c.post("/webhook/github", content=b"{}")
