@@ -64,10 +64,12 @@ def test_prompt_and_workflow_versions_fallback_to_unknown(_patched_git: None) ->
     assert md["workflow_version"] == "unknown"
 
 
-def test_judge_prompt_version_fallback_zero(_patched_git: None) -> None:
+def test_judge_prompt_version_tracks_judges_module(_patched_git: None) -> None:
+    """Once E1-T05 lands `evals.common.judges.JUDGE_PROMPT_VERSION`, metadata reads it."""
+    from evals.common.judges import JUDGE_PROMPT_VERSION
+
     md = metadata.collect_run_metadata("review_martian", "smoke", **_common_kwargs())
-    # E1-T05 ships JUDGE_PROMPT_VERSION; until then fallback is 0.
-    assert md["judge_prompt_version"] == 0
+    assert md["judge_prompt_version"] == JUDGE_PROMPT_VERSION
 
 
 def test_triggered_by_local_by_default(_patched_git: None, monkeypatch: pytest.MonkeyPatch) -> None:
