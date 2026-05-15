@@ -12,21 +12,23 @@ Implementation:
   - Key shape `openbot:dedup:webhook:<channel>:<delivery_id>` so channels
     are isolated (a GitHub delivery_id can never collide with a Linear one).
 
-Failure mode is **fail-open**: if Redis is down or not configured, the
-dedup returns "fresh" and logs a WARNING. The reasoning:
+Failure mode is **fall-open**: if Redis is down or not configured, the
+outcome is `FALLBACK_OPEN`. The caller is expected to process the event
+anyway, but the audit log records that dedup couldn't be enforced.
 
   - Drop-on-error would block every webhook the moment Redis flaps. Bad.
   - Replay-on-error is "double-process a few webhooks" — recoverable,
     and the duplication shows up loudly in audit logs once Redis returns.
 
-This trade-off becomes safer once PR 16 lands `cost_meter` + per-task budget
-caps: even a double-run can't burn more than the cap.
+The three outcomes (`FRESH`, `DUPLICATE`, `FALLBACK_OPEN`) are an enum
+rather than a `(bool, bool)` pair so call sites cannot accidentally drop
+the `FALLBACK_OPEN` audit signal via a truthy shortcut.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from enum import StrEnum
 from typing import Final
 
 import redis.asyncio as redis_async
@@ -37,30 +39,47 @@ _DEDUP_TTL_SECONDS: Final = 10 * 60
 _KEY_PREFIX: Final = "openbot:dedup:webhook"
 
 
-@dataclass(frozen=True, slots=True)
-class DedupResult:
-    """Outcome of a single check_and_mark call.
+class DedupOutcome(StrEnum):
+    """The three possible results of `check_and_mark`.
 
-    Truthiness == `fresh`; lets the caller write `if await dedup.check_and_mark(...)`.
+    Encoded as an enum (not a two-bool pair) so call sites cannot accidentally
+    collapse the `FALLBACK_OPEN` audit signal into truthiness.
+
+    Usage:
+        outcome = await dedup.check_and_mark(channel, delivery_id)
+        if outcome is DedupOutcome.DUPLICATE:
+            return  # drop
+        # otherwise FRESH or FALLBACK_OPEN — process, but audit-log the latter
     """
 
-    fresh: bool
-    """True when this delivery_id had not been seen → process it.
-    False when a previous webhook already marked the key → drop."""
+    FRESH = "fresh"
+    """First time we've seen this delivery_id — proceed."""
 
-    fallback_open: bool = False
-    """True iff Redis was unreachable / unconfigured and we fell open.
-    Caller can audit-log this so it's visible when dedup is silently disabled."""
+    DUPLICATE = "duplicate"
+    """A previous webhook already marked the key — drop, do not re-run workflow."""
 
-    def __bool__(self) -> bool:
-        return self.fresh
+    FALLBACK_OPEN = "fallback_open"
+    """Redis was unreachable or unconfigured; we couldn't dedup. The caller
+    SHOULD process the event (a brief dedup outage is preferable to dropping
+    all webhooks), AND SHOULD audit-log this so silent dedup degradation
+    is observable."""
+
+    @property
+    def should_process(self) -> bool:
+        """True iff the workflow should run.
+
+        `FRESH` and `FALLBACK_OPEN` both proceed; only `DUPLICATE` short-circuits.
+        Use this when you want the boolean question and don't care which of the
+        two "yes" cases applies.
+        """
+        return self is not DedupOutcome.DUPLICATE
 
 
 class WebhookDedup:
     """Atomic delivery dedup against a Redis backend.
 
     `redis` can be None (no Redis configured) — every call then returns
-    fresh=True, fallback_open=True. Useful for `make dev` without redis-server.
+    `DedupOutcome.FALLBACK_OPEN`. Useful for `make dev` without redis-server.
     """
 
     def __init__(
@@ -72,24 +91,24 @@ class WebhookDedup:
         self._redis = redis
         self._ttl = ttl_seconds
 
-    async def check_and_mark(self, channel: str, delivery_id: str) -> DedupResult:
+    async def check_and_mark(self, channel: str, delivery_id: str) -> DedupOutcome:
         """Check whether (channel, delivery_id) was seen and atomically mark it.
 
         Args:
             channel:     channel name, e.g. "github". Used as namespace.
             delivery_id: webhook unique id (X-GitHub-Delivery). Empty string is
-                         treated as fresh — missing id is a parsing concern,
+                         treated as FRESH — missing id is a parsing concern,
                          not a dedup concern.
         """
         if not delivery_id:
-            return DedupResult(fresh=True)
+            return DedupOutcome.FRESH
 
         if self._redis is None:
             _logger.warning(
                 "dedup_skipped_no_redis",
                 extra={"channel": channel, "delivery_id": delivery_id},
             )
-            return DedupResult(fresh=True, fallback_open=True)
+            return DedupOutcome.FALLBACK_OPEN
 
         key = f"{_KEY_PREFIX}:{channel}:{delivery_id}"
         try:
@@ -105,6 +124,6 @@ class WebhookDedup:
                 "dedup_redis_error_fail_open",
                 extra={"channel": channel, "delivery_id": delivery_id},
             )
-            return DedupResult(fresh=True, fallback_open=True)
+            return DedupOutcome.FALLBACK_OPEN
 
-        return DedupResult(fresh=bool(was_set))
+        return DedupOutcome.FRESH if was_set else DedupOutcome.DUPLICATE

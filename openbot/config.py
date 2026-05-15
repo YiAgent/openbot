@@ -53,8 +53,8 @@ class Settings(BaseSettings):
         default=None,
         description=(
             "Redis connection URL, e.g. redis://localhost:6379/0. "
-            "Used for webhook dedup (now), rate-limit counters (PR 17), "
-            "and the workflow queue (PR 16)."
+            "Used for webhook dedup (now); rate-limit counters and the "
+            "workflow queue land in the middleware slice."
         ),
     )
 

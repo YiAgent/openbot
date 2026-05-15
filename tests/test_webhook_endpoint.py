@@ -90,15 +90,20 @@ def test_webhook_503_when_secret_unset(monkeypatch: pytest.MonkeyPatch, tmp_path
 # ───── dedup integration ─────
 
 
-def test_webhook_dedup_returns_duplicate_on_repeat_delivery(
-    client: TestClient,
+def test_webhook_dedup_fallback_open_when_redis_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Repeat-delivery sanity: same X-GitHub-Delivery hitting the endpoint twice
-    yields one 'accepted' + one 'duplicate'. Production Redis is unconfigured
-    here, but lifespan still installs WebhookDedup with the no-redis fall-open
-    path — so this test ALSO covers the fall-open does-not-dedup case, both
-    requests get 'accepted'.
+    """Without OPENBOT_REDIS_URL, both repeats are processed (fall-open).
+
+    Deterministic version of the prior "either-or" test: explicitly scrubs
+    the env so the dedup is guaranteed to be in fall-open mode, and asserts
+    both outcomes are "accepted".
     """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SECRET)
+    monkeypatch.delenv("OPENBOT_REDIS_URL", raising=False)
+    get_settings.cache_clear()
+
     body = json.dumps(
         {
             "action": "opened",
@@ -107,19 +112,17 @@ def test_webhook_dedup_returns_duplicate_on_repeat_delivery(
             "sender": {"login": "u", "type": "User"},
         }
     ).encode()
-    headers = _sign(body)
+    headers = _sign(body) | {"x-github-delivery": "fallback-test-id"}
 
-    r1 = client.post("/webhook/github", content=body, headers=headers)
-    r2 = client.post("/webhook/github", content=body, headers=headers)
+    try:
+        with TestClient(app) as c:
+            r1 = c.post("/webhook/github", content=body, headers=headers)
+            r2 = c.post("/webhook/github", content=body, headers=headers)
 
-    # Both 202 either way (fresh + fresh under fall-open; or fresh + duplicate
-    # under real Redis). Status string differentiates.
-    assert r1.status_code == 202
-    assert r2.status_code == 202
-    # Without OPENBOT_REDIS_URL set, dedup is open → both "accepted".
-    # When Redis IS configured, second one is "duplicate".
-    statuses = (r1.json()["status"], r2.json()["status"])
-    assert statuses in (("accepted", "accepted"), ("accepted", "duplicate"))
+        assert r1.status_code == 202 and r1.json()["status"] == "accepted"
+        assert r2.status_code == 202 and r2.json()["status"] == "accepted"
+    finally:
+        get_settings.cache_clear()
 
 
 def test_webhook_dedup_drops_workflow_when_redis_marks_duplicate(

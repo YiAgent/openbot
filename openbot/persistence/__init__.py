@@ -1,14 +1,14 @@
-"""Persistence layer — Redis (this PR) + Postgres (PR 16).
+"""Persistence layer — Redis + (later) Postgres.
 
 v0.1 uses Redis for three concerns:
-  - webhook dedup        (this PR, openbot.persistence.dedup)
-  - rate-limit counters  (PR 17)
-  - workflow queue       (PR 16)
+  - webhook dedup        (this slice; `openbot.persistence.dedup`)
+  - rate-limit counters  (later slice — middleware)
+  - workflow queue       (later slice — middleware)
 
-Postgres lands in PR 16 for `cost_meter` / `audit_log` / `rate_limit_audit`.
+Postgres lands in a later slice for `cost_meter` / `audit_log` / `rate_limit_audit`.
 """
 
-from openbot.persistence.dedup import DedupResult, WebhookDedup
+from openbot.persistence.dedup import DedupOutcome, WebhookDedup
 from openbot.persistence.redis import make_client
 
-__all__ = ["DedupResult", "WebhookDedup", "make_client"]
+__all__ = ["DedupOutcome", "WebhookDedup", "make_client"]

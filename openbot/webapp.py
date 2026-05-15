@@ -4,10 +4,10 @@ PRD §5.1 ingress order:
     raw body → verify_signature → parse → dedup → schedule workflow → 202
 
 v0.1 wiring: /health + /webhook/github.
-  - Webhook dedup via Redis SET NX EX is live this PR — duplicate retries
-    from GitHub no longer re-run the workflow.
-  - Workflow dispatch still uses FastAPI BackgroundTasks; Redis queue +
-    delivery_id-keyed worker land in PR 16.
+  - Webhook dedup via Redis SET NX EX is live in this slice — duplicate
+    retries from GitHub no longer re-run the workflow.
+  - Workflow dispatch still uses FastAPI BackgroundTasks; the Redis queue
+    + delivery_id-keyed worker land in the middleware slice.
 
 Write-back capability (reply / labels / role) is wired only when both
 `OPENBOT_GITHUB_APP_ID` and `OPENBOT_GITHUB_APP_PRIVATE_KEY_PATH` are set.
@@ -28,7 +28,7 @@ from openbot.adapters.base import SignatureError
 from openbot.adapters.github import GitHubAdapter
 from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
-from openbot.persistence import WebhookDedup, make_client
+from openbot.persistence import DedupOutcome, WebhookDedup, make_client
 from openbot.workflows import maybe_run_triage
 
 if TYPE_CHECKING:
@@ -122,8 +122,9 @@ async def github_webhook(
       5. schedule workflow as a background task (runs after we 202)
       6. return 202 immediately so GitHub doesn't retry
 
-    BackgroundTasks remains the v0.1 stop-gap; Redis queue + delivery_id-keyed
-    worker land in PR 16 so workflows survive a process restart.
+    BackgroundTasks remains the v0.1 stop-gap; a Redis queue + delivery_id
+    keyed worker lands in the middleware slice so workflows survive a
+    process restart.
     """
     adapter: GitHubAdapter | None = getattr(request.app.state, "github_adapter", None)
     if adapter is None:
@@ -152,8 +153,8 @@ async def github_webhook(
     # or any 5xx makes them retry), we still 202 but skip workflow dispatch.
     # The dedup falls open when Redis is unconfigured/down — see WebhookDedup docstring.
     dedup: WebhookDedup = request.app.state.dedup
-    dedup_result = await dedup.check_and_mark(event.channel, event.delivery_id)
-    if not dedup_result.fresh:
+    outcome = await dedup.check_and_mark(event.channel, event.delivery_id)
+    if outcome is DedupOutcome.DUPLICATE:
         _logger.info(
             "webhook_duplicate_dropped",
             extra={
@@ -180,7 +181,7 @@ async def github_webhook(
             "actor": event.actor,
             "installation_id": event.installation_id,
             "relevant": event.is_relevant,
-            "dedup_fallback_open": dedup_result.fallback_open,
+            "dedup_outcome": outcome.value,
         },
     )
 
