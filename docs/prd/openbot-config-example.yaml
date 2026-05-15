@@ -1,0 +1,145 @@
+# OpenBot v1.0 — 完整配置参考
+# 放在仓库根 .openbot/config.yaml；改 config 走 PR，可审计、可回滚。
+# PRD 见 ./openbot-prd.md
+version: 1
+
+# ─────── Features ───────
+features:
+  triage: true
+  review: true
+  fix: true
+  chat: true
+
+# ─────── Channels ───────
+channels:
+  github:
+    enabled: true
+  linear:                                   # v0.2 启用
+    enabled: false
+
+# ─────── LLM 路由（锁定） ───────
+model:
+  primary: anthropic/claude-sonnet-4-6
+  fallback: openai/gpt-5-mini
+  per_feature:
+    review: anthropic/claude-opus-4-7       # review/fix 用 Opus 4.7
+    fix:    anthropic/claude-opus-4-7
+    triage: anthropic/claude-sonnet-4-6     # triage/chat 用 Sonnet 4.6
+    chat:   anthropic/claude-sonnet-4-6
+
+# ─────── 三层 Cost Cap ───────
+budget:
+  per_task:
+    triage: 0.20
+    review: 0.50
+    fix:    3.00
+    chat:   0.30
+  monthly_soft_cap_usd: 100                 # 锁定默认值
+  monthly_alert_at_pct: 80
+  global_hard_kill_usd: 500                 # 锁定；可被 OPENBOT_GLOBAL_HARD_KILL_USD env 覆盖
+
+# ─────── Triage ───────
+triage:
+  enabled: true
+  labels:
+    available: [bug, enhancement, question, performance, docs, security]
+    auto_discover_from_repo: true
+  priority:
+    enabled: true
+    auto_apply: true
+    labels: [priority/P0, priority/P1, priority/P2, priority/P3]
+  reproduce:
+    enabled: true
+    languages: [python, javascript, typescript]
+    sandbox:
+      timeout_seconds: 180
+      cpu: 2
+      memory_mb: 4096
+      allowed_network: [pypi.org, registry.npmjs.org, github.com]
+
+# ─────── Review ───────
+review:
+  enabled: true
+  severity_threshold: medium                # critical | high | medium | low
+  skip_paths: ["tests/", "*.lock", "node_modules/", "vendor/"]
+  blocking: false                           # PR check 不 block merge
+  multi_turn: true                          # push 后增量 review
+
+# ─────── Fix ───────
+fix:
+  enabled: true
+  allowed_actors: [collaborator, owner]
+  limits:
+    max_steps: 80
+    max_wall_seconds: 2700                  # 45 分钟
+    max_cost_usd: 3.00
+    max_self_fix_attempts: 3
+  branch:
+    prefix: openbot/
+    naming: "{issue_num}-{slug}"
+  pr:
+    draft: false
+    auto_merge: false                       # 锁死，永不 auto-merge
+  ci:
+    wait_for_completion: true
+    self_fix_on_failure: true
+
+# ─────── Chat ───────
+chat:
+  enabled: true
+  allow_anyone: true
+  rate_limit:
+    per_user_per_day: 20
+    per_repo_per_hour: 100
+    cost_cap_per_task: 0.30
+    exempt_roles: [owner, collaborator]    # 锁定默认 exempt
+  allowed_tools:
+    - read_file
+    - glob
+    - grep
+    - shell_readonly
+    - web_fetch
+    - search_linked_issues
+    - search_linked_prs
+  forbidden_tools:
+    - write_file
+    - shell_write
+    - gh_pr_create
+    - gh_pr_merge
+
+# ─────── 评论语言（锁定） ───────
+comment_language: auto                      # LLM 自动判断，跟随 issue 语言
+
+# ─────── Cancel ───────
+cancel:
+  label: cancel-openbot                     # 锁定
+  check_every_n_steps: 5
+  comment_keywords: [stop, cancel, "停", "取消"]
+
+# ─────── Plugins ───────
+plugins:
+  local_dir: ./openbot_plugins/
+  builtin:                                  # v0.1 锁定 3 个内置示例
+    - reproduce_python_issue
+    - reproduce_js_issue
+    - summarize_pr_diff
+
+# ─────── Storage ───────
+storage:
+  artifacts:
+    backend: r2                             # 锁定：R2 默认
+    fallback: local_fs                      # 锁定：允许 local FS fallback
+    local_path: ./.openbot/artifacts/
+
+# ─────── Security ───────
+security:
+  fork_pr: { run: false }
+  secret_scan: { enabled: true, tool: trufflehog }
+  audit_log: { enabled: true }
+  kill_switch_env: OPENBOT_KILL_SWITCH
+
+# ─────── Observability ───────
+observability:
+  langsmith:
+    enabled: true
+    project: openbot-prod
