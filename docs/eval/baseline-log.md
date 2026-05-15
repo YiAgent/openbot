@@ -56,5 +56,42 @@
 
 ## Entries
 
-<!-- placeholder：第一行 baseline 应由 v0.1.0 release 那次刷 baseline 的 PR 补齐。E0 阶段仅占位。 -->
-- _(placeholder) — 首条 baseline 将由 v0.1.0 release（E3 milestone 之后）写入。在此之前本表为空。_
+```yaml
+- date: 2026-05-15
+  release_version: interim-9f4e3bd
+  trigger: pipeline-validation
+  suite: review_martian_smoke
+  dataset_version: martian_smoke_v1
+  judge_model_id: heuristic/no-llm  # PRD §10.3 LLM judge wired in subsequent run
+  judge_prompt_version: 0
+  prev_score: null  # first-ever baseline row
+  new_score:
+    mean_f1: 0.833
+    stderr: 0.105
+    pass_rate: 1.0  # F1 ≥ 0.5 on every sample
+    per_sample:
+      smoke-001: { f1: 1.000, precision: 1.000, recall: 1.000 }  # timing attack — caught
+      smoke-002: { f1: 1.000, precision: 1.000, recall: 1.000 }  # SQL injection — caught
+      smoke-003: { f1: 0.667, precision: 0.500, recall: 1.000 }  # resource leak — caught + 1 FP
+      smoke-004: { f1: 0.500, precision: 0.333, recall: 1.000 }  # TOCTOU race — caught + 2 FP
+      smoke-005: { f1: 1.000, precision: 1.000, recall: 1.000 }  # clean diff — no FP
+  delta: null
+  gate_status: pass  # informational only — no release gate yet
+  langsmith_experiment: "review-martian_smoke-9f4e3bd-glm51-smoke"
+  inspect_log: "logs/2026-05-15T17-58-20-00-00_review-martian-smoke_AyiA8wQznefwZdvkCDwuo7.eval"
+  report: "docs/reports/eval-sample-summary.md"
+  pr_url: null
+  notes: |
+    First end-to-end baseline. Architecture validation, NOT statistical baseline.
+    - Solver: deepagents (LangGraph) wrapping `glm-5.1` via Anthropic-compatible endpoint
+      (PRD §17 #5 production lock is `claude-opus-4-7`; GLM is the v0.1 dev stand-in
+      while the Anthropic key is unavailable).
+    - Judge: deterministic heuristic (file + ±3 line + 4-char keyword overlap),
+      NOT the PRD §10.3 LLM judge. Subsequent runs will swap in `evals.common.judges.Judge`.
+    - Dataset: `martian_smoke_v1` is hand-authored 5-sample synthetic; real Martian
+      benchmark lock = E2-T01.
+    - Recall = 100% across all samples; F1 hit comes from over-eager findings on
+      smoke-003 / smoke-004. Precision-tuning is a future prompt-engineering task.
+    - Pipeline ran on inspect-ai 0.3.220, deepagents 0.6.1, langchain-anthropic via
+      ANTHROPIC_BASE_URL=https://open.bigmodel.cn/api/anthropic.
+```

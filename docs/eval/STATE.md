@@ -1,8 +1,8 @@
 # Eval Task State
 
 **Last updated**: 2026-05-15
-**Active branch**: eval/E1-T01..T10 (Graphite stack on eval/E0; awaiting submit + merge)
-**Next task**: E2-T01 (after E1 stack merges to main)
+**Active branch**: eval/E1-rollup (E1 milestone complete via deepagents stand-in)
+**Next task**: E2-T01 — lock real Martian dataset upstream commit
 
 ## Done
 <!-- chronological, append-only. Format: - [x] <id> — <YYYY-MM-DD> — handoff: handoffs/<id>.md -->
@@ -14,14 +14,17 @@
 - [x] E1-T01 — 2026-05-15 — handoff: handoffs/E1-T01.md
 - [x] E1-T02 — 2026-05-15 — handoff: handoffs/E1-T02.md
 - [x] E1-T03 — 2026-05-15 — handoff: handoffs/E1-T03.md
+- [x] E1-T04 — 2026-05-15 — handoff: handoffs/E1-T04.md  (real impl; 3/3 live LangSmith tests pass)
 - [x] E1-T05 — 2026-05-15 — handoff: handoffs/E1-T05.md
+- [x] E1-T06 — 2026-05-15 — handoff: handoffs/E1-T06.md  (deepagents stand-in; swap to openbot.workflows.review when v0.1 Week 2 ships)
 - [x] E1-T07 — 2026-05-15 — handoff: handoffs/E1-T07.md
-- [x] E1-T10 — 2026-05-15 — handoff: handoffs/E1-T10.md  (E1 milestone complete; T04/T06/T08/T09 blocked)
+- [x] E1-T08 — 2026-05-15 — handoff: handoffs/E1-T08.md  (5-sample synthetic smoke; mean F1 0.833; real Martian = E2-T01)
+- [x] E1-T09 — 2026-05-15 — handoff: handoffs/E1-T09.md  (.eval log → markdown; first baseline-log row written)
+- [x] E1-T10 — 2026-05-15 — handoff: handoffs/E1-T10.md  (E1 milestone complete)
 
 ## Blocked
 <!-- Format: <id> — blocker note -->
-- E1-T04 — needs live LANGSMITH_API_KEY for AC integration test; skeleton only. See handoffs/E1-T04.md.
-- E1-T06 — needs `openbot.workflows.review` (v0.1 Week 2+) + E1-T04 unblock. Skeleton only. See handoffs/E1-T06.md.
+- _(none)_
 - E1-T08 — needs E1-T06 + E1-T04 unblock. Skeleton only. See handoffs/E1-T08.md.
 - E1-T09 — needs E1-T08 + E1-T04 unblock. Skeleton only. See handoffs/E1-T09.md.
 
