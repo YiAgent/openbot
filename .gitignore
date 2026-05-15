@@ -2,6 +2,7 @@
 .DS_Store
 .AppleDouble
 .LSOverride
+Thumbs.db
 
 # Python
 __pycache__/
@@ -32,6 +33,7 @@ venv/
 ENV/
 env/
 .uv-cache/
+.python-eggs/
 
 # Test / coverage
 .pytest_cache/
@@ -54,18 +56,33 @@ coverage.xml
 *.swp
 *.swo
 *~
+.ipynb_checkpoints/
 
 # Env / secrets — never commit
 .env
 .env.*
 !.env.example
+.envrc
+.direnv/
 *.pem
 *.key
+# Doppler CLI auth state（doppler.yaml 是仓库内的项目声明，*应该* commit；
+# .doppler/ 是用户级 auth state，绝不 commit）
+.doppler/
 
 # OpenBot runtime / artifacts
 .openbot/artifacts/
 artifacts/
 *.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Local eval / agent runs
+eval-logs/
+inspect-logs/
+.inspect/
+.langgraph/
 
 # Docker
 docker-compose.override.yml

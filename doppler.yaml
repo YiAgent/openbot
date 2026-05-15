@@ -1,0 +1,9 @@
+#  Doppler 本地绑定声明
+#  - 用 `doppler run -- <cmd>` 时自动注入 dev config 的环境变量
+#  - 切换 stg/prd：`doppler setup --config stg` 或显式 `doppler run --config prd -- <cmd>`
+#  - PRD §7：30 分钟 setup wizard 会引导用户填写 OPENBOT_GITHUB_APP_* / MODAL_* 等占位
+#
+#  共享 LLM token (ANTHROPIC / OPENAI / LANGSMITH) 不在本 project；见 scripts/doppler-fetch-shared.sh
+setup:
+  project: openbot
+  config: dev

@@ -44,6 +44,38 @@ You build your own GitHub App, run `docker compose up`, point it at your repo �
 
 Implementation hasn't started. If you want to follow along or contribute once code lands, watch this repo — `CONTRIBUTING.md` will arrive with the first code drop.
 
+### Secrets / 环境变量（Doppler，已就位）
+
+OpenBot 默认通过 [Doppler](https://www.doppler.com/) 管理本机 / staging / prod 的环境变量；`.env` 仅作离线 / CI fallback（[`./.env.example`](./.env.example) 列出完整 schema）。
+
+| Doppler project | 作用 | 由谁维护 |
+|---|---|---|
+| `openbot` (configs: `dev` / `stg` / `prd`) | OpenBot 专属：GitHub App / Modal / Postgres / Redis / R2 / kill switch | 本仓库 |
+| `infra` (config: `prd`) | 账户级共享：`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `LANGSMITH_API_KEY` | 跨项目共享 |
+
+跨项目共享的 LLM token 通过 [`scripts/doppler-bootstrap-shared.sh`](./scripts/doppler-bootstrap-shared.sh) 显式 allowlist 同步进 openbot 三个 config（rotate 后重跑即可）。
+
+一次性 setup:
+
+```bash
+./scripts/doppler-bootstrap-shared.sh             # 同步 infra → openbot 共享 keys
+doppler setup --project openbot --config dev      # 绑定本仓库到 dev
+# 然后用 GitHub App / Modal 创建后的值填进 openbot/dev（dashboard 或 CLI 均可）
+```
+
+日常启动：
+
+```bash
+doppler run -- uvicorn openbot.main:app --reload  # 本机 dev
+doppler run --config prd -- python -m openbot.worker
+```
+
+实在跑不了 Doppler 的环境（离线 / 受限 CI）：
+
+```bash
+doppler secrets download --no-file --format env > .env
+```
+
 ### Git hooks（已就位）
 
 仓库内置 `pre-commit` 配置（[`.pre-commit-config.yaml`](./.pre-commit-config.yaml)），覆盖：
