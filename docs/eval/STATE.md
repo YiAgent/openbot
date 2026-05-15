@@ -2,7 +2,7 @@
 
 **Last updated**: 2026-05-15
 **Active branch**: eval/E2-rollup (Martian dataset locked; baseline run E2-T02 is next)
-**Next task**: E2-T02 — Martian 全量 run + baseline (deps: E2-T01 done; needs cost budget approval to spend LLM tokens against the locked 50-PR dataset, then `compare_runs.py` from E2-T15 consumes the output)
+**Next task**: _(E2 stream paused — see "Blocked" below; resumes on either cost-budget approval for E2-T02 or Modal+fix-workflow scaffolding for E2-T07. Deferred E2-T03..T06 / T09..T10 wait on PRD §4.0 internal-data gates.)_
 
 ## Status legend
 
@@ -39,7 +39,10 @@
 
 ## Blocked
 <!-- Format: <id> — blocker note -->
-- _(none)_
+- **E2-T02** — Martian 全量 run + baseline. Blocker: needs LLM cost-budget approval to spend tokens against the locked 50-PR dataset, and a price-emitting provider (E1-T08 noted `glm-5.1` does not emit price metadata — Claude or OpenAI required for the recorded baseline row). Unblocks E2-T15's consumer side and downstream G1/G2 regression gating.
+- **E2-T07** — Fix solver + Modal sandbox 集成. Blocker: (a) Modal credentials not provisioned in Doppler config; (b) the OpenBot `fix` workflow does not yet exist in the repo skeleton (per `CLAUDE.md`, current v0.1 Week 1 surface is `webapp.py + config.py + events.py + adapters/` only). Cannot wrap a workflow that hasn't been written.
+- **E2-T08** — Patch tests scorer. Blocker: depends on E2-T07's `openbot_fix` solver producing patches to score.
+- **E2-T11** — `swe_bench_lite` 接入. Blocker: depends on E2-T07 + docker sandbox config (PRD §6 双 sandbox).
 
 ## Scope notes
 - Internal-data-dependent tasks are DEFERRED (see [`task-list.md` §"范围调整"](./task-list.md) and [`openbot-eval-prd.md` §4.0](../prd/openbot-eval-prd.md#40-范围调整--internal-data-dependent-suite-全部-deferred2026-05-15-锁定)). 🕒 tasks are SKIPPED when picking next.
