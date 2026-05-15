@@ -138,6 +138,31 @@ def test_log_sample_field_count_matches_prd_spec() -> None:
     assert len(REQUIRED_SAMPLE_FIELD_NAMES) == 13
 
 
+# ─── E2-T16 wiring (Codex P2): failure_category enum enforced at write site ──
+
+
+def test_log_sample_rejects_non_enum_failure_category() -> None:
+    """A sample with a free-text failure_category must raise before LangSmith write."""
+    sample = _full_sample()
+    sample["failure_category"] = "random_bug"  # not in PRD §12.4 enum
+    client = MagicMock()
+    with pytest.raises(ValueError, match="PRD"):
+        ls.log_sample(client, "run-1", sample)
+    client.create_feedback.assert_not_called()
+
+
+def test_log_sample_accepts_each_enum_value() -> None:
+    """Every PRD §12.4 enum value must pass at the write site."""
+    from evals.common._metadata_spec import ALLOWED_FAILURE_CATEGORIES
+
+    for cat in ALLOWED_FAILURE_CATEGORIES:
+        client = MagicMock()
+        sample = _full_sample()
+        sample["failure_category"] = cat
+        ls.log_sample(client, "run-1", sample)
+        client.create_feedback.assert_called_once()
+
+
 # ─── Source-of-truth alignment: script vs library ────────────────────────────
 
 
