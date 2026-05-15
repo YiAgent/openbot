@@ -1,16 +1,18 @@
 """Pre-flight middleware stack — harness spec §3 M3 / §5.1.
 
 Slice A shipped the framework (`PreflightContext`, `MiddlewareDecision`,
-`run_preflight`, `announce_once`). Slice B adds the real gates:
+`run_preflight`, `announce_once`). Slice B added cancel + budget +
+rate-limit. Slice C adds the security gates:
 
-  - `KillSwitchMiddleware`     env-var emergency stop
-  - `CancelLabelMiddleware`    repo-label drop
-  - `CancelCommentMiddleware`  `@openbot stop|cancel|停|取消`
-  - `BudgetMiddleware`         global hard kill + monthly soft cap
-  - `RateLimitMiddleware`      chat-feature daily/hourly counters
+  - `KillSwitchMiddleware`     env-var emergency stop          (slice B)
+  - `CancelLabelMiddleware`    repo-label drop                 (slice B)
+  - `CancelCommentMiddleware`  `@openbot stop|cancel|停|取消`  (slice B)
+  - `ForkPRGateMiddleware`     fork PR default-deny + opt-in   (slice C)
+  - `ActorRoleMiddleware`      per-feature actor allow-list    (slice C)
+  - `RateLimitMiddleware`      chat-feature daily/hourly       (slice B)
+  - `BudgetMiddleware`         global hard kill + soft cap     (slice B)
 
-Slice C will add `ForkPRGateMiddleware` + `ActorRoleMiddleware` + the
-prompt-injection wrapper at the LLM boundary.
+Slice D will replace FastAPI BackgroundTasks with a Redis Stream worker.
 
 The actual chain order lives in `webapp._run_dispatch` so a single PR
 can change it without touching the middleware modules.
@@ -31,11 +33,14 @@ from openbot.middleware.preflight import (
     run_preflight,
 )
 from openbot.middleware.rate_limit import RateLimitMiddleware
+from openbot.middleware.security import ActorRoleMiddleware, ForkPRGateMiddleware
 
 __all__ = [
+    "ActorRoleMiddleware",
     "BudgetMiddleware",
     "CancelCommentMiddleware",
     "CancelLabelMiddleware",
+    "ForkPRGateMiddleware",
     "KillSwitchMiddleware",
     "Middleware",
     "MiddlewareDecision",
