@@ -21,6 +21,17 @@ evals/
 
 PR 改动 `evals/tasks/` · `evals/scorers/` · `evals/datasets/` · `evals/solvers/` 任一文件 → 强制触发对应 regression suite（eval PRD §8.2 trigger 表）。
 
+## Review solver providers
+
+Review evals keep one shared task / dataset / scorer surface and vary only the solver provider:
+
+| Provider | Status | Purpose |
+|---|---|---|
+| `deepagents_baseline` | active | Durable external baseline used for apples-to-apples comparison |
+| `openbot_prod` | future | Future production OpenBot review workflow on the same harness |
+
+The intended comparison is **same dataset + same scorer + same judge + same report path, different solver**. `deepagents_baseline` is not a disposable stand-in; it stays after `openbot_prod` arrives so the project can show where its own system is better.
+
 ## v0.1 / v0.2 suite 列表
 
 下表覆盖 eval PRD §4.0 范围调整后**实际计划构建**的 suite。`Status` 标 🕒 的为 **DEFERRED**（等 §4.0 gate trip 后再做），E0 阶段仅占位、不创建对应文件。
@@ -43,14 +54,14 @@ PR 改动 `evals/tasks/` · `evals/scorers/` · `evals/datasets/` · `evals/solv
 
 完整解冻条件见 eval PRD §4.0；E0 阶段不创建 🕒 suite 的 task 文件，但本目录树足以承接它们解冻后的代码落点。
 
-## 怎么跑（E0 阶段：占位 only）
+## 怎么跑
 
-E0 milestone 只建目录骨架；真正可跑的命令在 E1 之后逐 task 上线（见 `docs/eval/task-list.md`）：
+当前已具备本地 smoke 能力；后续 suite 继续按 `docs/eval/task-list.md` 上线：
 
-- **本地 smoke**（E1-T07 之后可用）：`inspect eval evals/tasks/review_martian.py --limit 5`
+- **本地 smoke baseline**：`inspect eval evals/tasks/review_martian.py --task review_martian_baseline --limit 5`
 - **公开 benchmark**（E2-T11 之后）：`inspect eval inspect_evals/swe_bench_lite --solver evals.solvers.openbot_fix`
 - **CI 触发**（E3 之后）：PR matcher / cron 由 `.github/workflows/eval.yml` 调度
-- **LangSmith 校验**（每次 run）：`python scripts/validate_langsmith_run.py <run_id>`（E0-T04 占位、E1-T02 起填充）
+- **LangSmith 校验**（每次 run）：`python scripts/validate_langsmith_run.py <run_id>`
 
 ## 边界提示
 

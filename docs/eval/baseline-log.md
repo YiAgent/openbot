@@ -123,10 +123,10 @@
   report: "docs/reports/eval-sample-summary.md"
   pr_url: null
   notes: |
-    First end-to-end baseline. Architecture validation, NOT statistical baseline.
-    - Solver: deepagents (LangGraph) wrapping `glm-5.1` via Anthropic-compatible endpoint
-      (PRD §17 #5 production lock is `claude-opus-4-7`; GLM is the v0.1 dev stand-in
-      while the Anthropic key is unavailable).
+    First end-to-end smoke anchor. Architecture validation, NOT a statistical Martian baseline.
+    - Solver: `deepagents_baseline` (LangGraph) wrapping `glm-5.1` via an
+      Anthropic-compatible endpoint. This provider remains a durable comparator
+      after the future `openbot_prod` solver exists.
     - Judge: deterministic heuristic (file + ±3 line + 4-char keyword overlap),
       NOT the PRD §10.3 LLM judge. Subsequent runs will swap in `evals.common.judges.Judge`.
     - Dataset: `martian_smoke_v1` is hand-authored 5-sample synthetic; real Martian
