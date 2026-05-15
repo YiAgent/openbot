@@ -24,6 +24,8 @@ def _full_metadata() -> dict[str, Any]:
         "git_sha": "abc1234",
         "prompt_version": 1,
         "workflow_version": 1,
+        "solver_id": "deepagents_baseline",
+        "solver_family": "baseline",
         "model_id": "anthropic/claude-opus-4-7",
         "judge_model_id": "anthropic/claude-opus-4-7",
         "judge_prompt_version": 1,
@@ -108,8 +110,8 @@ def test_log_run_metadata_raises_when_any_required_field_missing(
 
 
 def test_log_run_metadata_field_count_matches_prd_spec() -> None:
-    """Hard pin the field count at 15 — drift fails this test loudly."""
-    assert len(REQUIRED_RUN_FIELD_NAMES) == 15
+    """Hard pin the field count at 17 — drift fails this test loudly."""
+    assert len(REQUIRED_RUN_FIELD_NAMES) == 17
 
 
 # ─── log_sample: PRD §10.2 — 13 required fields ──────────────────────────────

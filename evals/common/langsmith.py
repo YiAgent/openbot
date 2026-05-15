@@ -121,12 +121,23 @@ def log_run_metadata(client: _LangSmithLike, run_id: str, metadata: Mapping[str,
 
 
 def log_sample(client: _LangSmithLike, run_id: str, sample: Mapping[str, Any]) -> None:
-    """Attach a sample-level record to a LangSmith run. PRD §10.2 contract."""
+    """Attach a sample-level record to a LangSmith run. PRD §10.2 + §12.4 contract."""
     missing = _missing(REQUIRED_SAMPLE_FIELD_NAMES, sample)
     if missing:
         raise ValueError(
             f"Sample missing required PRD §10.2 fields: {missing}. "
             f"Provided keys: {sorted(sample.keys())}"
+        )
+    # E2-T16 (Codex P2): enforce PRD §12.4 failure_category enum at the
+    # actual write surface, not just in the validator script. This is the
+    # call site that turns the previously-dead helper into a real gate.
+    from evals.common._metadata_spec import ALLOWED_FAILURE_CATEGORIES
+
+    fc = sample.get("failure_category")
+    if fc not in ALLOWED_FAILURE_CATEGORIES:
+        raise ValueError(
+            f"failure_category {fc!r} is not in the PRD §12.4 enum. "
+            f"Allowed: {sorted(ALLOWED_FAILURE_CATEGORIES)}"
         )
     client.create_feedback(
         run_id,

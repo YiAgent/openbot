@@ -29,6 +29,8 @@ def _common_kwargs() -> dict[str, str]:
     return {
         "dataset_version": "martian_review_v1",
         "dataset_sha256": "0" * 64,
+        "solver_id": "deepagents_baseline",
+        "solver_family": "baseline",
     }
 
 
@@ -41,6 +43,12 @@ def test_collect_propagates_positional_args(_patched_git: None) -> None:
     md = metadata.collect_run_metadata("triage_internal", "regression", **_common_kwargs())
     assert md["suite_name"] == "triage_internal"
     assert md["mode"] == "regression"
+
+
+def test_collect_propagates_solver_identity(_patched_git: None) -> None:
+    md = metadata.collect_run_metadata("review_martian", "smoke", **_common_kwargs())
+    assert md["solver_id"] == "deepagents_baseline"
+    assert md["solver_family"] == "baseline"
 
 
 def test_git_sha_comes_from_subprocess(_patched_git: None) -> None:
