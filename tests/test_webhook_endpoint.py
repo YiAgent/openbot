@@ -134,6 +134,59 @@ def test_webhook_dedup_fallback_open_when_redis_unset(
         get_settings.cache_clear()
 
 
+async def test_webhook_enqueues_when_redis_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With Redis wired, the webhook XADDs to openbot:workflows instead of
+    invoking the in-process BackgroundTask path. Slice D behavior."""
+    import fakeredis.aioredis  # local import: dev-only dep
+
+    from openbot.queue.payload import STREAM_NAME, deserialize_payload
+
+    monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SECRET)
+    get_settings.cache_clear()
+
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    monkeypatch.setenv("OPENBOT_REDIS_URL", "redis://fake")
+    monkeypatch.setattr("openbot.webapp.make_client", lambda url: fake)
+
+    body = json.dumps(
+        {
+            "action": "opened",
+            "issue": {"number": 1},
+            "repository": {"full_name": "YiAgent/openbot"},
+            "sender": {"login": "u", "type": "User"},
+            "installation": {"id": 555},
+        }
+    ).encode()
+    headers = _sign(body) | {"x-github-delivery": "queue-test-id"}
+
+    try:
+        with TestClient(app) as c:
+            response = c.post("/webhook/github", content=body, headers=headers)
+
+        assert response.status_code == 202
+        payload = response.json()
+        assert payload["status"] == "accepted"
+        # Slice D contract: the response includes the Redis Stream entry id.
+        assert "entry_id" in payload
+        assert "-" in payload["entry_id"]
+
+        # And the payload that was XADD'd round-trips back to the same
+        # UnifiedEvent shape — proves the webhook → queue serialization
+        # path is intact end-to-end.
+        entries = await fake.xrange(STREAM_NAME, count=10)
+        assert len(entries) == 1
+        _entry_id, fields = entries[0]
+        restored = deserialize_payload(fields["json"])
+        assert restored is not None
+        assert restored.delivery_id == "queue-test-id"
+        assert restored.feature == "triage"
+        assert restored.repo == "YiAgent/openbot"
+    finally:
+        get_settings.cache_clear()
+
+
 def test_webhook_dedup_drops_workflow_when_redis_marks_duplicate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
