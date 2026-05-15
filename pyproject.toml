@@ -27,8 +27,14 @@ dependencies = [
     "httpx>=0.28.1",
     # GitHub App JWT signing (RS256) — installation token flow
     "pyjwt[crypto]>=2.9",
-    # Persistence — webhook dedup (this PR), rate-limit + queue (upcoming PRs)
+    # Persistence — webhook dedup, rate-limit + queue (Redis); cost_meter +
+    # audit_log (Postgres).
     "redis>=5",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "alembic>=1.13",
+    # LLM — multi-vendor LiteLLM (PRD §13 #10)
+    "litellm>=1.50",
 ]
 
 [project.urls]
@@ -43,6 +49,7 @@ dev = [
     "ruff>=0.15.13",
     "httpx>=0.28.1",            # FastAPI TestClient runtime
     "fakeredis>=2.26",          # in-memory Redis for unit tests (async-compatible)
+    "aiosqlite>=0.20",          # in-memory SQLite via SQLAlchemy for unit tests
 ]
 
 [build-system]

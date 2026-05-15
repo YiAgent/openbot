@@ -1,14 +1,52 @@
-"""Persistence layer — Redis + (later) Postgres.
+"""Persistence layer — Redis + Postgres.
 
-v0.1 uses Redis for three concerns:
-  - webhook dedup        (this slice; `openbot.persistence.dedup`)
-  - rate-limit counters  (later slice — middleware)
-  - workflow queue       (later slice — middleware)
+Redis (slice 1/3):
+  - webhook dedup        (openbot.persistence.dedup)
+  - rate-limit counters  (middleware slice)
+  - workflow queue       (middleware slice)
 
-Postgres lands in a later slice for `cost_meter` / `audit_log` / `rate_limit_audit`.
+Postgres (slice 2/3, this slice):
+  - cost_meter           (every LLM call, drives PRD §4.5 budget caps)
+  - audit_log            (workflow lifecycle, drives PRD §9.4 audit trail)
 """
 
+from openbot.persistence.db import (
+    create_schema,
+    make_engine,
+    make_session_factory,
+    session_scope,
+)
 from openbot.persistence.dedup import DedupOutcome, WebhookDedup
+from openbot.persistence.models import (
+    AuditLog,
+    Base,
+    CostMeter,
+    CostStatus,
+    Workflow,
+    WorkflowPhase,
+)
 from openbot.persistence.redis import make_client
+from openbot.persistence.repository import (
+    AuditLogRepo,
+    CostMeterRepo,
+    rolling_month_window,
+)
 
-__all__ = ["DedupOutcome", "WebhookDedup", "make_client"]
+__all__ = [
+    "AuditLog",
+    "AuditLogRepo",
+    "Base",
+    "CostMeter",
+    "CostMeterRepo",
+    "CostStatus",
+    "DedupOutcome",
+    "WebhookDedup",
+    "Workflow",
+    "WorkflowPhase",
+    "create_schema",
+    "make_client",
+    "make_engine",
+    "make_session_factory",
+    "rolling_month_window",
+    "session_scope",
+]
