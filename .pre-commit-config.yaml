@@ -53,21 +53,23 @@ repos:
   # ─────────────────────────────────────────────────────────────
   # 3. Secret 扫描（pre-commit + pre-push 双保险）
   #    PRD §4.8：Trufflehog 是 OpenBot 的核心安全组件
+  #    用 local hook 调本机 trufflehog（brew/curl 装好）
   # ─────────────────────────────────────────────────────────────
-  - repo: https://github.com/trufflesecurity/trufflehog
-    rev: v3.88.18
+  - repo: local
     hooks:
-      - id: trufflehog
-        name: trufflehog (staged diff)
-        # 只扫 staged diff，快
-        entry: bash -c 'trufflehog git file://. --since-commit HEAD --only-verified --fail --no-update'
-        language: system
+      - id: trufflehog-staged
+        name: trufflehog (working tree)
+        entry: scripts/hooks/trufflehog-staged.sh
+        language: script
+        pass_filenames: false
+        always_run: true
         stages: [pre-commit]
-      - id: trufflehog
-        name: trufflehog (full history)
-        # push 前扫全历史，防止把秘密 push 到 origin
-        entry: bash -c 'trufflehog git file://. --only-verified --fail --no-update'
-        language: system
+      - id: trufflehog-full
+        name: trufflehog (full git history)
+        entry: scripts/hooks/trufflehog-full.sh
+        language: script
+        pass_filenames: false
+        always_run: true
         stages: [pre-push]
 
   # ─────────────────────────────────────────────────────────────
