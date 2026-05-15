@@ -6,6 +6,7 @@ from evals.scripts.export_run_summary import (
     _aggregate,
     _aggregate_langsmith_payload,
     _render_markdown,
+    sync_eval_payload_to_langsmith,
 )
 
 
@@ -104,3 +105,67 @@ def test_summary_can_render_from_langsmith_payload() -> None:
     assert agg["dataset_name"] == "martian_smoke_v1"
     assert agg["solver_id"] == "deepagents_baseline"
     assert agg["top_cost_samples"] == [("s1", 0.01)]
+
+
+def test_sync_eval_payload_to_langsmith_logs_run_and_samples(monkeypatch) -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.created_runs = []
+            self.updated_runs = []
+            self.feedback = []
+
+        def create_run(self, **kwargs):
+            self.created_runs.append(kwargs)
+
+        def update_run(self, run_id, **kwargs):
+            self.updated_runs.append((run_id, kwargs))
+
+        def create_feedback(self, run_id, key, **kwargs):
+            self.feedback.append((run_id, key, kwargs))
+
+    artifact_refs: list[tuple[str, str]] = []
+
+    def fake_export_artifact(sample_id, kind, content, **_kwargs):
+        artifact_refs.append((sample_id, kind))
+        return f"{kind}-ref"
+
+    monkeypatch.setattr(
+        "evals.scripts.export_run_summary.export_artifact",
+        fake_export_artifact,
+    )
+    monkeypatch.setattr(
+        "evals.scripts.export_run_summary.collect_run_metadata",
+        lambda *_args, **_kwargs: {
+            "suite_name": "review_martian",
+            "suite_version": 1,
+            "dataset_version": "martian_smoke_v1",
+            "dataset_sha256": "0" * 64,
+            "git_sha": "abcdef123456",
+            "prompt_version": "unknown",
+            "workflow_version": "unknown",
+            "solver_id": "deepagents_baseline",
+            "solver_family": "baseline",
+            "model_id": "anthropic/claude-opus-4-7",
+            "judge_model_id": "anthropic/claude-opus-4-7",
+            "judge_prompt_version": 1,
+            "sandbox_backend": "modal",
+            "runner_version": "0.3.220",
+            "mode": "smoke",
+            "started_at": "2026-05-15T00:00:00Z",
+            "triggered_by": "local",
+        },
+    )
+    client = FakeClient()
+
+    run_id = sync_eval_payload_to_langsmith(
+        _eval_payload(),
+        client=client,
+        project_name="openbot-eval-internal",
+        dataset_sha256="0" * 64,
+        mode="smoke",
+    )
+
+    assert client.created_runs[0]["name"].endswith("-smoke")
+    assert client.updated_runs[0][0] == run_id
+    assert client.feedback[0][1] == "sample::s1"
+    assert artifact_refs == [("s1", "diff"), ("s1", "raw_output")]
