@@ -16,7 +16,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from openbot.persistence.models import AuditLog, CostMeter
+from openbot.persistence.models import AuditLog, CostMeter, CostStatus
 
 
 class CostMeterRepo:
@@ -35,8 +35,14 @@ class CostMeterRepo:
         cost_usd: Decimal,
         prompt_tokens: int,
         completion_tokens: int,
+        cost_status: CostStatus = CostStatus.RECORDED,
     ) -> CostMeter:
-        """Persist one LLM call. Caller commits the session."""
+        """Persist one LLM call. Caller commits the session.
+
+        `cost_status` defaults to RECORDED (price computed from real usage).
+        Pass a non-default value when the cost/tokens are best-effort estimates
+        — see `CostStatus` for the four degraded states.
+        """
         entry = CostMeter(
             repo=repo,
             feature=feature,
@@ -45,18 +51,40 @@ class CostMeterRepo:
             cost_usd=cost_usd,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            cost_status=cost_status,
         )
         self._session.add(entry)
         await self._session.flush()  # populate id/created_at without commit
         return entry
 
     async def sum_for_task(self, task_id: str) -> Decimal:
-        """Total cost charged against one task_id — drives per_task budget cap."""
+        """Total cost charged against one task_id — drives per_task budget cap.
+
+        Includes every row regardless of `cost_status`. For strict budget
+        accounting (where you only trust prices that were actually computed)
+        use `sum_recorded_for_task` instead.
+        """
         stmt = select(func.coalesce(func.sum(CostMeter.cost_usd), 0)).where(
             CostMeter.task_id == task_id
         )
         result = await self._session.execute(stmt)
-        return Decimal(result.scalar_one())
+        return Decimal(str(result.scalar_one()))
+
+    async def sum_recorded_for_task(self, task_id: str) -> Decimal:
+        """Total cost from rows with `cost_status == RECORDED`.
+
+        BudgetEnforcement should call this — degraded rows (pricing failed,
+        usage missing) have unknown cost and including them would either
+        let real spend exceed the cap (treating unknown as 0) or block
+        all calls (treating unknown as infinity). Neither is acceptable,
+        so we report only what we know.
+        """
+        stmt = select(func.coalesce(func.sum(CostMeter.cost_usd), 0)).where(
+            CostMeter.task_id == task_id,
+            CostMeter.cost_status == CostStatus.RECORDED,
+        )
+        result = await self._session.execute(stmt)
+        return Decimal(str(result.scalar_one()))
 
     async def sum_for_repo_since(self, repo: str, since: datetime) -> Decimal:
         """Total cost for a repo since `since` — drives monthly_soft_cap."""

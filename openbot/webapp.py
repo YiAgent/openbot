@@ -51,9 +51,15 @@ def _build_auth(settings: Settings) -> GitHubAppAuth | None:
     """Construct the App auth iff both id and key are configured.
 
     Returns None (with WARNING) when the PEM path is set but the file is
-    missing — typical for first-run misconfiguration. Webhooks still 503
-    cleanly via the github_webhook_secret check; write-back is just
-    disabled until the user fixes their .env.
+    inaccessible — missing, wrong permissions, mounted as a directory, stale
+    NFS handle, anything else under `OSError`. Webhooks still 503 cleanly
+    via the github_webhook_secret check; write-back is just disabled until
+    the user fixes their .env.
+
+    The catch is broad (`OSError`) rather than narrow (`FileNotFoundError`)
+    because first-run users routinely produce ALL the subclasses — wrong
+    chmod, dir typo, etc. — and crashing startup on each variant gives no
+    useful signal beyond what the WARNING log already provides.
     """
     if settings.github_app_id is None or settings.github_app_private_key_path is None:
         return None
@@ -63,11 +69,12 @@ def _build_auth(settings: Settings) -> GitHubAppAuth | None:
             private_key_path=settings.github_app_private_key_path,
             user_agent=f"OpenBot/{__version__}",
         )
-    except FileNotFoundError:
+    except OSError as exc:
         _logger.warning(
-            "github_app_pem_missing",
+            "github_app_pem_unreadable",
             extra={
                 "path": str(settings.github_app_private_key_path),
+                "reason": f"{type(exc).__name__}: {exc}",
             },
         )
         return None

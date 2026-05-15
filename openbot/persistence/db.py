@@ -9,9 +9,13 @@ Unit tests use aiosqlite for an in-memory database
 Both share the same model definitions and SQL (we deliberately avoid
 JSONB / PG-only types in `models.py`).
 
-The engine is constructed once at startup via `make_engine()` and held on
+Engines are constructed once at startup via `make_engine()` and held on
 `app.state`. A short-lived `AsyncSession` is created per workflow run via
 the `sessionmaker` and disposed inside an async context manager.
+
+Note: startup runs `create_schema()` (a `Base.metadata.create_all`) — sync
+DDL inside the async lifespan. Acceptable because startup is the only
+serial moment in the request lifecycle; all subsequent I/O is async.
 """
 
 from __future__ import annotations
@@ -81,9 +85,8 @@ async def create_schema(engine: AsyncEngine) -> None:
     """First-run schema creation via `Base.metadata.create_all`.
 
     Sufficient for v0.1 alpha — users install fresh and the wizard runs once.
-    The first schema CHANGE (v0.1 → v0.2) will introduce alembic; until then,
-    we keep the migration surface zero. PRD §14 Day 2-3 is met by recording
-    a schema_version row in audit_log when alembic lands.
+    The first schema CHANGE will introduce alembic; until then, the migration
+    surface is zero.
     """
     from openbot.persistence.models import Base
 

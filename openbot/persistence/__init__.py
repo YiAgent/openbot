@@ -17,7 +17,14 @@ from openbot.persistence.db import (
     session_scope,
 )
 from openbot.persistence.dedup import DedupOutcome, WebhookDedup
-from openbot.persistence.models import AuditLog, Base, CostMeter
+from openbot.persistence.models import (
+    AuditLog,
+    Base,
+    CostMeter,
+    CostStatus,
+    Workflow,
+    WorkflowPhase,
+)
 from openbot.persistence.redis import make_client
 from openbot.persistence.repository import (
     AuditLogRepo,
@@ -31,8 +38,11 @@ __all__ = [
     "Base",
     "CostMeter",
     "CostMeterRepo",
+    "CostStatus",
     "DedupOutcome",
     "WebhookDedup",
+    "Workflow",
+    "WorkflowPhase",
     "create_schema",
     "make_client",
     "make_engine",
