@@ -1,0 +1,119 @@
+# OpenBot pre-commit / pre-push hooks
+#
+# 设计原则（对齐 PRD §8.4 / §4.8 / §13）：
+#   - 本地 hook 只挡 critical：lint/format、secret 扫描、commit msg 规范
+#   - mypy / bandit / coverage gate 一律不加（PRD §8.4 锁定）
+#   - eval 永远不进 hook（贵 + 慢，CI/cron 跑）
+#
+# 安装：
+#   uv tool install pre-commit            # 或 pipx install pre-commit
+#   pre-commit install                    # commit-msg + pre-commit
+#   pre-commit install --hook-type pre-push
+#
+# 手动跑全部：
+#   pre-commit run --all-files --hook-stage pre-commit
+#   pre-commit run --all-files --hook-stage pre-push
+
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  # ─────────────────────────────────────────────────────────────
+  # 1. 通用卫生（pre-commit）
+  # ─────────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]            # 单文件 1MB 上限（artifacts 走 R2）
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-toml
+      - id: check-json
+      - id: detect-private-key          # 双保险：除 trufflehog 外再挡一道
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  # ─────────────────────────────────────────────────────────────
+  # 2. Python lint + format（pre-commit）
+  #    PRD §8.4：ruff lint + ruff format --check
+  # ─────────────────────────────────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+  # ─────────────────────────────────────────────────────────────
+  # 3. Secret 扫描（pre-commit + pre-push 双保险）
+  #    PRD §4.8：Trufflehog 是 OpenBot 的核心安全组件
+  # ─────────────────────────────────────────────────────────────
+  - repo: https://github.com/trufflesecurity/trufflehog
+    rev: v3.88.18
+    hooks:
+      - id: trufflehog
+        name: trufflehog (staged diff)
+        # 只扫 staged diff，快
+        entry: bash -c 'trufflehog git file://. --since-commit HEAD --only-verified --fail --no-update'
+        language: system
+        stages: [pre-commit]
+      - id: trufflehog
+        name: trufflehog (full history)
+        # push 前扫全历史，防止把秘密 push 到 origin
+        entry: bash -c 'trufflehog git file://. --only-verified --fail --no-update'
+        language: system
+        stages: [pre-push]
+
+  # ─────────────────────────────────────────────────────────────
+  # 4. Commit message 规范（commit-msg）
+  #    PRD §8.4 pr_lint.yml：强制 conventional commit
+  # ─────────────────────────────────────────────────────────────
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.6.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        # PRD §13 / git-workflow.md 允许的类型
+        args:
+          - feat
+          - fix
+          - refactor
+          - docs
+          - test
+          - chore
+          - perf
+          - ci
+          - build
+          - style
+          - revert
+
+  # ─────────────────────────────────────────────────────────────
+  # 5. 测试 gate（pre-push）
+  #    PRD §8.3：unit + integration + middleware + security
+  #    eval 不进，留给 CI / cron
+  # ─────────────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: pytest-pre-push
+        name: pytest (unit + integration, skip eval)
+        # tests/ 不存在时静默跳过（项目刚起步阶段）
+        entry: scripts/hooks/pytest-pre-push.sh
+        language: script
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
+      # PRD §4.8 / §13：禁止把 .env / *.pem / *.key 进 git
+      - id: block-env-files
+        name: block .env / *.pem / *.key from being committed
+        entry: scripts/hooks/block-secret-files.sh
+        language: script
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

@@ -1,0 +1,60 @@
+# Dependabot 配置 · PRD §8.4
+# monthly 频率，避免 PR 噪声压垮单人 maintainer。
+# 等代码进来后，新增 pip / docker ecosystem 即可（已在下方预留注释）。
+version: 2
+
+updates:
+  # GitHub Actions 自身的版本（actions/checkout, setup-uv, etc.）
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+      day: monday
+      time: "08:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: ci
+      include: scope
+
+  # ──── 代码就绪后取消下面这些注释 ────
+  #
+  # Python 依赖（uv-based）
+  # - package-ecosystem: pip
+  #   directory: "/"
+  #   schedule:
+  #     interval: monthly
+  #     day: monday
+  #     time: "08:00"
+  #     timezone: "UTC"
+  #   open-pull-requests-limit: 10
+  #   labels: [dependencies, python]
+  #   groups:
+  #     python-minor-and-patch:
+  #       update-types: [minor, patch]
+  #     # major 单独分组，方便人工 review
+  #     python-major:
+  #       update-types: [major]
+  #   commit-message:
+  #     prefix: chore
+  #     include: scope
+  #
+  # Docker base image
+  # - package-ecosystem: docker
+  #   directory: "/"
+  #   schedule:
+  #     interval: monthly
+  #     day: monday
+  #     time: "08:00"
+  #     timezone: "UTC"
+  #   open-pull-requests-limit: 3
+  #   labels: [dependencies, docker]
+  #   commit-message:
+  #     prefix: chore
+  #     include: scope

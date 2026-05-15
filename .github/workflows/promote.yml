@@ -1,0 +1,44 @@
+name: Promote main → release/latest
+
+# PRD §8.4：CI 只做 gating，不做 deploy；Docker image build & push 由 release 分支触发。
+# 此 workflow 周期性把通过 CI 的 main 推到 release/latest（force push 目标分支）。
+#
+# 当前为 manual-dispatch only：cron schedule 暂时关闭，等 Dockerfile / release pipeline 就绪
+# 再取消下方 schedule 注释；防止空 release 分支被来回 force-push。
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "0 8 * * *"  # 每天 08:00 UTC
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-release
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Guard — require code artifact before promoting
+        id: guard
+        run: |
+          if [ ! -f Dockerfile ] && [ ! -f pyproject.toml ]; then
+            echo "::warning::No Dockerfile or pyproject.toml on main — skip promotion."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Force-push main → release/latest
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git push --force origin main:refs/heads/release/latest

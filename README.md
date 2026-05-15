@@ -44,6 +44,24 @@ You build your own GitHub App, run `docker compose up`, point it at your repo �
 
 Implementation hasn't started. If you want to follow along or contribute once code lands, watch this repo — `CONTRIBUTING.md` will arrive with the first code drop.
 
+### Git hooks（已就位）
+
+仓库内置 `pre-commit` 配置（[`.pre-commit-config.yaml`](./.pre-commit-config.yaml)），覆盖：
+
+| 阶段 | 检查 | 来源 |
+|---|---|---|
+| `pre-commit` | trailing-whitespace · large-files · `detect-private-key` · `ruff --fix` · `ruff-format` · **trufflehog staged diff** · 阻断 `.env`/`*.pem`/`*.key` | PRD §4.8 / §8.4 |
+| `commit-msg` | conventional commit 类型（`feat` / `fix` / `chore` …） | PRD §8.4 `pr_lint.yml` |
+| `pre-push` | **trufflehog full-history** · `pytest -x`（unit + integration，跳过 `evals/`） | PRD §8.3 / §8.4 |
+
+一键安装：
+
+```bash
+./scripts/install-hooks.sh
+```
+
+刻意**不加**的检查（与 PRD §8.4 / §13 锁定决策一致）：mypy / bandit / coverage gate / LLM eval —— 这些走 CI / cron，避免本地 commit 被慢检查卡住。
+
 ## License
 
 [Apache-2.0](./LICENSE)

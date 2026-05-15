@@ -1,0 +1,26 @@
+# <type>: <subject>   (50 字符内，祈使句，不加句号)
+#
+# <body>   (72 字符换行，解释 why 而不是 what)
+#
+# <footer>   (BREAKING CHANGE / Closes #123 / Co-authored-by)
+#
+# ─────────────────────────────────────────────────────────────
+# type 允许值（PRD §8.4 / common/git-workflow.md）：
+#   feat      新功能
+#   fix       bug 修复
+#   refactor  重构（不改行为）
+#   docs      文档
+#   test      测试
+#   chore     杂活（lockfile / 配置 / 元数据）
+#   perf      性能
+#   ci        CI/CD
+#   build     构建系统 / 依赖
+#   style     代码格式（无逻辑变化）
+#   revert    回滚
+#
+# 示例：
+#   feat: add ChannelAdapter ABC for Linear / Slack
+#   fix: prevent infinite loop in fix workflow self-fix
+#   chore: bump ruff to 0.8.6
+#   docs: clarify three-layer cost cap in PRD §4.5
+# ─────────────────────────────────────────────────────────────
