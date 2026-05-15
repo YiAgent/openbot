@@ -28,26 +28,49 @@ from openbot.adapters.base import SignatureError
 from openbot.adapters.github import GitHubAdapter
 from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
-from openbot.persistence import DedupOutcome, WebhookDedup, make_client
+from openbot.persistence import (
+    DedupOutcome,
+    WebhookDedup,
+    create_schema,
+    make_client,
+    make_engine,
+    make_session_factory,
+)
 from openbot.workflows import maybe_run_triage
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     import redis.asyncio as redis_async
+    from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 _logger = logging.getLogger("openbot.webapp")
 
 
 def _build_auth(settings: Settings) -> GitHubAppAuth | None:
-    """Construct the App auth iff both id and key are configured."""
+    """Construct the App auth iff both id and key are configured.
+
+    Returns None (with WARNING) when the PEM path is set but the file is
+    missing — typical for first-run misconfiguration. Webhooks still 503
+    cleanly via the github_webhook_secret check; write-back is just
+    disabled until the user fixes their .env.
+    """
     if settings.github_app_id is None or settings.github_app_private_key_path is None:
         return None
-    return GitHubAppAuth.from_pem_file(
-        app_id=settings.github_app_id,
-        private_key_path=settings.github_app_private_key_path,
-        user_agent=f"OpenBot/{__version__}",
-    )
+    try:
+        return GitHubAppAuth.from_pem_file(
+            app_id=settings.github_app_id,
+            private_key_path=settings.github_app_private_key_path,
+            user_agent=f"OpenBot/{__version__}",
+        )
+    except FileNotFoundError:
+        _logger.warning(
+            "github_app_pem_missing",
+            extra={
+                "path": str(settings.github_app_private_key_path),
+            },
+        )
+        return None
 
 
 @asynccontextmanager
@@ -60,6 +83,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.redis = redis_client
     app.state.dedup = WebhookDedup(redis_client)
+
+    db_engine: AsyncEngine | None = None
+    db_session_factory: async_sessionmaker[AsyncSession] | None = None
+    if settings.postgres_url:
+        db_engine = make_engine(settings.postgres_url, echo=settings.debug)
+        # First-run schema creation. Idempotent — safe to call on every startup.
+        # When the first schema CHANGE ships we replace this with alembic.
+        await create_schema(db_engine)
+        db_session_factory = make_session_factory(db_engine)
+    app.state.db_engine = db_engine
+    app.state.db_session_factory = db_session_factory
 
     app.state.github_auth = auth
     app.state.github_adapter = (
@@ -77,6 +111,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "webhook_configured": settings.github_webhook_secret is not None,
             "write_back_configured": auth is not None,
             "redis_configured": redis_client is not None,
+            "postgres_configured": db_engine is not None,
         },
     )
     try:
@@ -89,6 +124,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await auth.aclose()
         if redis_client is not None:
             await redis_client.aclose()
+        if db_engine is not None:
+            await db_engine.dispose()
 
 
 app = FastAPI(

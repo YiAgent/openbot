@@ -57,6 +57,16 @@ class Settings(BaseSettings):
             "workflow queue land in the middleware slice."
         ),
     )
+    # If unset, cost_meter / audit_log are not persisted. LLM workflows still
+    # run, but PRD §4.5 budget caps + §9.4 audit cannot be enforced.
+    postgres_url: str | None = Field(
+        default=None,
+        description=(
+            "Postgres URL using the asyncpg driver, e.g. "
+            "postgresql+asyncpg://openbot:openbot@localhost:5432/openbot. "
+            "Required for cost tracking + audit log."
+        ),
+    )
 
     debug: bool = Field(default=False, description="Verbose logs; never enable in production.")
 
