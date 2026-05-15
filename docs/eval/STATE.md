@@ -32,6 +32,7 @@
 - [x] E2-T16 — 2026-05-15 — handoff: handoffs/E2-T16.md  (failure_category enum validation)
 - [x] E2-T01 — 2026-05-15 — handoff: handoffs/E2-T01.md  (Martian benchmark locked to upstream `807d469`, 50 PR JSONL pinned)
 - [x] E2-T15 — 2026-05-15 — handoff: handoffs/E2-T15.md  (PRD §9 thresholds module + `compare_runs.py` PR-comment renderer)
+- [x] E2-T08 — 2026-05-15 — handoff: handoffs/E2-T08.md  (SWE-bench-aligned `patch_tests` scorer — pure function decoupled from E2-T07's solver)
 
 ## Partial
 <!-- Format: <id> — open acceptance gap -->
@@ -41,7 +42,8 @@
 <!-- Format: <id> — blocker note -->
 - **E2-T02** — Martian 全量 run + baseline. Blocker: needs LLM cost-budget approval to spend tokens against the locked 50-PR dataset, and a price-emitting provider (E1-T08 noted `glm-5.1` does not emit price metadata — Claude or OpenAI required for the recorded baseline row). Unblocks E2-T15's consumer side and downstream G1/G2 regression gating.
 - **E2-T07** — Fix solver + Modal sandbox 集成. Blocker: (a) Modal credentials not provisioned in Doppler config; (b) the OpenBot `fix` workflow does not yet exist in the repo skeleton (per `CLAUDE.md`, current v0.1 Week 1 surface is `webapp.py + config.py + events.py + adapters/` only). Cannot wrap a workflow that hasn't been written.
-- **E2-T08** — Patch tests scorer. Blocker: depends on E2-T07's `openbot_fix` solver producing patches to score.
+<!-- E2-T08 unblocked: scorer was decoupled from solver via pure-function design; see handoffs/E2-T08.md. -->
+- _E2-T08 moved to Done above; the scorer is decoupled from E2-T07 by design (pure function over test-result dicts)._
 - **E2-T11** — `swe_bench_lite` 接入. Blocker: depends on E2-T07 + docker sandbox config (PRD §6 双 sandbox).
 
 ## Scope notes
