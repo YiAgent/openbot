@@ -68,6 +68,21 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ─── Worker queue (PRD §5.1 / harness spec §9.3) ───
+    # Single-process worker with N asyncio consumers. v0.1 defaults to
+    # 4 — fine for individual maintainer scale (<10 events/day). At
+    # higher load: start more `python -m openbot.queue.runner` processes;
+    # they share the same Redis consumer group.
+    worker_concurrency: int = Field(
+        default=4,
+        ge=1,
+        le=64,
+        description=(
+            "Number of asyncio consumer tasks per worker process. "
+            "Each task pulls from openbot:workflows independently."
+        ),
+    )
+
     debug: bool = Field(default=False, description="Verbose logs; never enable in production.")
 
 

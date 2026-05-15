@@ -84,6 +84,9 @@ dev-smee: ## Just smee-client (assumes server is up)
 run: ## Run FastAPI app (production-style, no reload)
 	$(UVICORN) $(APP) --host $(HOST) --port $(PORT)
 
+worker: ## Run the Redis Stream worker (slice D — consumes openbot:workflows)
+	uv run python -m openbot.queue.runner
+
 smoke: ## Hit /health to verify server is up
 	@curl -sf "http://$(HOST):$(PORT)/health" && echo
 
