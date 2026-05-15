@@ -12,35 +12,19 @@ Reference: eval PRD §10.1 (run-level metadata) · §10.4 (experiment naming).
 from __future__ import annotations
 
 import argparse
+import pathlib
 import sys
 
-# eval PRD §10.1 — every run MUST carry these 14 metadata fields, else gate fails.
-REQUIRED_RUN_METADATA_FIELDS: tuple[tuple[str, str], ...] = (
-    ("suite_name", "e.g. review_shadow"),
-    ("suite_version", "integer, e.g. 1"),
-    ("dataset_version", "e.g. internal_prs_v1"),
-    ("dataset_sha256", "SHA256 from manifest"),
-    ("git_sha", "current commit"),
-    ("prompt_version", "openbot/prompts/__version__"),
-    ("workflow_version", "openbot/workflows/__version__"),
-    ("model_id", "e.g. anthropic/claude-opus-4-7"),
-    ("judge_model_id", "e.g. anthropic/claude-opus-4-7"),
-    ("judge_prompt_version", "integer"),
-    ("sandbox_backend", "modal | inspect_docker"),
-    ("runner_version", "inspect-ai version"),
-    ("mode", "smoke | regression | weekly | release"),
-    ("started_at", "ISO-8601 UTC"),
-    # NOTE: PRD §10.1 also lists `triggered_by` (github_actor | local | cron),
-    # so the contract is actually 15 fields — both will be enforced.
-    ("triggered_by", "github_actor | local | cron"),
-)
+# Allow `python scripts/validate_langsmith_run.py` from any CWD to find the
+# repo-root `evals` package without forcing the caller to set PYTHONPATH.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-# eval PRD §10.4 — exact pattern. Violating names fail the run.
-EXPERIMENT_NAME_PATTERN = "{suite}-{dataset_version}-{git_sha_short}-{model_alias}-{mode}"
-EXPERIMENT_NAME_EXAMPLES = (
-    "review-shadow-internal_prs_v1-a1b2c3-opus47-regression",
-    "swe-lite-upstream2026w20-d4e5f6-haiku45-weekly",
-    "redteam-prompt_injection_v1-a1b2c3-opus47-release",
+from evals.common._metadata_spec import (  # noqa: E402
+    EXPERIMENT_NAME_EXAMPLES,
+    EXPERIMENT_NAME_PATTERN,
+    REQUIRED_RUN_METADATA_FIELDS,
 )
 
 

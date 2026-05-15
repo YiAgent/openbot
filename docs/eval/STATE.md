@@ -1,8 +1,8 @@
 # Eval Task State
 
 **Last updated**: 2026-05-15
-**Active branch**: eval/E1  <!-- E0 done; next session branches eval/E1 from main after PR merges -->
-**Next task**: E1-T01  <!-- pending: open & merge `eval/E0 → main` first -->
+**Active branch**: eval/E1-T01..T10 (Graphite stack on eval/E0; awaiting submit + merge)
+**Next task**: E2-T01 (after E1 stack merges to main)
 
 ## Done
 <!-- chronological, append-only. Format: - [x] <id> — <YYYY-MM-DD> — handoff: handoffs/<id>.md -->
@@ -11,10 +11,19 @@
 - [x] E0-T03 — 2026-05-15 — handoff: handoffs/E0-T03.md
 - [x] E0-T04 — 2026-05-15 — handoff: handoffs/E0-T04.md
 - [x] E0-T05 — 2026-05-15 — handoff: handoffs/E0-T05.md  (E0 milestone complete)
+- [x] E1-T01 — 2026-05-15 — handoff: handoffs/E1-T01.md
+- [x] E1-T02 — 2026-05-15 — handoff: handoffs/E1-T02.md
+- [x] E1-T03 — 2026-05-15 — handoff: handoffs/E1-T03.md
+- [x] E1-T05 — 2026-05-15 — handoff: handoffs/E1-T05.md
+- [x] E1-T07 — 2026-05-15 — handoff: handoffs/E1-T07.md
+- [x] E1-T10 — 2026-05-15 — handoff: handoffs/E1-T10.md  (E1 milestone complete; T04/T06/T08/T09 blocked)
 
 ## Blocked
 <!-- Format: <id> — blocker note -->
-- _(none)_
+- E1-T04 — needs live LANGSMITH_API_KEY for AC integration test; skeleton only. See handoffs/E1-T04.md.
+- E1-T06 — needs `openbot.workflows.review` (v0.1 Week 2+) + E1-T04 unblock. Skeleton only. See handoffs/E1-T06.md.
+- E1-T08 — needs E1-T06 + E1-T04 unblock. Skeleton only. See handoffs/E1-T08.md.
+- E1-T09 — needs E1-T08 + E1-T04 unblock. Skeleton only. See handoffs/E1-T09.md.
 
 ## Scope notes
 - Internal-data-dependent tasks are DEFERRED (see [`task-list.md` §"范围调整"](./task-list.md) and [`openbot-eval-prd.md` §4.0](../prd/openbot-eval-prd.md#40-范围调整--internal-data-dependent-suite-全部-deferred2026-05-15-锁定)). 🕒 tasks are SKIPPED when picking next.
