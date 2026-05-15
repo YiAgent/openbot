@@ -2,13 +2,14 @@
 
 **Last updated**: 2026-05-15
 **Active branch**: eval/E0
-**Next task**: E0-T04
+**Next task**: E0-T05
 
 ## Done
 <!-- chronological, append-only. Format: - [x] <id> — <YYYY-MM-DD> — handoff: handoffs/<id>.md -->
 - [x] E0-T01 — 2026-05-15 — handoff: handoffs/E0-T01.md
 - [x] E0-T02 — 2026-05-15 — handoff: handoffs/E0-T02.md
 - [x] E0-T03 — 2026-05-15 — handoff: handoffs/E0-T03.md
+- [x] E0-T04 — 2026-05-15 — handoff: handoffs/E0-T04.md
 
 ## Blocked
 <!-- Format: <id> — blocker note -->
