@@ -22,10 +22,25 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from evals.common._metadata_spec import (  # noqa: E402
+    ALLOWED_FAILURE_CATEGORIES,
     EXPERIMENT_NAME_EXAMPLES,
     EXPERIMENT_NAME_PATTERN,
     REQUIRED_RUN_METADATA_FIELDS,
 )
+
+
+def validate_failure_category(value: str) -> None:
+    """Reject any `failure_category` that isn't in the PRD §12.4 enum.
+
+    Raises `ValueError` with a clear message listing the allowed values.
+    This is the surface the LangSmith-side validator (and CI) will call
+    per sample before accepting a run.
+    """
+    if value not in ALLOWED_FAILURE_CATEGORIES:
+        raise ValueError(
+            f"failure_category {value!r} is not in the PRD §12.4 enum. "
+            f"Allowed: {sorted(ALLOWED_FAILURE_CATEGORIES)}"
+        )
 
 
 def _format_checklist() -> str:
@@ -44,6 +59,13 @@ def _format_checklist() -> str:
         ]
     )
     lines.extend(f"       {ex}" for ex in EXPERIMENT_NAME_EXAMPLES)
+    lines.extend(
+        [
+            "",
+            "3. failure_category fixed enum (eval PRD §12.4):",
+            f"     {sorted(ALLOWED_FAILURE_CATEGORIES)}",
+        ]
+    )
     return "\n".join(lines)
 
 

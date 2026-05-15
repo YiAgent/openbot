@@ -1,8 +1,8 @@
 # Eval Task State
 
 **Last updated**: 2026-05-15
-**Active branch**: eval/E1-rollup (E1 milestone complete via deepagents stand-in)
-**Next task**: E2-T01 — lock real Martian dataset upstream commit
+**Active branch**: eval/E2-rollup (E2 safety stream complete; T01/T02/T07/T08/T11/T15 still pending)
+**Next task**: E2-T01 — lock real Martian dataset (https://github.com/withmartian/code-review-benchmark)
 
 ## Done
 <!-- chronological, append-only. Format: - [x] <id> — <YYYY-MM-DD> — handoff: handoffs/<id>.md -->
@@ -21,6 +21,10 @@
 - [x] E1-T08 — 2026-05-15 — handoff: handoffs/E1-T08.md  (5-sample synthetic smoke; mean F1 0.833; real Martian = E2-T01)
 - [x] E1-T09 — 2026-05-15 — handoff: handoffs/E1-T09.md  (.eval log → markdown; first baseline-log row written)
 - [x] E1-T10 — 2026-05-15 — handoff: handoffs/E1-T10.md  (E1 milestone complete)
+- [x] E2-T12 — 2026-05-15 — handoff: handoffs/E2-T12.md  (prompt_injection_v1, 24 cases, 6 categories)
+- [x] E2-T13 — 2026-05-15 — handoff: handoffs/E2-T13.md  (safety scorer with breach-category attribution)
+- [x] E2-T14 — 2026-05-15 — handoff: handoffs/E2-T14.md  (redteam task: 21/24 fail-safe; 3 context-blind FPs)
+- [x] E2-T16 — 2026-05-15 — handoff: handoffs/E2-T16.md  (failure_category enum validation)
 
 ## Blocked
 <!-- Format: <id> — blocker note -->
