@@ -29,6 +29,7 @@ jobs:
             ci
             build
             style
+            revert
           # subject 不强制大写
           subjectPattern: ^[^A-Z].+$
           subjectPatternError: |

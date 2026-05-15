@@ -68,7 +68,8 @@ jobs:
       - name: Install
         run: uv sync --all-extras --dev
       - name: pytest
-        run: uv run pytest -q
+        # 与 scripts/hooks/pytest-pre-push.sh 对齐；PRD §8.4: eval 不进 CI
+        run: uv run pytest -q --ignore=evals
 
   # 没代码时给 PR 一个 always-green 状态，避免 "no checks have run" 卡死 branch protection
   placeholder:

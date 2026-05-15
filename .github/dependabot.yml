@@ -23,38 +23,40 @@ updates:
       prefix: ci
       include: scope
 
-  # ──── 代码就绪后取消下面这些注释 ────
-  #
-  # Python 依赖（uv-based）
-  # - package-ecosystem: pip
-  #   directory: "/"
-  #   schedule:
-  #     interval: monthly
-  #     day: monday
-  #     time: "08:00"
-  #     timezone: "UTC"
-  #   open-pull-requests-limit: 10
-  #   labels: [dependencies, python]
-  #   groups:
-  #     python-minor-and-patch:
-  #       update-types: [minor, patch]
-  #     # major 单独分组，方便人工 review
-  #     python-major:
-  #       update-types: [major]
-  #   commit-message:
-  #     prefix: chore
-  #     include: scope
-  #
-  # Docker base image
-  # - package-ecosystem: docker
-  #   directory: "/"
-  #   schedule:
-  #     interval: monthly
-  #     day: monday
-  #     time: "08:00"
-  #     timezone: "UTC"
-  #   open-pull-requests-limit: 3
-  #   labels: [dependencies, docker]
-  #   commit-message:
-  #     prefix: chore
-  #     include: scope
+  # Python 依赖（uv-based）— manifest (pyproject.toml) 未到位前 dependabot 静默 skip
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+      day: monday
+      time: "08:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - python
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+      # major 单独分组，方便人工 review
+      python-major:
+        update-types: [major]
+    commit-message:
+      prefix: chore
+      include: scope
+
+  # Docker base image — Dockerfile 未到位前 dependabot 静默 skip
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: monthly
+      day: monday
+      time: "08:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: chore
+      include: scope

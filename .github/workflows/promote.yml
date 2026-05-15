@@ -41,4 +41,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git push --force origin main:refs/heads/release/latest
+          # --force-with-lease 比裸 --force 更保守：若 release/latest 被外部更新（hotfix push 等），
+          # promotion 会失败而非静默覆盖。需要先 fetch 拿到远端 ref 才能比对 lease。
+          git fetch origin "refs/heads/release/latest:refs/remotes/origin/release/latest" || true
+          if git show-ref --verify --quiet refs/remotes/origin/release/latest; then
+            git push --force-with-lease=refs/heads/release/latest:refs/remotes/origin/release/latest \
+              origin main:refs/heads/release/latest
+          else
+            # 首次 promotion：release/latest 尚不存在，普通 push 即可
+            git push origin main:refs/heads/release/latest
+          fi
