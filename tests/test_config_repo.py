@@ -196,6 +196,32 @@ async def test_severity_threshold_validated_against_enum() -> None:
     assert cfg.severity_threshold == "medium"
 
 
+async def test_explicit_zero_cap_is_preserved() -> None:
+    """Codex slice-A review finding: `value or default` swallows explicit zeros.
+
+    A maintainer who sets `monthly_soft_cap_usd: 0` is asking to disable
+    spend on this repo. The coercion must preserve that zero, not silently
+    restore the baked-in default and let spend through.
+    """
+    yaml_text = """
+budget:
+  monthly_soft_cap_usd: 0
+  global_hard_kill_usd: 0
+chat:
+  rate_limit:
+    per_user_per_day: 0
+    per_repo_per_hour: 0
+    cost_cap_per_task: 0
+"""
+    adapter = _make_adapter(_yaml_response(yaml_text))
+    cfg = await load_for_repo(adapter, _event())
+    assert cfg.budget.monthly_soft_cap_usd == Decimal("0")
+    assert cfg.budget.global_hard_kill_usd == Decimal("0")
+    assert cfg.rate_limit.per_user_per_day == 0
+    assert cfg.rate_limit.per_repo_per_hour == 0
+    assert cfg.rate_limit.cost_cap_per_task == Decimal("0")
+
+
 async def test_bad_decimal_falls_back_silently() -> None:
     """Per-field coercion errors don't poison the whole config."""
     yaml_text = """

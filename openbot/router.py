@@ -96,9 +96,18 @@ def dispatch_for(event: UnifiedEvent) -> Dispatch | None:
         return Dispatch(Feature.REVIEW, maybe_run_review, derive_task_id(event))
 
     if event.kind is EventKind.ISSUE_ASSIGNED:
-        # v0.1: any `assigned` event reaches the fix workflow; the
-        # ActorRole + assignee-is-bot checks live in pre-flight where
-        # they can consult installation tokens.
+        # PRD §4.3 trigger: `issue.assignees` must include the bot.
+        # Without this check, every human↔human assignment fires
+        # `maybe_run_fix` and posts a "agent will start shortly" ACK —
+        # spammy and confusing. We check `assignee.type == "Bot"` on
+        # the just-assigned actor; that's correct for v0.1 (only the
+        # bot is a Bot assignee in practice — humans don't assign
+        # dependabot/etc. to issues for fixing). Slice C will tighten
+        # this to "is our App's specific bot login" once the App's
+        # own login is plumbed through.
+        assignee = (event.raw.get("assignee") or {}) if event.raw else {}
+        if assignee.get("type") != "Bot":
+            return None
         if event.issue_number is None or event.installation_id is None:
             return None
         return Dispatch(Feature.FIX, maybe_run_fix, derive_task_id(event))

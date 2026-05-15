@@ -348,6 +348,19 @@ def _coerce(parsed: Mapping[str, Any], *, repo: str) -> EffectiveConfig:
         return base
 
 
+def _coalesce(value: Any, default: Any) -> Any:
+    """Return `value` when not None, else `default`.
+
+    Crucially distinguishes `0` / `Decimal('0')` / `False` from "absent".
+    The previous `value or default` pattern silently restored the default
+    when a maintainer set a budget cap to `0` to disable spend or a rate
+    limit to `0` to block the feature — which is the exact opposite of
+    what the maintainer wanted. Use this helper for every config field
+    where 0 is a meaningful "off" value.
+    """
+    return value if value is not None else default
+
+
 def _coerce_features(parsed: Mapping[str, Any], default: FeatureToggles) -> FeatureToggles:
     section = parsed.get("features") or {}
     if not isinstance(section, Mapping):
@@ -376,18 +389,30 @@ def _coerce_budget(parsed: Mapping[str, Any], default: BudgetConfig, *, repo: st
                     per_task[feature] = amount
     return BudgetConfig(
         per_task=per_task,
-        monthly_soft_cap_usd=_to_decimal(
-            section.get("monthly_soft_cap_usd"), repo=repo, field="budget.monthly_soft_cap_usd"
-        )
-        or default.monthly_soft_cap_usd,
-        monthly_alert_at_pct=_to_int(
-            section.get("monthly_alert_at_pct"), repo=repo, field="budget.monthly_alert_at_pct"
-        )
-        or default.monthly_alert_at_pct,
-        global_hard_kill_usd=_to_decimal(
-            section.get("global_hard_kill_usd"), repo=repo, field="budget.global_hard_kill_usd"
-        )
-        or default.global_hard_kill_usd,
+        monthly_soft_cap_usd=_coalesce(
+            _to_decimal(
+                section.get("monthly_soft_cap_usd"),
+                repo=repo,
+                field="budget.monthly_soft_cap_usd",
+            ),
+            default.monthly_soft_cap_usd,
+        ),
+        monthly_alert_at_pct=_coalesce(
+            _to_int(
+                section.get("monthly_alert_at_pct"),
+                repo=repo,
+                field="budget.monthly_alert_at_pct",
+            ),
+            default.monthly_alert_at_pct,
+        ),
+        global_hard_kill_usd=_coalesce(
+            _to_decimal(
+                section.get("global_hard_kill_usd"),
+                repo=repo,
+                field="budget.global_hard_kill_usd",
+            ),
+            default.global_hard_kill_usd,
+        ),
     )
 
 
@@ -407,18 +432,30 @@ def _coerce_rate_limit(
     else:
         exempt_roles = default.exempt_roles
     return RateLimitConfig(
-        per_user_per_day=_to_int(
-            section.get("per_user_per_day"), repo=repo, field="chat.rate_limit.per_user_per_day"
-        )
-        or default.per_user_per_day,
-        per_repo_per_hour=_to_int(
-            section.get("per_repo_per_hour"), repo=repo, field="chat.rate_limit.per_repo_per_hour"
-        )
-        or default.per_repo_per_hour,
-        cost_cap_per_task=_to_decimal(
-            section.get("cost_cap_per_task"), repo=repo, field="chat.rate_limit.cost_cap_per_task"
-        )
-        or default.cost_cap_per_task,
+        per_user_per_day=_coalesce(
+            _to_int(
+                section.get("per_user_per_day"),
+                repo=repo,
+                field="chat.rate_limit.per_user_per_day",
+            ),
+            default.per_user_per_day,
+        ),
+        per_repo_per_hour=_coalesce(
+            _to_int(
+                section.get("per_repo_per_hour"),
+                repo=repo,
+                field="chat.rate_limit.per_repo_per_hour",
+            ),
+            default.per_repo_per_hour,
+        ),
+        cost_cap_per_task=_coalesce(
+            _to_decimal(
+                section.get("cost_cap_per_task"),
+                repo=repo,
+                field="chat.rate_limit.cost_cap_per_task",
+            ),
+            default.cost_cap_per_task,
+        ),
         exempt_roles=exempt_roles,
     )
 

@@ -21,6 +21,7 @@ def _event(
     delivery_id: str = "deliv-1",
     repo: str = "YiAgent/openbot",
     channel: str = "github",
+    raw: dict | None = None,
 ) -> UnifiedEvent:
     return UnifiedEvent(
         channel=channel,
@@ -33,6 +34,7 @@ def _event(
         pr_number=pr_number,
         installation_id=installation_id,
         comment_body=comment_body,
+        raw=raw or {},
     )
 
 
@@ -117,11 +119,38 @@ def test_skips_pr_missing_pr_number() -> None:
 # ───── ISSUE_ASSIGNED → fix ─────
 
 
-def test_dispatches_issue_assigned_to_fix() -> None:
-    d = dispatch_for(_event(kind=EventKind.ISSUE_ASSIGNED))
+def test_dispatches_issue_assigned_to_fix_when_bot_assigned() -> None:
+    d = dispatch_for(
+        _event(
+            kind=EventKind.ISSUE_ASSIGNED,
+            raw={"assignee": {"login": "openbot[bot]", "type": "Bot"}},
+        )
+    )
     assert d is not None
     assert d.feature is Feature.FIX
     assert d.handler is maybe_run_fix
+
+
+def test_skips_fix_when_human_assigned_to_human() -> None:
+    """PRD §4.3: fix only fires when the bot is among assignees.
+
+    Without this gate, every human↔human assignment triggers a fake
+    'agent will start' ACK comment — spam regression Codex caught in
+    its slice-A review.
+    """
+    d = dispatch_for(
+        _event(
+            kind=EventKind.ISSUE_ASSIGNED,
+            raw={"assignee": {"login": "alice", "type": "User"}},
+        )
+    )
+    assert d is None
+
+
+def test_skips_fix_when_assignee_field_missing() -> None:
+    """Defensive: malformed payload with no `assignee` → safe no-op, not a crash."""
+    d = dispatch_for(_event(kind=EventKind.ISSUE_ASSIGNED, raw={}))
+    assert d is None
 
 
 # ───── @openbot comment → chat ─────
