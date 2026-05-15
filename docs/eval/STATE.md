@@ -2,7 +2,7 @@
 
 **Last updated**: 2026-05-15
 **Active branch**: eval/E2-rollup (Martian dataset locked; baseline run E2-T02 is next)
-**Next task**: E2-T02 — Martian 全量 run + baseline (deps: E2-T01 done)
+**Next task**: E2-T02 — Martian 全量 run + baseline (deps: E2-T01 done; needs cost budget approval to spend LLM tokens against the locked 50-PR dataset, then `compare_runs.py` from E2-T15 consumes the output)
 
 ## Status legend
 
@@ -31,6 +31,7 @@
 - [x] E2-T14 — 2026-05-15 — handoff: handoffs/E2-T14.md  (redteam task: 21/24 fail-safe; 3 context-blind FPs)
 - [x] E2-T16 — 2026-05-15 — handoff: handoffs/E2-T16.md  (failure_category enum validation)
 - [x] E2-T01 — 2026-05-15 — handoff: handoffs/E2-T01.md  (Martian benchmark locked to upstream `807d469`, 50 PR JSONL pinned)
+- [x] E2-T15 — 2026-05-15 — handoff: handoffs/E2-T15.md  (PRD §9 thresholds module + `compare_runs.py` PR-comment renderer)
 
 ## Partial
 <!-- Format: <id> — open acceptance gap -->
