@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from evals.solvers.openbot_review import _extract_provider_usage
+from evals.solvers.review import _extract_provider_usage
 
 
 @dataclass

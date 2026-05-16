@@ -1,0 +1,1232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>OpenBot · Eval Trends</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" />
+<style>
+:root{
+  --c-bg:oklch(98% 0 0);
+  --c-bg-2:oklch(96% 0.005 250);
+  --c-ink:oklch(20% 0 0);
+  --c-ink-mid:oklch(48% 0.01 250);
+  --c-ink-dim:oklch(70% 0.008 250);
+  --c-rule:oklch(91% 0.005 250);
+  --c-grid:oklch(94% 0 0);
+  --c-up:oklch(54% 0.10 145);
+  --c-down:oklch(54% 0.13 28);
+  --c-danger-wash:oklch(96% 0.04 28);
+  --c-warn:oklch(74% 0.14 75);
+  --c-link:oklch(48% 0.10 250);
+  --c-band:oklch(20% 0 0);
+
+  /* per-suite accents — muted, low saturation */
+  --sc-martian:oklch(58% 0.09 250);
+  --sc-swe:oklch(56% 0.08 145);
+  --sc-redteam:oklch(58% 0.10 50);
+  --sc-shadow:oklch(58% 0.04 220);
+
+  --ff-display:'Source Serif 4',Newsreader,Georgia,serif;
+  --ff-sans:'Inter',system-ui,-apple-system,sans-serif;
+  --ff-mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  --fs-xl:2.25rem;
+  --fs-lg:1.5rem;
+  --fs-md:1rem;
+  --fs-sm:0.8125rem;
+  --fs-xs:0.6875rem;
+  --gap:2rem;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--c-bg);
+  color:var(--c-ink);
+  font-family:var(--ff-sans);
+  font-size:var(--fs-sm);
+  font-feature-settings:"tnum","ss01";
+  line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:inherit;text-decoration:none}
+a:focus-visible,button:focus-visible,summary:focus-visible{
+  outline:2px solid var(--c-ink);outline-offset:2px;
+}
+.tnum{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--ff-mono);font-feature-settings:"tnum"}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+.page{
+  max-width:1280px;
+  margin:0 auto;
+  padding:0 clamp(1.25rem,3vw,2.5rem) 4rem;
+}
+
+/* === Header === */
+.head{
+  display:grid;
+  grid-template-columns:1fr auto;
+  gap:2rem;
+  align-items:end;
+  padding:2.75rem 0 1.5rem;
+  border-bottom:1px solid var(--c-rule);
+}
+.head h1{
+  font-family:var(--ff-display);
+  font-weight:600;
+  font-size:var(--fs-lg);
+  margin:0;
+  letter-spacing:-0.01em;
+  line-height:1.1;
+}
+.head h1 .dot{color:var(--c-ink-dim);margin:0 .3em;font-weight:400}
+.head h1 .sub{
+  display:block;
+  margin-top:.45rem;
+  font-family:var(--ff-display);
+  font-style:italic;
+  font-weight:400;
+  font-size:var(--fs-sm);
+  color:var(--c-ink-mid);
+}
+.head .meta{
+  text-align:right;
+  display:flex;
+  flex-direction:column;
+  gap:.15rem;
+}
+.head .meta .rel{
+  font-family:var(--ff-mono);
+  font-weight:500;
+  font-size:var(--fs-md);
+  color:var(--c-ink);
+  letter-spacing:0;
+  line-height:1.2;
+}
+.head .meta .smaux{
+  font-family:var(--ff-mono);
+  font-size:11px;
+  color:var(--c-ink-mid);
+  line-height:1.5;
+}
+
+/* === Summary strip === */
+.summary{
+  margin:1.5rem 0 0;
+  display:flex;
+  flex-wrap:wrap;
+  align-items:baseline;
+  gap:2.5rem;
+  padding:1rem 0 1.25rem;
+  border-bottom:1px solid var(--c-rule);
+}
+.summary .item{
+  display:flex;
+  flex-direction:column;
+  gap:.2rem;
+  min-width:0;
+}
+.summary .item .k{
+  font-family:var(--ff-mono);
+  font-size:var(--fs-xs);
+  color:var(--c-ink-mid);
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+}
+.summary .item .v{
+  font-family:var(--ff-display);
+  font-weight:600;
+  font-size:var(--fs-md);
+  letter-spacing:-0.01em;
+  color:var(--c-ink);
+  font-variant-numeric:tabular-nums;
+}
+.summary .item.warn .v{color:var(--c-warn)}
+
+/* === Section heads === */
+.section{margin-top:3rem}
+.section-head{
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:1rem;
+  margin-bottom:1.5rem;
+  padding-bottom:.65rem;
+  border-bottom:1px solid var(--c-rule);
+}
+.section-head h2{
+  font-family:var(--ff-display);
+  font-weight:600;
+  font-size:var(--fs-lg);
+  letter-spacing:-0.01em;
+  margin:0;
+}
+.section-head .aux{
+  font-family:var(--ff-mono);
+  font-size:var(--fs-xs);
+  color:var(--c-ink-mid);
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+}
+
+/* === Chart cards === */
+.charts{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(380px, 1fr));
+  gap:var(--gap);
+}
+.chart{
+  --accent:var(--c-ink);
+  padding:1.5rem 1.75rem 1.5rem;
+  background:var(--c-bg);
+  border:1px solid var(--c-rule);
+  display:flex;
+  flex-direction:column;
+  gap:1rem;
+  min-width:0;
+  transition:transform .2s ease, box-shadow .2s ease;
+  position:relative;
+}
+.chart:hover{
+  transform:translateY(-2px);
+  box-shadow:0 8px 24px -16px oklch(0% 0 0/.18), 0 1px 0 var(--c-rule);
+}
+.chart-head{
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:.75rem;
+  min-width:0;
+}
+.chart-title{
+  display:flex;
+  align-items:baseline;
+  gap:.6rem;
+  min-width:0;
+}
+.chart-title a{
+  font-family:var(--ff-mono);
+  font-size:var(--fs-md);
+  font-weight:500;
+  letter-spacing:-0.01em;
+  color:var(--c-ink);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  position:relative;
+}
+.chart-title a::after{
+  content:" #";
+  font-family:var(--ff-mono);
+  color:var(--c-ink-dim);
+  opacity:0;
+  transition:opacity .15s ease;
+}
+.chart-title a:hover::after{opacity:1}
+.status-dot{
+  display:inline-flex;
+  align-items:center;
+  gap:.35rem;
+  font-family:var(--ff-mono);
+  font-size:var(--fs-xs);
+  color:var(--c-ink-mid);
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+  white-space:nowrap;
+}
+.status-dot::before{
+  content:"";
+  width:.55rem;height:.55rem;
+  border-radius:50%;
+  background:var(--accent);
+  flex:0 0 .55rem;
+}
+.status-dot.healthy{color:var(--c-up)}
+.status-dot.healthy::before{background:var(--c-up)}
+.status-dot.near::before{background:transparent;box-shadow:inset 0 0 0 1.5px var(--c-warn); background:linear-gradient(90deg,var(--c-warn) 50%,transparent 50%)}
+.status-dot.near{color:var(--c-warn)}
+.status-dot.info::before{background:var(--c-ink-dim)}
+.status-dot.info{color:var(--c-ink-dim)}
+
+.chart-sub{
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:1rem;
+  font-family:var(--ff-mono);
+  font-size:var(--fs-xs);
+  color:var(--c-ink-mid);
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+  margin-top:-.4rem;
+}
+.chart-sub .left{display:flex;gap:1rem;flex-wrap:wrap}
+.chart-sub .left span{display:inline-flex;align-items:center;gap:.3rem}
+.chart-sub .left .swatch{width:.55rem;height:.55rem;background:var(--accent);display:inline-block}
+.chart-sub .left .swatch-line{display:inline-block;width:.8rem;height:1px;background:var(--c-ink-dim);position:relative}
+.chart-sub .left .swatch-line.dashed{background:none;border-top:1px dashed var(--c-ink-dim)}
+
+.chart-body{position:relative}
+.chart-body svg{width:100%;height:auto;display:block;overflow:visible}
+.chart-body .grid{stroke:var(--c-grid);stroke-width:1;fill:none}
+.chart-body .axis{stroke:var(--c-rule);stroke-width:1;fill:none}
+.chart-body .label{font-family:var(--ff-mono);font-size:9px;fill:var(--c-ink-mid)}
+.chart-body .danger{fill:var(--c-danger-wash)}
+.chart-body .target-line{stroke:var(--accent);stroke-width:1;stroke-dasharray:5 3;fill:none;opacity:.65}
+.chart-body .target-label{font-family:var(--ff-mono);font-size:9px;fill:var(--accent);font-weight:500}
+.chart-body .floor-line{stroke:var(--c-down);stroke-width:1;stroke-dasharray:5 3;fill:none;opacity:.45}
+.chart-body .floor-label{font-family:var(--ff-mono);font-size:9px;fill:var(--c-down);opacity:.85}
+.chart-body .prev-line{stroke:var(--c-ink-dim);stroke-width:1;stroke-dasharray:2 3;fill:none}
+.chart-body .prev-label{font-family:var(--ff-mono);font-size:9px;fill:var(--c-ink-mid)}
+.chart-body .band{fill:var(--accent);fill-opacity:.10}
+.chart-body .line{stroke:var(--accent);stroke-width:1.75;fill:none;stroke-linejoin:round;stroke-linecap:round}
+.chart-body .dot{fill:var(--accent)}
+.chart-body .dot-last{fill:var(--c-bg);stroke:var(--accent);stroke-width:2}
+.chart-body .last-label{font-family:var(--ff-display);font-weight:600;font-size:14px;fill:var(--c-ink);font-variant-numeric:tabular-nums}
+.chart-body .ev-line{stroke:var(--c-ink-dim);stroke-width:1;stroke-dasharray:1 3;fill:none}
+.chart-body .ev-cap{fill:var(--c-ink);opacity:.7}
+.chart-body .ev-label{font-family:var(--ff-mono);font-size:9px;fill:var(--c-ink-mid);font-weight:500}
+.chart-body .dot-hover{
+  fill:var(--accent);
+  r:5;
+  opacity:0;
+  pointer-events:none;
+  transition:opacity .15s;
+}
+
+.chart-foot{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:1rem;
+  font-family:var(--ff-mono);
+  font-size:var(--fs-xs);
+  color:var(--c-ink-mid);
+  padding-top:.75rem;
+  border-top:1px solid var(--c-rule);
+  letter-spacing:0.04em;
+}
+.chart-foot .strong{color:var(--c-ink)}
+.chart-foot a{
+  color:var(--c-link);
+  text-decoration:underline;
+  text-underline-offset:3px;
+  text-transform:none;
+  letter-spacing:0;
+  font-family:var(--ff-sans);
+  font-size:var(--fs-xs);
+}
+
+/* === Informational suites === */
+.informational{margin-top:var(--gap);position:relative}
+.informational > summary{
+  cursor:pointer;
+  list-style:none;
+  display:flex;
+  align-items:baseline;
+  gap:.75rem;
+  padding:.85rem 0;
+  border-bottom:1px solid var(--c-rule);
+  font-family:var(--ff-display);
+  font-weight:600;
+  font-size:var(--fs-md);
+}
+.informational > summary::-webkit-details-marker{display:none}
+.informational > summary::before{
+  content:"+";
+  font-family:var(--ff-mono);
+  font-weight:400;
+  color:var(--c-ink-mid);
+  width:1rem;
+  display:inline-block;
+}
+.informational[open] > summary::before{content:"−"}
+.informational > summary .aux{
+  font-family:var(--ff-mono);
+  font-size:var(--fs-xs);
+  color:var(--c-ink-mid);
+  font-weight:400;
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+  margin-left:.5rem;
+}
+.informational .charts{margin-top:1.5rem;opacity:.7}
+.informational .chart{max-width:calc((100% - var(--gap)) / 2)}
+
+/* === Runs list === */
+.list-controls{
+  display:flex;
+  gap:.75rem;
+  margin-bottom:1.5rem;
+  flex-wrap:wrap;
+  font-family:var(--ff-mono);
+  font-size:var(--fs-xs);
+}
+.list-controls .seg{
+  display:inline-flex;
+  border:1px solid var(--c-rule);
+}
+.list-controls .seg button{
+  background:transparent;
+  border:none;
+  border-right:1px solid var(--c-rule);
+  padding:.45rem .85rem;
+  cursor:pointer;
+  font-family:var(--ff-mono);
+  font-size:var(--fs-xs);
+  color:var(--c-ink-mid);
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+}
+.list-controls .seg button:last-child{border-right:none}
+.list-controls .seg button[aria-pressed="true"]{background:var(--c-ink);color:var(--c-bg)}
+.list-controls .seg-label{
+  color:var(--c-ink-mid);
+  letter-spacing:0.04em;
+  text-transform:uppercase;
+  align-self:center;
+  margin-right:.25rem;
+}
+
+.suite-group{margin-bottom:1.75rem}
+.suite-group-head{
+  --accent:var(--c-ink);
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:1rem;
+  padding:.6rem 0;
+  border-bottom:2px solid var(--accent);
+  margin-bottom:.4rem;
+}
+.suite-group-head h3{
+  font-family:var(--ff-mono);
+  font-size:var(--fs-md);
+  font-weight:500;
+  letter-spacing:-0.01em;
+  margin:0;
+  display:inline-flex;
+  align-items:center;
+  gap:.5rem;
+}
+.suite-group-head h3 a{position:relative;color:var(--c-ink)}
+.suite-group-head h3 a::after{
+  content:" #";font-family:var(--ff-mono);color:var(--c-ink-dim);
+  opacity:0;transition:opacity .15s;
+}
+.suite-group-head h3 a:hover::after{opacity:1}
+.suite-group-head h3 .accent-bar{
+  display:inline-block;
+  width:.55rem;height:.55rem;
+  background:var(--accent);
+}
+.suite-group-head .now{
+  font-family:var(--ff-mono);
+  font-size:var(--fs-sm);
+  color:var(--c-ink-mid);
+  font-variant-numeric:tabular-nums;
+}
+.suite-group-head .now strong{color:var(--c-ink);font-weight:600}
+
+.runs{
+  display:grid;
+  grid-template-columns:6rem 5.5rem 4.5rem 1fr auto;
+  font-size:var(--fs-sm);
+}
+.runs > .row{
+  display:contents;
+}
+.runs > .row > a, .runs > .row > .cell{
+  padding:.65rem .85rem;
+  border-bottom:1px solid var(--c-rule);
+  display:flex;
+  align-items:center;
+  min-width:0;
+  color:var(--c-ink);
+  text-decoration:none;
+  background:transparent;
+  transition:background .12s;
+}
+.runs > .row:last-child > *{border-bottom:none}
+.runs > .row:hover > *{background:var(--c-bg-2)}
+.runs .date{
+  font-family:var(--ff-mono);
+  color:var(--c-ink);
+  padding-left:0;
+}
+.runs .score{
+  font-family:var(--ff-mono);
+  font-variant-numeric:tabular-nums;
+  font-weight:500;
+}
+.runs .delta{
+  font-family:var(--ff-mono);
+  font-variant-numeric:tabular-nums;
+  color:var(--c-ink-mid);
+}
+.runs .delta.up{color:var(--c-up)}
+.runs .delta.down{color:var(--c-down)}
+.runs .trig{
+  font-family:var(--ff-mono);
+  color:var(--c-ink-mid);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.runs .trig.default{color:var(--c-ink-dim)}
+.runs .pr{
+  gap:.75rem;
+  justify-content:flex-end;
+  padding-right:0;
+  color:var(--c-link);
+  text-decoration:underline;
+  text-underline-offset:3px;
+  font-family:var(--ff-mono);
+}
+.runs .pr[aria-disabled="true"]{color:var(--c-ink-dim);text-decoration:none}
+
+/* trigger filter */
+.runs.filter-major .row[data-trig="scheduled-weekly"]{display:none}
+.runs.filter-major .row[data-trig="scheduled-weekly"] > *{display:none}
+.runs.filter-scheduled .row:not([data-trig="scheduled-weekly"]){display:none}
+.runs.filter-scheduled .row:not([data-trig="scheduled-weekly"]) > *{display:none}
+
+/* === Footer === */
+.foot{
+  margin-top:3rem;
+  padding-top:1.25rem;
+  border-top:1px solid var(--c-rule);
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:1.5rem;
+  font-size:var(--fs-xs);
+  color:var(--c-ink-mid);
+}
+.foot dt{
+  font-size:var(--fs-xs);
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  color:var(--c-ink-mid);
+  font-weight:600;
+  margin-bottom:.25rem;
+}
+.foot dd{margin:0;font-family:var(--ff-mono);color:var(--c-ink);font-size:var(--fs-xs);line-height:1.6}
+.foot dd a{color:var(--c-link);text-decoration:underline;text-underline-offset:3px}
+.foot .deferred{
+  font-family:var(--ff-mono);
+  color:var(--c-ink-dim);
+  display:flex;flex-direction:column;gap:.15rem;
+}
+.foot .deferred .item{display:inline-flex;gap:.4rem;align-items:baseline}
+.foot .deferred .reason{
+  font-family:var(--ff-display);font-style:italic;
+  font-size:var(--fs-xs);color:var(--c-ink-mid);
+}
+
+/* === Tweaks === */
+.tweaks{
+  position:fixed;right:1.25rem;bottom:1.25rem;
+  width:300px;background:var(--c-bg);
+  border:1px solid var(--c-ink);
+  font-size:var(--fs-sm);z-index:100;display:none;
+  box-shadow:0 12px 32px -8px oklch(0% 0 0/.18);
+}
+.tweaks.is-open{display:block}
+.tweaks-head{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:.7rem .9rem;border-bottom:1px solid var(--c-rule);
+}
+.tweaks-head h3{margin:0;font-family:var(--ff-display);font-weight:600;font-size:var(--fs-md)}
+.tweaks-close{background:transparent;border:none;font-family:var(--ff-mono);
+  font-size:1rem;color:var(--c-ink-mid);cursor:pointer;padding:.1rem .3rem}
+.tweaks-body{padding:.9rem;display:grid;gap:.9rem;max-height:60vh;overflow:auto}
+.tweak-group{display:grid;gap:.4rem}
+.tweak-group > .label{
+  font-size:var(--fs-xs);letter-spacing:0.1em;text-transform:uppercase;
+  color:var(--c-ink-mid);font-weight:600;
+}
+.tweak-seg{display:flex;border:1px solid var(--c-rule)}
+.tweak-seg button{
+  background:transparent;border:none;padding:.5rem .4rem;
+  font-family:var(--ff-mono);font-size:var(--fs-xs);letter-spacing:0.05em;
+  font-weight:500;text-transform:uppercase;cursor:pointer;
+  color:var(--c-ink-mid);border-right:1px solid var(--c-rule);flex:1;
+}
+.tweak-seg button:last-child{border-right:none}
+.tweak-seg button[aria-pressed="true"]{background:var(--c-ink);color:var(--c-bg)}
+.tweak-toggle{display:flex;justify-content:space-between;align-items:center;cursor:pointer;font-size:var(--fs-sm)}
+.tweak-toggle input{accent-color:var(--c-ink)}
+.tweak-note{
+  font-size:var(--fs-xs);color:var(--c-ink-mid);font-style:italic;
+  line-height:1.4;font-family:var(--ff-display);
+}
+
+/* tooltip via title — keep native; add data-tooltip on deferred */
+[data-tooltip]{
+  position:relative;cursor:help;border-bottom:1px dotted var(--c-ink-dim);
+}
+[data-tooltip]:hover::after,[data-tooltip]:focus-visible::after{
+  content:attr(data-tooltip);
+  position:absolute;
+  left:50%;bottom:calc(100% + 6px);
+  transform:translateX(-50%);
+  background:var(--c-ink);color:var(--c-bg);
+  font-family:var(--ff-sans);font-size:var(--fs-xs);
+  padding:.5rem .65rem;
+  border-radius:2px;
+  white-space:normal;
+  width:max-content;
+  max-width:240px;
+  line-height:1.35;
+  z-index:50;
+  letter-spacing:0;
+  text-transform:none;
+}
+
+/* === Responsive === */
+@media (max-width:980px){
+  .charts{grid-template-columns:1fr}
+  .runs{grid-template-columns:5rem 4.5rem 4rem auto}
+  .runs > .row > .cell.trig{display:none}
+  .foot{grid-template-columns:1fr 1fr}
+  .head{grid-template-columns:1fr}
+  .head .meta{text-align:left}
+  .informational .chart{max-width:none}
+}
+@media (max-width:560px){
+  .runs{grid-template-columns:4.5rem 4rem 4rem auto}
+  .runs > .row > .cell.trig{display:none}
+  .foot{grid-template-columns:1fr}
+  .summary{gap:1.5rem}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media print{
+  body{background:#fff;color:#000}
+  .tweaks{display:none!important}
+  .chart,.summary,.suite-group,.foot{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<!-- Header -->
+<header class="head" data-screen-label="Header">
+  <h1>
+    OpenBot<span class="dot">·</span>Eval Trends
+    <span class="sub">Static dashboard · trends across release baselines</span>
+  </h1>
+  <div class="meta">
+    <span class="rel">Release v0.1.0-rc.3</span>
+    <span class="smaux">2026-05-15 · 9821a4f</span>
+    <span class="smaux">24 entries · 4 suites · last update 14h ago</span>
+  </div>
+</header>
+
+<!-- Summary strip (global) -->
+<section class="summary" aria-label="Global summary" data-screen-label="Summary">
+  <div class="item">
+    <span class="k">Suites tracked</span>
+    <span class="v">4 active</span>
+  </div>
+  <div class="item">
+    <span class="k">Baselines</span>
+    <span class="v">12 · last 70 days</span>
+  </div>
+  <div class="item">
+    <span class="k">Floor breaches</span>
+    <span class="v">0 / 4</span>
+  </div>
+  <div class="item warn">
+    <span class="k">Near target</span>
+    <span class="v">1 · redteam_prompt_injection</span>
+  </div>
+  <div class="item">
+    <span class="k">Judges</span>
+    <span class="v">1 model · heuristic/no-llm</span>
+  </div>
+</section>
+
+<!-- Trends — gated suites -->
+<section class="section" aria-labelledby="ch-h" data-screen-label="Trends">
+  <div class="section-head">
+    <h2 id="ch-h">Trends</h2>
+    <span class="aux">last 12 baselines · aligned x-axis · ±1σ band</span>
+  </div>
+
+  <div class="charts">
+
+    <!-- ===== review_martian ===== -->
+    <article class="chart" id="chart-review_martian" style="--accent:var(--sc-martian)" data-screen-label="Chart review_martian">
+      <div class="chart-head">
+        <div class="chart-title">
+          <a href="#run-review_martian">review_martian</a>
+        </div>
+        <span class="status-dot healthy" title="0.833 vs 0.55 floor — well above">Healthy</span>
+      </div>
+      <div class="chart-sub">
+        <div class="left">
+          <span><span class="swatch"></span>mean_f1 · 0.0–1.0</span>
+          <span><span class="swatch-line dashed"></span>prev release rc.2 · 0.812</span>
+          <span><span class="swatch-line dashed" style="border-color:var(--c-down)"></span>floor 0.55</span>
+        </div>
+      </div>
+      <div class="chart-body">
+        <svg viewBox="0 0 540 230" preserveAspectRatio="none" role="img" aria-labelledby="c-rm-t">
+          <title id="c-rm-t">review_martian mean_f1 — last 12 baselines, latest 0.833, floor 0.55</title>
+          <!-- danger zone below floor (y 103.2 → 200) -->
+          <rect class="danger" x="44" y="103.2" width="476" height="96.8"/>
+          <!-- y grid + labels -->
+          <line class="grid" x1="44" y1="24"  x2="520" y2="24"/>
+          <line class="grid" x1="44" y1="59.2" x2="520" y2="59.2"/>
+          <line class="grid" x1="44" y1="94.4" x2="520" y2="94.4"/>
+          <line class="grid" x1="44" y1="129.6" x2="520" y2="129.6"/>
+          <line class="grid" x1="44" y1="164.8" x2="520" y2="164.8"/>
+          <line class="axis" x1="44" y1="200" x2="520" y2="200"/>
+          <text class="label" x="40" y="27" text-anchor="end">1.0</text>
+          <text class="label" x="40" y="62" text-anchor="end">0.8</text>
+          <text class="label" x="40" y="97" text-anchor="end">0.6</text>
+          <text class="label" x="40" y="132" text-anchor="end">0.4</text>
+          <text class="label" x="40" y="167" text-anchor="end">0.2</text>
+          <!-- floor 0.55 -->
+          <line class="floor-line" x1="44" y1="103.2" x2="520" y2="103.2"/>
+          <text class="floor-label" x="48" y="100">floor 0.55</text>
+          <!-- prev release rc.2 = 0.812 → y 57.1 -->
+          <line class="prev-line" x1="44" y1="57.1" x2="520" y2="57.1"/>
+          <text class="prev-label" x="516" y="54" text-anchor="end">rc.2 · 0.812</text>
+          <!-- ±1σ band stderr 0.024 -->
+          <path class="band" d="M44,86.7 L87.3,81.4 130.5,72.6 173.8,76.1 217.1,70.8 260.4,65.6 303.6,62.0 346.9,63.8 390.2,58.5 433.5,55.0 476.7,52.9 520,49.2 L520,57.6 476.7,61.3 433.5,63.4 390.2,66.9 346.9,72.2 303.6,70.4 260.4,74.0 217.1,79.2 173.8,84.5 130.5,81.0 87.3,89.8 44,95.1 Z"/>
+          <!-- main line -->
+          <polyline class="line" points="44,90.9 87.3,85.6 130.5,76.8 173.8,80.3 217.1,75.0 260.4,69.8 303.6,66.2 346.9,68.0 390.2,62.7 433.5,59.2 476.7,57.1 520,53.4"/>
+          <!-- dots -->
+          <circle class="dot" cx="44" cy="90.9" r="2"/>
+          <circle class="dot" cx="87.3" cy="85.6" r="2"/>
+          <circle class="dot" cx="130.5" cy="76.8" r="2"/>
+          <circle class="dot" cx="173.8" cy="80.3" r="2"/>
+          <circle class="dot" cx="217.1" cy="75.0" r="2"/>
+          <circle class="dot" cx="260.4" cy="69.8" r="2"/>
+          <circle class="dot" cx="303.6" cy="66.2" r="2"/>
+          <circle class="dot" cx="346.9" cy="68.0" r="2"/>
+          <circle class="dot" cx="390.2" cy="62.7" r="2"/>
+          <circle class="dot" cx="433.5" cy="59.2" r="2"/>
+          <circle class="dot" cx="476.7" cy="57.1" r="2"/>
+          <circle class="dot-last" cx="520" cy="53.4" r="4"/>
+          <!-- event marker: prompt-revision at index 11 -->
+          <line class="ev-line" x1="520" y1="24" x2="520" y2="200"/>
+          <polygon class="ev-cap" points="517,20 523,20 520,14"/>
+          <text class="ev-label" x="516" y="18" text-anchor="end">prompt-revision</text>
+          <!-- last value label -->
+          <text class="last-label" x="528" y="56">0.833</text>
+          <!-- x labels -->
+          <text class="label" x="44" y="215">−12</text>
+          <text class="label" x="282" y="215" text-anchor="middle">−6</text>
+          <text class="label" x="520" y="215" text-anchor="end">now</text>
+        </svg>
+      </div>
+      <div class="chart-foot">
+        <span>12 baselines · stderr ±0.024</span>
+        <a href="#run-review_martian">View runs ↓</a>
+      </div>
+    </article>
+
+    <!-- ===== swe_bench_lite ===== -->
+    <article class="chart" id="chart-swe_bench_lite" style="--accent:var(--sc-swe)" data-screen-label="Chart swe_bench_lite">
+      <div class="chart-head">
+        <div class="chart-title">
+          <a href="#run-swe_bench_lite">swe_bench_lite</a>
+        </div>
+        <span class="status-dot healthy" title="0.310 vs 0.25 floor — comfortably above">Healthy</span>
+      </div>
+      <div class="chart-sub">
+        <div class="left">
+          <span><span class="swatch"></span>pass@1 · 0.0–0.5</span>
+          <span><span class="swatch-line dashed"></span>prev release rc.2 · 0.290</span>
+          <span><span class="swatch-line dashed" style="border-color:var(--c-down)"></span>floor 0.25</span>
+        </div>
+      </div>
+      <div class="chart-body">
+        <svg viewBox="0 0 540 230" preserveAspectRatio="none" role="img" aria-labelledby="c-sw-t">
+          <title id="c-sw-t">swe_bench_lite pass@1 — last 12 baselines, latest 0.310, floor 0.25</title>
+          <rect class="danger" x="44" y="112" width="476" height="88"/>
+          <line class="grid" x1="44" y1="24"  x2="520" y2="24"/>
+          <line class="grid" x1="44" y1="59.2" x2="520" y2="59.2"/>
+          <line class="grid" x1="44" y1="94.4" x2="520" y2="94.4"/>
+          <line class="grid" x1="44" y1="129.6" x2="520" y2="129.6"/>
+          <line class="grid" x1="44" y1="164.8" x2="520" y2="164.8"/>
+          <line class="axis" x1="44" y1="200" x2="520" y2="200"/>
+          <text class="label" x="40" y="27" text-anchor="end">0.5</text>
+          <text class="label" x="40" y="62" text-anchor="end">0.4</text>
+          <text class="label" x="40" y="97" text-anchor="end">0.3</text>
+          <text class="label" x="40" y="132" text-anchor="end">0.2</text>
+          <text class="label" x="40" y="167" text-anchor="end">0.1</text>
+          <line class="floor-line" x1="44" y1="112" x2="520" y2="112"/>
+          <text class="floor-label" x="48" y="109">floor 0.25</text>
+          <!-- prev release 0.290 → y 97.9 -->
+          <line class="prev-line" x1="44" y1="97.9" x2="520" y2="97.9"/>
+          <text class="prev-label" x="516" y="95" text-anchor="end">rc.2 · 0.290</text>
+          <!-- band stderr 0.026 → delta 9.15 -->
+          <path class="band" d="M44,127.5 L87.3,120.4 130.5,113.4 173.8,102.8 217.1,106.3 260.4,95.9 303.6,92.2 346.9,88.8 390.2,85.2 433.5,78.3 476.7,88.8 520,81.7 L520,100.1 476.7,107.1 433.5,96.6 390.2,103.6 346.9,107.1 303.6,110.6 260.4,114.2 217.1,124.7 173.8,121.2 130.5,131.7 87.3,138.8 44,145.8 Z"/>
+          <polyline class="line" points="44,136.6 87.3,129.6 130.5,122.6 173.8,112.0 217.1,115.5 260.4,105.0 303.6,101.4 346.9,97.9 390.2,94.4 433.5,87.4 476.7,97.9 520,90.9"/>
+          <circle class="dot" cx="44" cy="136.6" r="2"/>
+          <circle class="dot" cx="87.3" cy="129.6" r="2"/>
+          <circle class="dot" cx="130.5" cy="122.6" r="2"/>
+          <circle class="dot" cx="173.8" cy="112.0" r="2"/>
+          <circle class="dot" cx="217.1" cy="115.5" r="2"/>
+          <circle class="dot" cx="260.4" cy="105.0" r="2"/>
+          <circle class="dot" cx="303.6" cy="101.4" r="2"/>
+          <circle class="dot" cx="346.9" cy="97.9" r="2"/>
+          <circle class="dot" cx="390.2" cy="94.4" r="2"/>
+          <circle class="dot" cx="433.5" cy="87.4" r="2"/>
+          <circle class="dot" cx="476.7" cy="97.9" r="2"/>
+          <circle class="dot-last" cx="520" cy="90.9" r="4"/>
+          <!-- events: judge-prompt-bump at i=10, model-bump at i=11 -->
+          <line class="ev-line" x1="476.7" y1="24" x2="476.7" y2="200"/>
+          <polygon class="ev-cap" points="473.7,20 479.7,20 476.7,14"/>
+          <text class="ev-label" x="473" y="18" text-anchor="end">judge-prompt-bump</text>
+          <line class="ev-line" x1="520" y1="24" x2="520" y2="200"/>
+          <polygon class="ev-cap" points="517,32 523,32 520,26"/>
+          <text class="ev-label" x="520" y="40" text-anchor="end">model-bump</text>
+          <text class="last-label" x="528" y="94">0.310</text>
+          <text class="label" x="44" y="215">−12</text>
+          <text class="label" x="282" y="215" text-anchor="middle">−6</text>
+          <text class="label" x="520" y="215" text-anchor="end">now</text>
+        </svg>
+      </div>
+      <div class="chart-foot">
+        <span>12 baselines · stderr ±0.026</span>
+        <a href="#run-swe_bench_lite">View runs ↓</a>
+      </div>
+    </article>
+
+    <!-- ===== redteam_prompt_injection ===== -->
+    <article class="chart" id="chart-redteam_prompt_injection" style="--accent:var(--sc-redteam)" data-screen-label="Chart redteam_prompt_injection">
+      <div class="chart-head">
+        <div class="chart-title">
+          <a href="#run-redteam_prompt_injection">redteam_prompt_injection</a>
+        </div>
+        <span class="status-dot near" title="0.958 vs 1.000 target — 1 breach remaining in secret_exfiltration">Near target</span>
+      </div>
+      <div class="chart-sub">
+        <div class="left">
+          <span><span class="swatch"></span>mean_fail_safe · 0.0–1.0</span>
+          <span><span class="swatch-line dashed"></span>prev release rc.2 · 0.875</span>
+          <span><span class="swatch-line dashed" style="border-color:var(--sc-redteam)"></span>target 1.000</span>
+        </div>
+      </div>
+      <div class="chart-body">
+        <svg viewBox="0 0 540 230" preserveAspectRatio="none" role="img" aria-labelledby="c-rt-t">
+          <title id="c-rt-t">redteam mean_fail_safe — last 12 baselines, latest 0.958, target 1.000</title>
+          <line class="grid" x1="44" y1="24"  x2="520" y2="24"/>
+          <line class="grid" x1="44" y1="59.2" x2="520" y2="59.2"/>
+          <line class="grid" x1="44" y1="94.4" x2="520" y2="94.4"/>
+          <line class="grid" x1="44" y1="129.6" x2="520" y2="129.6"/>
+          <line class="grid" x1="44" y1="164.8" x2="520" y2="164.8"/>
+          <line class="axis" x1="44" y1="200" x2="520" y2="200"/>
+          <text class="label" x="40" y="27" text-anchor="end">1.0</text>
+          <text class="label" x="40" y="62" text-anchor="end">0.8</text>
+          <text class="label" x="40" y="97" text-anchor="end">0.6</text>
+          <text class="label" x="40" y="132" text-anchor="end">0.4</text>
+          <text class="label" x="40" y="167" text-anchor="end">0.2</text>
+          <!-- target = 1.0 at y=24 -->
+          <line class="target-line" x1="44" y1="24" x2="520" y2="24"/>
+          <text class="target-label" x="48" y="21">target 1.000</text>
+          <!-- prev 0.875 → y 46 -->
+          <line class="prev-line" x1="44" y1="46" x2="520" y2="46"/>
+          <text class="prev-label" x="516" y="43" text-anchor="end">rc.2 · 0.875</text>
+          <!-- band stderr 0.041 → delta 7.22 -->
+          <path class="band" d="M44,82.8 L87.3,69.6 130.5,60.8 173.8,53.4 217.1,46.2 260.4,38.8 303.6,38.8 346.9,31.4 390.2,38.8 433.5,31.4 476.7,38.8 520,24.2 L520,38.6 476.7,53.2 433.5,45.8 390.2,53.2 346.9,45.8 303.6,53.2 260.4,53.2 217.1,60.6 173.8,67.8 130.5,75.2 87.3,84.0 44,97.2 Z"/>
+          <polyline class="line" points="44,90.0 87.3,76.8 130.5,68.0 173.8,60.6 217.1,53.4 260.4,46.0 303.6,46.0 346.9,38.6 390.2,46.0 433.5,38.6 476.7,46.0 520,31.4"/>
+          <circle class="dot" cx="44" cy="90.0" r="2"/>
+          <circle class="dot" cx="87.3" cy="76.8" r="2"/>
+          <circle class="dot" cx="130.5" cy="68.0" r="2"/>
+          <circle class="dot" cx="173.8" cy="60.6" r="2"/>
+          <circle class="dot" cx="217.1" cy="53.4" r="2"/>
+          <circle class="dot" cx="260.4" cy="46.0" r="2"/>
+          <circle class="dot" cx="303.6" cy="46.0" r="2"/>
+          <circle class="dot" cx="346.9" cy="38.6" r="2"/>
+          <circle class="dot" cx="390.2" cy="46.0" r="2"/>
+          <circle class="dot" cx="433.5" cy="38.6" r="2"/>
+          <circle class="dot" cx="476.7" cy="46.0" r="2"/>
+          <circle class="dot-last" cx="520" cy="31.4" r="4"/>
+          <!-- event: scorer-logic at i=11 -->
+          <line class="ev-line" x1="520" y1="24" x2="520" y2="200"/>
+          <polygon class="ev-cap" points="517,52 523,52 520,46"/>
+          <text class="ev-label" x="520" y="60" text-anchor="end">scorer-logic</text>
+          <text class="last-label" x="528" y="34">0.958</text>
+          <text class="label" x="44" y="215">−12</text>
+          <text class="label" x="282" y="215" text-anchor="middle">−6</text>
+          <text class="label" x="520" y="215" text-anchor="end">now</text>
+        </svg>
+      </div>
+      <div class="chart-foot">
+        <span>12 baselines · stderr ±0.041 · 1 breach in <span class="strong">secret_exfiltration</span> (3/4)</span>
+        <a href="#run-redteam_prompt_injection">View runs ↓</a>
+      </div>
+    </article>
+
+    <!-- (3 active gated suites · informational suite shown below) -->
+
+  </div>
+
+  <!-- Informational suites (folded) -->
+  <details class="informational" data-screen-label="Informational suites">
+    <summary>
+      Informational suites
+      <span class="aux">1 · not gated · review_shadow</span>
+    </summary>
+    <div class="charts">
+      <article class="chart" id="chart-review_shadow" style="--accent:var(--sc-shadow)" data-screen-label="Chart review_shadow">
+        <div class="chart-head">
+          <div class="chart-title">
+            <a href="#run-review_shadow">review_shadow</a>
+          </div>
+          <span class="status-dot info" title="Informational — no gate threshold">Info only</span>
+        </div>
+        <div class="chart-sub">
+          <div class="left">
+            <span><span class="swatch"></span>mean_f1 · 0.0–1.0</span>
+            <span><span class="swatch-line dashed"></span>prev release rc.2 · 0.590</span>
+          </div>
+        </div>
+        <div class="chart-body">
+          <svg viewBox="0 0 540 230" preserveAspectRatio="none" role="img" aria-labelledby="c-rs-t">
+            <title id="c-rs-t">review_shadow mean_f1 — last 12 baselines, latest 0.620, informational</title>
+            <line class="grid" x1="44" y1="24"  x2="520" y2="24"/>
+            <line class="grid" x1="44" y1="59.2" x2="520" y2="59.2"/>
+            <line class="grid" x1="44" y1="94.4" x2="520" y2="94.4"/>
+            <line class="grid" x1="44" y1="129.6" x2="520" y2="129.6"/>
+            <line class="grid" x1="44" y1="164.8" x2="520" y2="164.8"/>
+            <line class="axis" x1="44" y1="200" x2="520" y2="200"/>
+            <text class="label" x="40" y="27" text-anchor="end">1.0</text>
+            <text class="label" x="40" y="62" text-anchor="end">0.8</text>
+            <text class="label" x="40" y="97" text-anchor="end">0.6</text>
+            <text class="label" x="40" y="132" text-anchor="end">0.4</text>
+            <text class="label" x="40" y="167" text-anchor="end">0.2</text>
+            <!-- prev release 0.590 → y 96.2 -->
+            <line class="prev-line" x1="44" y1="96.2" x2="520" y2="96.2"/>
+            <text class="prev-label" x="516" y="93" text-anchor="end">rc.2 · 0.590</text>
+            <!-- band stderr 0.052 → delta 9.15 -->
+            <path class="band" d="M44,111.6 L87.3,106.3 130.5,99.3 173.8,101.0 217.1,94.0 260.4,92.2 303.6,88.7 346.9,85.2 390.2,87.0 433.5,83.4 476.7,87.0 520,81.7 L520,100.1 476.7,105.4 433.5,101.8 390.2,105.4 346.9,103.6 303.6,107.1 260.4,110.6 217.1,112.4 173.8,119.4 130.5,117.7 87.3,124.7 44,130.0 Z"/>
+            <polyline class="line" points="44,120.8 87.3,115.5 130.5,108.5 173.8,110.2 217.1,103.2 260.4,101.4 303.6,97.9 346.9,94.4 390.2,96.2 433.5,92.6 476.7,96.2 520,90.9"/>
+            <circle class="dot" cx="44" cy="120.8" r="2"/>
+            <circle class="dot" cx="87.3" cy="115.5" r="2"/>
+            <circle class="dot" cx="130.5" cy="108.5" r="2"/>
+            <circle class="dot" cx="173.8" cy="110.2" r="2"/>
+            <circle class="dot" cx="217.1" cy="103.2" r="2"/>
+            <circle class="dot" cx="260.4" cy="101.4" r="2"/>
+            <circle class="dot" cx="303.6" cy="97.9" r="2"/>
+            <circle class="dot" cx="346.9" cy="94.4" r="2"/>
+            <circle class="dot" cx="390.2" cy="96.2" r="2"/>
+            <circle class="dot" cx="433.5" cy="92.6" r="2"/>
+            <circle class="dot" cx="476.7" cy="96.2" r="2"/>
+            <circle class="dot-last" cx="520" cy="90.9" r="4"/>
+            <line class="ev-line" x1="520" y1="24" x2="520" y2="200"/>
+            <polygon class="ev-cap" points="517,20 523,20 520,14"/>
+            <text class="ev-label" x="520" y="18" text-anchor="end">dataset-refresh</text>
+            <text class="last-label" x="528" y="94">0.620</text>
+            <text class="label" x="44" y="215">−12</text>
+            <text class="label" x="282" y="215" text-anchor="middle">−6</text>
+            <text class="label" x="520" y="215" text-anchor="end">now</text>
+          </svg>
+        </div>
+        <div class="chart-foot">
+          <span>12 baselines · stderr ±0.052 · informational, not gated</span>
+          <a href="#run-review_shadow">View runs ↓</a>
+        </div>
+      </article>
+    </div>
+  </details>
+</section>
+
+<!-- Baseline runs list, grouped by suite -->
+<section class="section" aria-labelledby="rn-h" data-screen-label="Runs">
+  <div class="section-head">
+    <h2 id="rn-h">Recent baselines</h2>
+    <span class="aux">grouped by suite · newest first</span>
+  </div>
+
+  <div class="list-controls">
+    <span class="seg-label">Range</span>
+    <div class="seg" role="group" aria-label="Range">
+      <button type="button" data-range="6" aria-pressed="true">Last 6</button>
+      <button type="button" data-range="24" aria-pressed="false">All 24</button>
+    </div>
+    <span class="seg-label" style="margin-left:1rem">Trigger</span>
+    <div class="seg" role="group" aria-label="Trigger">
+      <button type="button" data-filter="all" aria-pressed="true">All</button>
+      <button type="button" data-filter="major" aria-pressed="false">Major only</button>
+      <button type="button" data-filter="scheduled" aria-pressed="false">Scheduled</button>
+    </div>
+  </div>
+
+  <div class="suite-group" id="run-review_martian" style="--accent:var(--sc-martian)">
+    <div class="suite-group-head">
+      <h3>
+        <span class="accent-bar" aria-hidden="true"></span>
+        <a href="#run-review_martian">review_martian</a>
+      </h3>
+      <span class="now">latest <strong>0.833</strong> · 6 entries</span>
+    </div>
+    <div class="runs" data-runs>
+      <a class="row" data-trig="prompt-revision" href="https://smith.langchain.com/o/openbot/experiments/review_martian-rc3" target="_blank" rel="noopener">
+        <span class="cell date">May 14</span>
+        <span class="cell score">0.833</span>
+        <span class="cell delta up">▲ +0.021</span>
+        <span class="cell trig">prompt-revision</span>
+        <span class="cell pr">#28 ↗</span>
+      </a>
+      <a class="row" data-trig="scheduled-weekly" href="https://smith.langchain.com/o/openbot/experiments/review_martian-w18" target="_blank" rel="noopener">
+        <span class="cell date">May 04</span>
+        <span class="cell score">0.812</span>
+        <span class="cell delta up">▲ +0.012</span>
+        <span class="cell trig default"></span>
+        <span class="cell pr" aria-disabled="true">—</span>
+      </a>
+      <a class="row" data-trig="scheduled-weekly" href="https://smith.langchain.com/o/openbot/experiments/review_martian-w17" target="_blank" rel="noopener">
+        <span class="cell date">Apr 27</span>
+        <span class="cell score">0.800</span>
+        <span class="cell delta up">▲ +0.025</span>
+        <span class="cell trig default"></span>
+        <span class="cell pr" aria-disabled="true">—</span>
+      </a>
+    </div>
+  </div>
+
+  <div class="suite-group" id="run-swe_bench_lite" style="--accent:var(--sc-swe)">
+    <div class="suite-group-head">
+      <h3>
+        <span class="accent-bar" aria-hidden="true"></span>
+        <a href="#run-swe_bench_lite">swe_bench_lite</a>
+      </h3>
+      <span class="now">latest <strong>0.310</strong> · 6 entries</span>
+    </div>
+    <div class="runs" data-runs>
+      <a class="row" data-trig="model-bump" href="https://smith.langchain.com/o/openbot/experiments/swe_bench_lite-rc3" target="_blank" rel="noopener">
+        <span class="cell date">May 12</span>
+        <span class="cell score">0.310</span>
+        <span class="cell delta up">▲ +0.020</span>
+        <span class="cell trig">model-bump</span>
+        <span class="cell pr">#24 ↗</span>
+      </a>
+      <a class="row" data-trig="judge-prompt-bump" href="https://smith.langchain.com/o/openbot/experiments/swe_bench_lite-w17" target="_blank" rel="noopener">
+        <span class="cell date">Apr 28</span>
+        <span class="cell score">0.290</span>
+        <span class="cell delta down">▼ −0.030</span>
+        <span class="cell trig">judge-prompt-bump</span>
+        <span class="cell pr">#21 ↗</span>
+      </a>
+      <a class="row" data-trig="scheduled-weekly" href="https://smith.langchain.com/o/openbot/experiments/swe_bench_lite-w16" target="_blank" rel="noopener">
+        <span class="cell date">Apr 21</span>
+        <span class="cell score">0.320</span>
+        <span class="cell delta up">▲ +0.020</span>
+        <span class="cell trig default"></span>
+        <span class="cell pr" aria-disabled="true">—</span>
+      </a>
+    </div>
+  </div>
+
+  <div class="suite-group" id="run-redteam_prompt_injection" style="--accent:var(--sc-redteam)">
+    <div class="suite-group-head">
+      <h3>
+        <span class="accent-bar" aria-hidden="true"></span>
+        <a href="#run-redteam_prompt_injection">redteam_prompt_injection</a>
+      </h3>
+      <span class="now">latest <strong>0.958</strong> · 6 entries</span>
+    </div>
+    <div class="runs" data-runs>
+      <a class="row" data-trig="scorer-logic" href="https://smith.langchain.com/o/openbot/experiments/redteam_pi-rc3" target="_blank" rel="noopener">
+        <span class="cell date">May 15</span>
+        <span class="cell score">0.958</span>
+        <span class="cell delta up">▲ +0.083</span>
+        <span class="cell trig">scorer-logic</span>
+        <span class="cell pr">#32 ↗</span>
+      </a>
+      <a class="row" data-trig="scheduled-weekly" href="https://smith.langchain.com/o/openbot/experiments/redteam_pi-w19" target="_blank" rel="noopener">
+        <span class="cell date">May 07</span>
+        <span class="cell score">0.875</span>
+        <span class="cell delta down">▼ −0.042</span>
+        <span class="cell trig default"></span>
+        <span class="cell pr" aria-disabled="true">—</span>
+      </a>
+      <a class="row" data-trig="scheduled-weekly" href="https://smith.langchain.com/o/openbot/experiments/redteam_pi-w18" target="_blank" rel="noopener">
+        <span class="cell date">Apr 30</span>
+        <span class="cell score">0.917</span>
+        <span class="cell delta">— stable</span>
+        <span class="cell trig default"></span>
+        <span class="cell pr" aria-disabled="true">—</span>
+      </a>
+    </div>
+  </div>
+
+  <div class="suite-group" id="run-review_shadow" style="--accent:var(--sc-shadow);opacity:.85">
+    <div class="suite-group-head">
+      <h3>
+        <span class="accent-bar" aria-hidden="true"></span>
+        <a href="#run-review_shadow">review_shadow</a>
+        <span style="font-family:var(--ff-mono);font-size:var(--fs-xs);color:var(--c-ink-dim);font-weight:400;letter-spacing:0.04em;text-transform:uppercase;margin-left:.5rem">info · not gated</span>
+      </h3>
+      <span class="now">latest <strong>0.620</strong> · 6 entries</span>
+    </div>
+    <div class="runs" data-runs>
+      <a class="row" data-trig="dataset-refresh" href="https://smith.langchain.com/o/openbot/experiments/review_shadow-rc3" target="_blank" rel="noopener">
+        <span class="cell date">May 10</span>
+        <span class="cell score">0.620</span>
+        <span class="cell delta up">▲ +0.030</span>
+        <span class="cell trig">dataset-refresh</span>
+        <span class="cell pr" aria-disabled="true">—</span>
+      </a>
+      <a class="row" data-trig="scheduled-weekly" href="https://smith.langchain.com/o/openbot/experiments/review_shadow-w18" target="_blank" rel="noopener">
+        <span class="cell date">May 02</span>
+        <span class="cell score">0.590</span>
+        <span class="cell delta up">▲ +0.010</span>
+        <span class="cell trig default"></span>
+        <span class="cell pr" aria-disabled="true">—</span>
+      </a>
+      <a class="row" data-trig="scheduled-weekly" href="https://smith.langchain.com/o/openbot/experiments/review_shadow-w17" target="_blank" rel="noopener">
+        <span class="cell date">Apr 25</span>
+        <span class="cell score">0.580</span>
+        <span class="cell delta down">▼ −0.010</span>
+        <span class="cell trig default"></span>
+        <span class="cell pr" aria-disabled="true">—</span>
+      </a>
+    </div>
+  </div>
+
+</section>
+
+<!-- Footer -->
+<dl class="foot" data-screen-label="Footer">
+  <div>
+    <dt>Source</dt>
+    <dd>baseline-log.md @ <span class="mono">9821a4f</span></dd>
+  </div>
+  <div>
+    <dt>LangSmith</dt>
+    <dd><a href="https://smith.langchain.com/o/openbot/projects/openbot-evals" target="_blank" rel="noopener">openbot-evals</a></dd>
+  </div>
+  <div>
+    <dt>Deferred</dt>
+    <dd class="deferred">
+      <span class="item"><span data-tooltip="Internal-data triage suite — held until privacy review completes (PRD §4.0).">triage_internal</span></span>
+      <span class="item"><span data-tooltip="Judge-stability meta-suite — not needed while all primaries use heuristic judges (PRD §15).">eval_of_evals</span></span>
+    </dd>
+  </div>
+  <div>
+    <dt>Last gen</dt>
+    <dd>2026-05-15 18:42 UTC</dd>
+  </div>
+</dl>
+
+<!-- Tweaks -->
+<aside class="tweaks" id="tweaks" aria-label="Tweaks">
+  <div class="tweaks-head">
+    <h3>Tweaks</h3>
+    <button class="tweaks-close" id="tweaks-close" aria-label="Close tweaks">×</button>
+  </div>
+  <div class="tweaks-body">
+    <div class="tweak-group">
+      <div class="label">Annotations</div>
+      <label class="tweak-toggle"><span>Event markers</span><input type="checkbox" id="tw-ev" checked /></label>
+      <label class="tweak-toggle"><span>±1σ confidence band</span><input type="checkbox" id="tw-band" checked /></label>
+      <label class="tweak-toggle"><span>Previous release line</span><input type="checkbox" id="tw-prev" checked /></label>
+      <label class="tweak-toggle"><span>Floor/target lines</span><input type="checkbox" id="tw-thr" checked /></label>
+      <label class="tweak-toggle"><span>Danger zone fill</span><input type="checkbox" id="tw-danger" checked /></label>
+    </div>
+    <div class="tweak-group">
+      <div class="label">Density</div>
+      <div class="tweak-seg" role="group" aria-label="Density">
+        <button type="button" data-density="comfortable" aria-pressed="true">Comfortable</button>
+        <button type="button" data-density="compact" aria-pressed="false">Compact</button>
+      </div>
+      <div class="tweak-note">Compact halves chart heights for at-a-glance viewing.</div>
+    </div>
+    <div class="tweak-group">
+      <div class="label">Accent colors</div>
+      <label class="tweak-toggle"><span>Per-suite tinted lines</span><input type="checkbox" id="tw-accent" checked /></label>
+      <div class="tweak-note">Off swaps every chart back to a single ink color (Anthropic-style monochrome).</div>
+    </div>
+  </div>
+</aside>
+
+<script>
+(function(){
+  var tw = document.getElementById('tweaks');
+  document.getElementById('tweaks-close').addEventListener('click', function(){
+    tw.classList.remove('is-open');
+    try { window.parent.postMessage({type:'__edit_mode_dismissed'},'*'); } catch(e){}
+  });
+  window.addEventListener('message', function(e){
+    var d = e.data || {};
+    if (d.type === '__activate_edit_mode') tw.classList.add('is-open');
+    if (d.type === '__deactivate_edit_mode') tw.classList.remove('is-open');
+  });
+  try { window.parent.postMessage({type:'__edit_mode_available'},'*'); } catch(e){}
+
+  function setVis(sel, on){
+    document.querySelectorAll(sel).forEach(function(n){ n.style.display = on ? '' : 'none'; });
+  }
+  document.getElementById('tw-ev').addEventListener('change', function(e){ setVis('.ev-line, .ev-cap, .ev-label', e.target.checked); });
+  document.getElementById('tw-band').addEventListener('change', function(e){ setVis('.band', e.target.checked); });
+  document.getElementById('tw-prev').addEventListener('change', function(e){ setVis('.prev-line, .prev-label', e.target.checked); });
+  document.getElementById('tw-thr').addEventListener('change', function(e){ setVis('.floor-line, .floor-label, .target-line, .target-label', e.target.checked); });
+  document.getElementById('tw-danger').addEventListener('change', function(e){ setVis('.danger', e.target.checked); });
+
+  /* Density */
+  document.querySelectorAll('.tweak-seg button[data-density]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      document.querySelectorAll('.tweak-seg button[data-density]').forEach(function(b){
+        b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+      });
+      var compact = btn.dataset.density === 'compact';
+      document.querySelectorAll('.chart-body svg').forEach(function(svg){
+        svg.style.maxHeight = compact ? '160px' : '';
+      });
+    });
+  });
+
+  /* Accent toggle */
+  document.getElementById('tw-accent').addEventListener('change', function(e){
+    var on = e.target.checked;
+    document.querySelectorAll('.chart, .suite-group').forEach(function(n){
+      n.dataset.accent = n.dataset.accent || n.style.getPropertyValue('--accent');
+      n.style.setProperty('--accent', on ? n.dataset.accent : 'oklch(20% 0 0)');
+    });
+  });
+
+  /* Range toggle */
+  document.querySelectorAll('.list-controls .seg button[data-range]').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      document.querySelectorAll('.list-controls .seg button[data-range]').forEach(function(b){
+        b.setAttribute('aria-pressed', b === btn ? 'true' : 'false');
+      });
+      // Cosmetic in this mock — would expand to all 24 entries in real build.
+    });
+  });
+
+  /* Trigger filter */
+  var filterBtns = document.querySelectorAll('.list-controls .seg button[data-filter]');
+  filterBtns.forEach(function(btn){
+    btn.addEventListener('click', function(){
+      filterBtns.forEach(function(b){ b.setAttribute('aria-pressed', b === btn ? 'true' : 'false'); });
+      var f = btn.dataset.filter;
+      document.querySelectorAll('[data-runs]').forEach(function(grp){
+        grp.classList.remove('filter-major','filter-scheduled');
+        if (f === 'major') grp.classList.add('filter-major');
+        else if (f === 'scheduled') grp.classList.add('filter-scheduled');
+      });
+    });
+  });
+})();
+</script>
+<script type="application/json" id="om-tweak-defaults">/*EDITMODE-BEGIN*/{
+  "events": true,
+  "band": true,
+  "prevRelease": true,
+  "thresholds": true,
+  "dangerZone": true,
+  "density": "comfortable",
+  "accentColors": true
+}/*EDITMODE-END*/</script>
+
+</div>
+</body>
+</html>

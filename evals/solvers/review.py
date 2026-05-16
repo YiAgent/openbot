@@ -214,13 +214,3 @@ def deepagents_baseline_review_solver():  # type: ignore[no-untyped-def]
         return _run
 
     return _solver()
-
-
-def openbot_review_solver():  # type: ignore[no-untyped-def]
-    """Backward-compatible alias for the baseline provider.
-
-    Older task files imported `openbot_review_solver()` directly before solver
-    providers were explicit. Keep the alias while new code routes through
-    `evals.solvers.registry`.
-    """
-    return deepagents_baseline_review_solver()

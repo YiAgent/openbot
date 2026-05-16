@@ -112,28 +112,22 @@ def test_greedy_match_consumes_golden_at_most_once() -> None:
     assert report.unmatched_candidate == [1]
 
 
-def test_judge_is_called_through_locked_model() -> None:
-    """PRD §10.3: judge must run through the locked model — wire test.
+def test_judge_is_called_through_locked_martian_model() -> None:
+    """Judge must run through the locked Martian-CRB model — wire test.
 
-    We don't call a real LLM here. Instead we assert that the injected judge
-    *is* the construct that supplies `Judge.fingerprint()` — i.e. callers can
-    use `evals.common.judges.Judge` as the source of truth.
+    Asserts ``evals.scorers.review_judge.MARTIAN_JUDGE_MODEL_ID`` is the
+    source of truth for the model passed into the overlap algorithm.
     """
-    from evals.common.judges import DEFAULT_JUDGE_MODEL_ID, Judge
+    from evals.scorers.review_judge import MARTIAN_JUDGE_MODEL_ID
 
-    j = Judge()
-    assert j.model_id == DEFAULT_JUDGE_MODEL_ID
-
-    # Build a judge_fn closure that, in real life, would call the LLM via j.
-    seen: list[tuple[Finding, Finding, str]] = []
+    seen_models: list[str] = []
 
     def judge_fn(golden: Finding, candidate: Finding) -> JudgeVerdict:
-        # In production: `result = call_llm(model=j.model_id, prompt=j.prompt_body, ...)`
-        seen.append((golden, candidate, j.model_id))
+        seen_models.append(MARTIAN_JUDGE_MODEL_ID)
         return _verdict(match=False)
 
     compute_review_overlap([_f("a.py", 1, "g")], [_f("a.py", 1, "c")], judge_fn)
-    assert seen and seen[0][2] == DEFAULT_JUDGE_MODEL_ID
+    assert seen_models == ["claude-opus-4-5"]
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────

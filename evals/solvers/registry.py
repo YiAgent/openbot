@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Literal, TypeAlias
 
-from evals.solvers.openbot_review import deepagents_baseline_review_solver
+from evals.solvers.review import deepagents_baseline_review_solver
 
 ReviewSolverId: TypeAlias = Literal["deepagents_baseline", "openbot_prod"]
 ReviewSolverFactory: TypeAlias = Callable[[], object]

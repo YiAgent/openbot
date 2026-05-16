@@ -26,19 +26,24 @@ def test_unknown_solver_id_raises_clear_error() -> None:
         get_review_solver("mystery_solver")
 
 
-def test_review_task_metadata_records_solver_identity() -> None:
-    from evals.tasks.review_martian import (
-        _SMOKE_DATASET_PATH,
-        _SMOKE_DATASET_VERSION,
-        build_review_martian_task,
-    )
+def test_review_task_metadata_records_solver_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The @task entrypoint stamps solver/judge identity into Task.metadata."""
+    from inspect_ai.dataset import MemoryDataset, Sample
 
-    task = build_review_martian_task(
-        solver_id="deepagents_baseline",
-        dataset_path=_SMOKE_DATASET_PATH,
-        dataset_version=_SMOKE_DATASET_VERSION,
+    from evals.tasks import review_martian as task_mod
+
+    # Stub out LangSmith network calls — the test only cares about metadata.
+    monkeypatch.setattr(
+        task_mod,
+        "langsmith_dataset",
+        lambda _v: MemoryDataset(samples=[Sample(input="x", target="[]")], name="stub"),
     )
+    monkeypatch.setattr(task_mod, "configure_tracing_for_dataset", lambda _v: {})
+
+    task = task_mod.review_martian_baseline_crb()
 
     assert task.metadata["solver_id"] == "deepagents_baseline"
     assert task.metadata["solver_family"] == "baseline"
-    assert task.metadata["dataset_version"] == _SMOKE_DATASET_VERSION
+    assert task.metadata["dataset_version"] == "martian_2026w20"
+    assert task.metadata["judge_label"] == "martian_crb_verbatim"
+    assert task.metadata["judge_model_id"] == "claude-opus-4-5"

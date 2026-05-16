@@ -1,4 +1,4 @@
-"""Unit tests for evals.solvers.openbot_review — P1 regression pins.
+"""Unit tests for evals.solvers.review — P1 regression pins.
 
 Codex review (2026-05-15) caught two false-negative classes in the original
 implementation:
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from evals.solvers.openbot_review import (
+from evals.solvers.review import (
     ReviewResult,
     _coerce_findings,
     _extract_json_object,
@@ -88,7 +88,7 @@ def test_review_diff_returns_raw_text_when_prose_precedes_json() -> None:
         'And here is the structured findings: {"findings": []}'
     )
     with patch(
-        "evals.solvers.openbot_review.create_deep_agent",
+        "evals.solvers.review.create_deep_agent",
         return_value=_fake_agent_returning(leaky),
     ):
         result = review_diff("diff --git a/x b/x\n+x\n")
@@ -114,7 +114,7 @@ def test_review_diff_handles_anthropic_content_blocks() -> None:
         def invoke(self, _payload):
             return {"messages": [_Msg()]}
 
-    with patch("evals.solvers.openbot_review.create_deep_agent", return_value=_Agent()):
+    with patch("evals.solvers.review.create_deep_agent", return_value=_Agent()):
         result = review_diff("noop diff")
 
     assert "PWNED-block-1" in result.raw_text

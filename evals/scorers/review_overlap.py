@@ -18,7 +18,7 @@ from typing import TypedDict
 
 
 class Finding(TypedDict):
-    """Output shape from `evals.solvers.openbot_review` (PRD §4.1)."""
+    """Output shape from `evals.solvers.review` (PRD §4.1)."""
 
     file: str
     line: int | None
