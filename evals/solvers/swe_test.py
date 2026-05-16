@@ -29,6 +29,7 @@ from evals.common.deepagents_baseline import (
     resolve_model,
 )
 from evals.common.predictions import SwtBenchPrediction, empty_swt_prediction
+from evals.common.usage import aggregate_provider_usage
 from evals.sandboxes import DockerSandboxBackend, RepoSpec
 
 logger = logging.getLogger(__name__)
@@ -84,16 +85,14 @@ def _extract_text(message: Any) -> str:
     return str(text)
 
 
-def _extract_provider_usage(message: Any) -> dict[str, Any] | None:
-    usage = getattr(message, "usage_metadata", None)
-    if isinstance(usage, dict):
-        return dict(usage)
-    response_metadata = getattr(message, "response_metadata", None)
-    if isinstance(response_metadata, dict):
-        nested = response_metadata.get("usage")
-        if isinstance(nested, dict):
-            return dict(nested)
-    return None
+# Usage aggregation lives in evals.common.usage — sums across all AI
+# messages, matching LangSmith's trace-side aggregation.
+
+
+def _join_message_text(messages: list[Any]) -> str:
+    """Concatenate all AI-visible message text for offline debugging."""
+    parts = [_extract_text(message).strip() for message in messages]
+    return "\n\n".join(part for part in parts if part)
 
 
 def deepagents_baseline_swt_solver(*, model: str | None = None) -> Solver:
@@ -166,13 +165,15 @@ def deepagents_baseline_swt_solver(*, model: str | None = None) -> Solver:
                     model_patch=patch,
                 )
                 state.metadata["prediction"] = prediction.model_dump()
+                state.metadata["prediction_json"] = prediction.model_dump_json()
                 state.metadata["modal_sandbox_id"] = backend.id
 
-                last = result["messages"][-1]
-                provider_usage = _extract_provider_usage(last)
+                messages = list(result.get("messages", []))
+                provider_usage = aggregate_provider_usage(messages)
                 if provider_usage is not None:
                     state.metadata["provider_usage"] = provider_usage
-                state.output.completion = _extract_text(last)
+                state.metadata["agent_raw_output"] = _join_message_text(messages)
+                state.output.completion = prediction.model_dump_json()
             finally:
                 await backend.aclose()
             return state

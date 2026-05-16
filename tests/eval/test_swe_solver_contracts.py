@@ -8,6 +8,7 @@ the tests stay hermetic — no Modal calls, no network.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -43,13 +44,22 @@ def _patch_backend(monkeypatch: pytest.MonkeyPatch, module: Any, backend: _FakeB
 
 
 class _FakeAgent:
-    def __init__(self, *, content: Any, usage_metadata: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        content: Any | None = None,
+        usage_metadata: dict[str, Any] | None = None,
+        messages: list[Any] | None = None,
+    ) -> None:
         self.content = content
         self.usage_metadata = usage_metadata
+        self.messages = messages
         self.calls: list[dict[str, object]] = []
 
     async def ainvoke(self, payload, config):  # type: ignore[no-untyped-def]
         self.calls.append({"payload": payload, "config": config})
+        if self.messages is not None:
+            return {"messages": self.messages}
         return {
             "messages": [SimpleNamespace(content=self.content, usage_metadata=self.usage_metadata)]
         }
@@ -80,8 +90,16 @@ async def test_swe_fix_solver_emits_swebench_prediction(
     _patch_backend(monkeypatch, swe_fix, backend)
 
     agent = _FakeAgent(
-        content=[{"type": "text", "text": "fixed summary"}],
-        usage_metadata={"input_tokens": 21, "output_tokens": 4, "total_cost": 0.55},
+        messages=[
+            SimpleNamespace(
+                content=[{"type": "text", "text": "fixed summary"}],
+                usage_metadata={"input_tokens": 21, "output_tokens": 4, "total_cost": 0.55},
+            ),
+            SimpleNamespace(
+                content="Model call limits exceeded: thread limit (20/20)",
+                usage_metadata=None,
+            ),
+        ],
     )
     monkeypatch.setattr(swe_fix, "build_baseline_agent", lambda **_: agent)
     monkeypatch.setattr(swe_fix, "build_run_config", lambda **_: {"cfg": True})
@@ -89,16 +107,23 @@ async def test_swe_fix_solver_emits_swebench_prediction(
     state = _swe_state(dataset_version="fix_swe_bench_verified")
     out = await swe_fix.deepagents_baseline_swe_solver(model="anthropic:test")(state, None)
 
-    assert out.output.completion == "fixed summary"
+    completion = json.loads(out.output.completion)
+    assert completion["model_patch"] == diff_body
+    assert completion["model_name_or_path"] == "anthropic:test"
     pred = out.metadata["prediction"]
     assert pred["instance_id"] == "sample-1"
     assert pred["model_name_or_path"] == "anthropic:test"
     assert pred["model_patch"] == diff_body
+    # Aggregator sums across messages and reconstructs total_tokens when
+    # the message omitted it (input + output). Cost is also summed.
     assert out.metadata["provider_usage"] == {
         "input_tokens": 21,
         "output_tokens": 4,
+        "total_tokens": 25,
         "total_cost": 0.55,
     }
+    assert "fixed summary" in out.metadata["agent_raw_output"]
+    assert "Model call limits exceeded" in out.metadata["agent_raw_output"]
     assert backend.closed is True
     # Backend was constructed with the right RepoSpec.
     assert backend.repo_spec.repo == "astropy/astropy"  # type: ignore[attr-defined]
@@ -146,8 +171,16 @@ async def test_swt_solver_emits_swtbench_prediction(
     backend = _FakeBackend(diff="diff --git a/tests/x.py b/tests/x.py\n+def test_x(): pass\n")
     _patch_backend(monkeypatch, swe_test, backend)
     agent = _FakeAgent(
-        content="test summary",
-        usage_metadata={"input_tokens": 11, "output_tokens": 7, "total_cost": 0.2},
+        messages=[
+            SimpleNamespace(
+                content="test summary",
+                usage_metadata={"input_tokens": 11, "output_tokens": 7, "total_cost": 0.2},
+            ),
+            SimpleNamespace(
+                content="Tool budget exhausted, finish with what you have.",
+                usage_metadata=None,
+            ),
+        ],
     )
     monkeypatch.setattr(swe_test, "build_baseline_agent", lambda **_: agent)
     monkeypatch.setattr(swe_test, "build_run_config", lambda **_: {"cfg": True})
@@ -155,7 +188,9 @@ async def test_swt_solver_emits_swtbench_prediction(
     state = _swe_state(dataset_version="test_swt_bench_verified")
     out = await swe_test.deepagents_baseline_swt_solver(model="anthropic:test")(state, None)
 
-    assert out.output.completion == "test summary"
+    completion = json.loads(out.output.completion)
+    assert "test_x" in completion["model_patch"]
+    assert completion["model_name_or_path"] == "anthropic:test"
     pred = out.metadata["prediction"]
     assert pred["instance_id"] == "sample-1"
     assert pred["model_name_or_path"] == "anthropic:test"
@@ -163,8 +198,11 @@ async def test_swt_solver_emits_swtbench_prediction(
     assert out.metadata["provider_usage"] == {
         "input_tokens": 11,
         "output_tokens": 7,
+        "total_tokens": 18,
         "total_cost": 0.2,
     }
+    assert "test summary" in out.metadata["agent_raw_output"]
+    assert "Tool budget exhausted" in out.metadata["agent_raw_output"]
     assert backend.closed is True
 
 
@@ -187,17 +225,25 @@ async def test_swt_solver_uses_shared_deepagents_model_by_default(
 
 
 @pytest.mark.asyncio
-async def test_swe_qa_agent_solver_extracts_finish_block_and_uses_modal(
+async def test_swe_qa_agent_solver_consumes_structured_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    answer_inside_finish = (
-        "Routing is handled by `flask/routing.py`.\nEvidence: flask/routing.py: line 1-10"
+    """Happy path: agent emits a parsed SweQaProAnswer via structured output."""
+    from evals.common.predictions import SweQaProAnswer, SweQaProCitation
+
+    structured = SweQaProAnswer(
+        answer="Routing is handled by flask/routing.py.",
+        citations=[
+            SweQaProCitation(relative_path="flask/routing.py", line_start=1, line_end=10),
+        ],
     )
-    raw_reply = f"Reasoning: looked it up.\n<finish>\n{answer_inside_finish}\n</finish>"
 
     class _Agent:
         async def ainvoke(self, payload, config):  # type: ignore[no-untyped-def]
-            return {"messages": [SimpleNamespace(content=raw_reply, usage_metadata=None)]}
+            return {
+                "structured_response": structured,
+                "messages": [SimpleNamespace(content="", usage_metadata=None)],
+            }
 
     backend = _FakeBackend()
     _patch_backend(monkeypatch, swe_qa, backend)
@@ -217,19 +263,19 @@ async def test_swe_qa_agent_solver_extracts_finish_block_and_uses_modal(
     )
     out = await swe_qa.deepagents_agent_swe_qa_solver(model="anthropic:test")(state, None)
 
-    assert out.output.completion == answer_inside_finish
-    assert "Reasoning" in out.metadata["agent_raw_output"]
+    assert out.output.completion == structured.answer
     pred = out.metadata["prediction"]
-    assert pred["answer"] == answer_inside_finish.strip()
-    # Citation parser pulled the `flask/routing.py: line 1-10` reference.
-    assert pred["citations"] and pred["citations"][0]["relative_path"] == "flask/routing.py"
+    assert pred["answer"] == structured.answer
+    assert pred["citations"][0]["relative_path"] == "flask/routing.py"
     assert backend.closed is True
 
 
 @pytest.mark.asyncio
-async def test_swe_qa_agent_solver_falls_back_to_raw_text_when_finish_missing(
+async def test_swe_qa_agent_solver_falls_back_to_message_text_when_unstructured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Protocol violation fallback: no structured_response → use last AI text."""
+
     class _Agent:
         async def ainvoke(self, payload, config):  # type: ignore[no-untyped-def]
             return {
@@ -256,3 +302,5 @@ async def test_swe_qa_agent_solver_falls_back_to_raw_text_when_finish_missing(
     )
     out = await swe_qa.deepagents_agent_swe_qa_solver()(state, None)
     assert out.output.completion == "Routing is in flask/routing.py"
+    # Fallback predicate emits an empty citations list.
+    assert out.metadata["prediction"]["citations"] == []

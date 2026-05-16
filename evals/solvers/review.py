@@ -28,6 +28,7 @@ from evals.common.deepagents_baseline import (
     build_run_config,
     resolve_model,
 )
+from evals.common.usage import aggregate_provider_usage
 from evals.sandboxes import DockerSandboxBackend, RepoSpec
 
 _REVIEW_SYSTEM_PROMPT = """\
@@ -200,28 +201,8 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _extract_provider_usage(message: Any) -> dict[str, Any] | None:
-    """Best-effort extract provider usage from common LangChain message shapes."""
-    usage = getattr(message, "usage_metadata", None)
-    if isinstance(usage, dict):
-        return dict(usage)
-    response_metadata = getattr(message, "response_metadata", None)
-    if isinstance(response_metadata, dict):
-        nested = response_metadata.get("usage")
-        if isinstance(nested, dict):
-            return dict(nested)
-    return None
-
-
-def _extract_provider_usage_from_messages(messages: list[Any]) -> dict[str, Any] | None:
-    """Return the newest usage payload across the agent's AI messages."""
-    for msg in reversed(messages):
-        if getattr(msg, "type", "ai") != "ai":
-            continue
-        usage = _extract_provider_usage(msg)
-        if usage is not None:
-            return usage
-    return None
+# Usage aggregation lives in evals.common.usage — sums across all AI
+# messages, matching LangSmith's trace-side aggregation.
 
 
 @dataclass(frozen=True)
@@ -307,7 +288,7 @@ def _parse_agent_result(result: Any) -> ReviewResult:
     return ReviewResult(
         raw_text=text,
         findings=findings,
-        provider_usage=_extract_provider_usage_from_messages(messages),
+        provider_usage=aggregate_provider_usage(messages),
     )
 
 
@@ -464,32 +445,36 @@ def deepagents_baseline_review_solver(
                 # Track whether *we* own the backend, so we can close it on
                 # exit (caller-supplied backends stay alive — caller-managed).
                 owns_backend = backend is None
-                agent = build_baseline_agent(
-                    system_prompt=_REVIEW_SANDBOX_SYSTEM_PROMPT,
-                    model=resolved_model,
-                    backend=effective_backend,
-                    response_format=_ReviewResponseModel,
-                )
-                user_msg = _build_sandbox_user_message(
-                    diff=diff,
-                    repo=md.get("repo"),
-                    pr_url=md.get("pr_url"),
-                    pr_title=md.get("pr_title"),
-                    base_sha=base_sha,
-                )
-                sample_label = str(state.sample_id) if state.sample_id is not None else "anon"
-                ls_config = build_run_config(
-                    sample_id=sample_label,
-                    dataset_version=md.get("dataset_version", "martian_2026w20"),
-                    solver_family=md.get("solver_family", "deepagents_baseline"),
-                    model=resolved_model,
-                    git_sha=md.get("git_sha"),
-                    extra_metadata={
-                        "repo": md.get("repo"),
-                        "pr_url": md.get("pr_url"),
-                    },
-                )
+                # try/finally must wrap everything after the backend is
+                # constructed — if agent build or config wiring throws,
+                # we still need to tear the container down. Previously the
+                # try started only around ainvoke, leaking on early errors.
                 try:
+                    agent = build_baseline_agent(
+                        system_prompt=_REVIEW_SANDBOX_SYSTEM_PROMPT,
+                        model=resolved_model,
+                        backend=effective_backend,
+                        response_format=_ReviewResponseModel,
+                    )
+                    user_msg = _build_sandbox_user_message(
+                        diff=diff,
+                        repo=md.get("repo"),
+                        pr_url=md.get("pr_url"),
+                        pr_title=md.get("pr_title"),
+                        base_sha=base_sha,
+                    )
+                    sample_label = str(state.sample_id) if state.sample_id is not None else "anon"
+                    ls_config = build_run_config(
+                        sample_id=sample_label,
+                        dataset_version=md.get("dataset_version", "martian_2026w20"),
+                        solver_family=md.get("solver_family", "deepagents_baseline"),
+                        model=resolved_model,
+                        git_sha=md.get("git_sha"),
+                        extra_metadata={
+                            "repo": md.get("repo"),
+                            "pr_url": md.get("pr_url"),
+                        },
+                    )
                     if isinstance(effective_backend, DockerSandboxBackend):
                         state.metadata["modal_sandbox_id"] = effective_backend.id
                         state.metadata["modal_sha_fallback"] = effective_backend.used_sha_fallback

@@ -1,30 +1,24 @@
-"""SWE-QA-Pro solvers — baseline (no sandbox) + +Agent (Modal sandbox).
+"""SWE-QA-Pro solver — paper +Agent variant (Docker sandbox + read tools).
 
 SWE-QA-Pro (TIGER-Lab, arXiv 2603.16124) evaluates *repository-level* code
-understanding. The paper reports two columns per model: direct answering vs
-an agent loop with file inspection tools (Table 2). This module exposes
-both variants behind a uniform surface:
+understanding. We only run the paper's Table 2 "+Agent" column:
 
-- :func:`deepagents_baseline_swe_qa_solver` — closed-book direct answer.
-  No tools, no sandbox. Maps to the paper's "Claude Sonnet 4.5: 27.69"
-  baseline row.
-- :func:`deepagents_agent_swe_qa_solver` — paper "+Agent" variant. Each
-  sample runs in its own **Modal sandbox** with the target repo cloned at
-  the pinned commit into ``/workspace``. The agent uses deepagents'
-  native sandbox-aware tools (``ls`` / ``glob`` / ``grep`` / ``read_file``
-  / ``execute``) via :class:`DockerSandboxBackend`. Final answer is
-  schema-bound to :class:`SweQaProAnswer` so the judge always sees a
-  well-formed body + structured citations regardless of how the agent
-  formats its prose.
+- :func:`deepagents_agent_swe_qa_solver` — each sample runs in its own
+  **Docker sandbox** with the target repo cloned at the pinned commit
+  into ``/workspace``. The agent uses deepagents' native sandbox-aware
+  tools (``ls`` / ``glob`` / ``grep`` / ``read_file`` / ``execute``) via
+  :class:`DockerSandboxBackend`. Final answer is schema-bound to
+  :class:`SweQaProAnswer` so the judge always sees a well-formed body +
+  structured citations regardless of how the agent formats its prose.
 
-The agent sandbox here is fully separate from the evaluation sandbox of
-any other benchmark — there is no Docker/Inspect sandbox in this flow.
+The closed-book "Direct" baseline was removed — see ``evals/tasks/
+chat_swe_qa_pro.py`` module docstring for rationale. The agent sandbox
+here is fully separate from any Inspect-managed sandbox: agent execution
+is decoupled from the evaluation surface.
 """
 
 from __future__ import annotations
 
-import re
-import textwrap
 from typing import Any
 
 from evals.common.deepagents_baseline import (
@@ -32,31 +26,11 @@ from evals.common.deepagents_baseline import (
     build_run_config,
     resolve_model,
 )
-from evals.common.predictions import SweQaProAnswer, SweQaProCitation
+from evals.common.predictions import SweQaProAnswer
+from evals.common.usage import aggregate_provider_usage
 from evals.sandboxes import DockerSandboxBackend, RepoSpec
 
 _DEFAULT_FALLBACK = "anthropic:claude-sonnet-4-6"
-
-_BASELINE_SYSTEM_PROMPT = textwrap.dedent(
-    """\
-    You are an expert software engineer answering repository-level questions
-    about a specific open-source codebase. The user will give you a question
-    and identify the repository at a specific commit; answer as faithfully
-    as possible from your knowledge of that repository.
-
-    Answer requirements:
-      - Cite concrete file paths (e.g. ``src/foo/bar.py``) when discussing
-        specific code. Include line numbers where you have high confidence.
-      - Prefer specificity over hedging: name classes, functions, decorators,
-        config keys, CLI flags rather than describing them abstractly.
-      - If you genuinely do not know, say so briefly; do not fabricate file
-        paths or symbols. Hallucinated citations are scored harshly.
-      - Structure: one short overview paragraph, then a bulleted list of the
-        concrete components / files involved. No markdown headings.
-
-    Do NOT include chain-of-thought. The grader scores only the final answer.
-    """
-)
 
 
 # ─── Verbatim Appendix D — "Prompt Template for Generating Answer" ─────────
@@ -92,20 +66,19 @@ You are provided with function signatures within <tools></tools> XML tags:
 {tools}
 </tools>
 OUTPUT PROTOCOL (STRICT)
-You MUST follow this output structure at each assitant turn:
+You MUST follow this output structure at each assistant turn:
 1. Reasoning
 * Before any tool call, output only your step by step planning explanation
 2. Final Answer
-* Output **exactly one** block in this format without any tool calls:
-<finish>
-{Final answer's content}
-</finish>
-Rules for '<finish>' block:
-* Must appear exactly once.
-* Must contain only the final answer's content.
-* NO code blocks or copied code such as "'python ...''.
-* Cite evidence only using file paths relative to repo_path, in the format <relative_path>: line <start>-<end> (do not use absolute paths) e.g. responses/init.py: line 1-10.
-Any violation of this protocol makes the answer invalid.
+* When ready to finish, do NOT call any more tools — instead emit your
+  final answer using the structured response binding. The harness will
+  ask you to fill the ``SweQaProAnswer`` schema with two fields:
+    - ``answer``: the natural-language answer body. NO copied code blocks.
+    - ``citations``: list of evidence objects, each
+        ``{relative_path: str, line_start: int, line_end: int}``,
+      using paths relative to ``repo_path`` (NOT absolute). Inclusive
+      1-indexed line numbers.
+Any non-structured final reply violates this protocol.
 The working directory (where the code is executed) is /data/songcheng/SWE-QA-Pro-dev/eval. Now the code repo at repopath. Please use absolute paths in all tools."""
 
 SWE_QA_PRO_PAPER_AGENT_USER_TEMPLATE: str = """Repository Path: {repo_path}
@@ -118,152 +91,22 @@ Instructions:
 2) Search for relevant files and symbols
 3) Examine specific implementations
 4) Cross-validate your findings
-5) Provide a complete answer with evidence inside a <finish> block"""
+5) When done investigating, emit your final answer via the structured
+   ``SweQaProAnswer`` response (answer + citations), not as free text."""
 
 # ─── End verbatim block ───────────────────────────────────────────────────
 
 
-_FINISH_RE = re.compile(r"<finish>(.*?)</finish>", re.DOTALL)
-_CITATION_RE = re.compile(
-    r"(?P<path>[\w./\-]+):\s*line\s*(?P<start>\d+)-(?P<end>\d+)",
-    re.IGNORECASE,
-)
+# Usage aggregation lives in evals.common.usage — sums across all AI
+# messages, matching LangSmith's trace-side aggregation.
 
 
-def _extract_text(message: Any) -> str:
-    text = message.content if hasattr(message, "content") else str(message)
-    if isinstance(text, list):
-        text = "\n".join(b.get("text", "") for b in text if isinstance(b, dict))
-    return str(text)
+# ─── +Agent: Modal sandbox with repo cloned at commit ──────────────────────
+#
+# Removed the closed-book ("Direct" column in SWE-QA-Pro Table 2) baseline
+# solver — we only run the +Agent variant. The agent inspects the actual
+# repo at the pinned commit via DockerSandboxBackend's read-only tools.
 
-
-def _extract_finish_block(text: str) -> str:
-    """Pull the answer out of ``<finish>...</finish>``.
-
-    Per Appendix D the agent MUST end with one ``<finish>`` block; we take
-    the last one as conservative fallback (some models emit early drafts).
-    If absent, return the raw text so the judge still has something to
-    score — the protocol violation will surface in the score itself.
-    """
-    matches = _FINISH_RE.findall(text)
-    if not matches:
-        return text.strip()
-    return matches[-1].strip()
-
-
-def _parse_citations(text: str) -> list[dict[str, Any]]:
-    """Parse ``<relative_path>: line <s>-<e>`` references out of ``text``.
-
-    Best-effort: we only return citations that look syntactically valid.
-    The judge does not consume this — it's our offline quality signal
-    (citation-rate, hallucinated-path-rate).
-    """
-    citations: list[dict[str, Any]] = []
-    seen: set[tuple[str, int, int]] = set()
-    for m in _CITATION_RE.finditer(text):
-        start = int(m.group("start"))
-        end = int(m.group("end"))
-        if end < start:
-            continue
-        key = (m.group("path"), start, end)
-        if key in seen:
-            continue
-        seen.add(key)
-        citations.append({"relative_path": m.group("path"), "line_start": start, "line_end": end})
-    return citations
-
-
-# ─── Baseline: no tools, no sandbox ────────────────────────────────────────
-
-
-async def _invoke_baseline_agent(
-    *,
-    question: str,
-    repo: str,
-    commit_id: str,
-    model: str,
-) -> dict[str, Any]:
-    """Run the closed-book deepagents call. Returns text + usage + run_id."""
-    from langsmith.run_helpers import get_current_run_tree
-
-    agent = build_baseline_agent(
-        model=model,
-        tools=[],
-        system_prompt=_BASELINE_SYSTEM_PROMPT,
-    )
-    header = f"Repository: {repo}\nCommit: {commit_id}\n\n" if repo else ""
-    user_msg = f"{header}Question: {question}"
-    result = await agent.ainvoke({"messages": [{"role": "user", "content": user_msg}]})
-    last = result["messages"][-1]
-    text = _extract_text(last)
-    usage = getattr(last, "usage_metadata", None)
-    run = get_current_run_tree()
-    return {
-        "text": text,
-        "usage": dict(usage) if isinstance(usage, dict) else None,
-        "langsmith_run_id": str(run.id) if run is not None else None,
-    }
-
-
-def deepagents_baseline_swe_qa_solver(*, model: str | None = None):  # type: ignore[no-untyped-def]
-    """Inspect ``@solver`` — deepagents closed-book direct-answer baseline.
-
-    Wraps each sample in a named LangSmith ``traceable`` root span so the
-    project view shows one row per Inspect sample. No tools, no sandbox —
-    just the model and the question text.
-    """
-    from inspect_ai.solver import Generate, Solver, TaskState, solver
-    from langsmith import traceable
-
-    resolved_model = resolve_model(
-        override=model,
-        fallback=_DEFAULT_FALLBACK,
-    )
-
-    @solver
-    def _solver() -> Solver:
-        async def _run(state: TaskState, _generate: Generate) -> TaskState:
-            md = state.metadata or {}
-            sample_id = str(state.sample_id) if state.sample_id is not None else ""
-            repo = str(md.get("repo", ""))
-            commit_id = str(md.get("commit_id", ""))
-            dataset_version = str(md.get("dataset_version", "chat_swe_qa_pro"))
-            traced = traceable(
-                name="chat_swe_qa_pro_baseline.sample",
-                run_type="chain",
-                tags=["chat_swe_qa_pro", "deepagents_baseline", "direct_answer"],
-                metadata={
-                    "sample_id": sample_id,
-                    "repo": repo,
-                    "commit_id": commit_id,
-                    "qa_class": str(md.get("qa_class", "")),
-                    "qa_subclass": str(md.get("qa_subclass", "")),
-                    "cluster_id": str(md.get("cluster_id", "")),
-                    "model_id": resolved_model,
-                    "dataset_version": dataset_version,
-                    "dataset_sha256": str(md.get("dataset_sha256", "")),
-                },
-            )(_invoke_baseline_agent)
-            out = await traced(
-                question=state.input_text,
-                repo=repo,
-                commit_id=commit_id,
-                model=resolved_model,
-            )
-
-            if out["usage"] is not None:
-                state.metadata["provider_usage"] = out["usage"]
-            if out["langsmith_run_id"]:
-                state.metadata["langsmith_run_id"] = out["langsmith_run_id"]
-            state.output.completion = out["text"]
-            return state
-
-        return _run
-
-    return _solver()
-
-
-# ─── +Agent variant: Modal sandbox with repo cloned at commit ──────────────
 
 _AGENT_REPO_PATH = "/workspace"
 
@@ -277,11 +120,17 @@ async def _invoke_agent_with_modal(
     model: str,
     ls_config: Any,
 ) -> dict[str, Any]:
-    """Run the +Agent flow: spin up Modal, run deepagents, capture answer.
+    """Run the +Agent flow: spin up the sandbox, drive deepagents, return the
+    structured answer.
 
-    The agent's response is parsed for the Appendix D ``<finish>`` block,
-    repackaged into a :class:`SweQaProAnswer`, and returned alongside
-    LangSmith trace metadata for the surrounding solver.
+    The agent is built with ``response_format=SweQaProAnswer`` so LangChain
+    binds a structured-output strategy on the terminal step. The compiled
+    graph then surfaces a parsed :class:`SweQaProAnswer` on
+    ``result["structured_response"]`` — no more regex extraction of a
+    ``<finish>`` block. If for any reason the model fails to produce a
+    parseable structured response (older provider, network glitch), we
+    fall back to the final AI message text so the judge still sees
+    *something* and can score a protocol violation.
     """
     from langsmith.run_helpers import get_current_run_tree
 
@@ -293,6 +142,7 @@ async def _invoke_agent_with_modal(
             system_prompt=SWE_QA_PRO_PAPER_AGENT_SYSTEM,
             model=model,
             backend=backend,
+            response_format=SweQaProAnswer,
         )
         user_msg = SWE_QA_PRO_PAPER_AGENT_USER_TEMPLATE.format(
             repo_path=repo_path,
@@ -302,20 +152,43 @@ async def _invoke_agent_with_modal(
             {"messages": [{"role": "user", "content": user_msg}]},
             config=ls_config,
         )
-        last = result["messages"][-1]
-        raw = _extract_text(last)
-        answer_body = _extract_finish_block(raw)
-        usage = getattr(last, "usage_metadata", None)
+
+        structured_raw = result.get("structured_response")
+        if isinstance(structured_raw, SweQaProAnswer):
+            structured = structured_raw
+        elif isinstance(structured_raw, dict):
+            # langchain provider strategies sometimes leave us a dict.
+            structured = SweQaProAnswer.model_validate(structured_raw)
+        else:
+            # Fallback: no structured response (protocol violation). Pass
+            # the last AI message text through so the judge can score it
+            # and the failure is visible on the dashboard.
+            messages = list(result.get("messages") or [])
+            tail_text = ""
+            for message in reversed(messages):
+                content = getattr(message, "content", None)
+                if isinstance(content, str) and content.strip():
+                    tail_text = content
+                    break
+                if isinstance(content, list):
+                    parts = [
+                        block.get("text", "")
+                        for block in content
+                        if isinstance(block, dict) and block.get("text")
+                    ]
+                    joined = "\n".join(parts).strip()
+                    if joined:
+                        tail_text = joined
+                        break
+            structured = SweQaProAnswer(answer=tail_text, citations=[])
+
+        messages = list(result.get("messages") or [])
+        usage = aggregate_provider_usage(messages)
         run = get_current_run_tree()
-        structured = SweQaProAnswer(
-            answer=answer_body,
-            citations=[SweQaProCitation(**c) for c in _parse_citations(answer_body)],
-        )
         return {
-            "text": answer_body,
-            "raw_text": raw,
+            "text": structured.answer,
             "structured": structured.model_dump(),
-            "usage": dict(usage) if isinstance(usage, dict) else None,
+            "usage": usage,
             "langsmith_run_id": str(run.id) if run is not None else None,
             "modal_sandbox_id": backend.id,
         }
@@ -403,7 +276,6 @@ def deepagents_agent_swe_qa_solver(*, model: str | None = None):  # type: ignore
                 state.metadata["langsmith_run_id"] = out["langsmith_run_id"]
             if out.get("modal_sandbox_id"):
                 state.metadata["modal_sandbox_id"] = out["modal_sandbox_id"]
-            state.metadata["agent_raw_output"] = out["raw_text"]
             state.metadata["prediction"] = out["structured"]
             state.output.completion = out["text"]
             return state
