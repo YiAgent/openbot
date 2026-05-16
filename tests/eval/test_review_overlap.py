@@ -112,22 +112,37 @@ def test_greedy_match_consumes_golden_at_most_once() -> None:
     assert report.unmatched_candidate == [1]
 
 
-def test_judge_is_called_through_locked_martian_model() -> None:
-    """Judge must run through the locked Martian-CRB model — wire test.
+def test_judge_is_called_through_locked_martian_model(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Judge must run through the resolver-driven model — wire test.
 
-    Asserts ``evals.scorers.review_judge.MARTIAN_JUDGE_MODEL_ID`` is the
-    source of truth for the model passed into the overlap algorithm.
+    Asserts ``evals.scorers.review_judge.MARTIAN_JUDGE_MODEL_ID`` reflects
+    whatever the shared judge-model resolver chose, so callers downstream
+    (overlap scorer, task metadata, LangSmith experiment record) all see
+    the same id. Pre-v3 this pinned the literal ``claude-opus-4-5``; v3
+    moved the id to :func:`evals.common.judge_client.resolve_judge_model`
+    so per-gateway overrides work without touching code.
     """
-    from evals.scorers.review_judge import MARTIAN_JUDGE_MODEL_ID
+    import importlib
 
-    seen_models: list[str] = []
+    from evals.common import judge_client
+    from evals.scorers import review_judge
 
-    def judge_fn(golden: Finding, candidate: Finding) -> JudgeVerdict:
-        seen_models.append(MARTIAN_JUDGE_MODEL_ID)
-        return _verdict(match=False)
+    monkeypatch.setenv("OPENBOT_REVIEW_JUDGE_MODEL_ID", "anthropic:test-judge-model")
+    importlib.reload(review_judge)
+    try:
+        seen_models: list[str] = []
 
-    compute_review_overlap([_f("a.py", 1, "g")], [_f("a.py", 1, "c")], judge_fn)
-    assert seen_models == ["claude-opus-4-5"]
+        def judge_fn(golden: Finding, candidate: Finding) -> JudgeVerdict:
+            seen_models.append(review_judge.MARTIAN_JUDGE_MODEL_ID)
+            return _verdict(match=False)
+
+        compute_review_overlap([_f("a.py", 1, "g")], [_f("a.py", 1, "c")], judge_fn)
+        assert seen_models == ["anthropic:test-judge-model"]
+    finally:
+        # Restore module-level constant for downstream tests in this session.
+        monkeypatch.delenv("OPENBOT_REVIEW_JUDGE_MODEL_ID", raising=False)
+        importlib.reload(judge_client)
+        importlib.reload(review_judge)
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
