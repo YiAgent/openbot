@@ -9,16 +9,20 @@ open-swe's reviewer baseline.
 Locked surface (do not edit without bumping `MARTIAN_JUDGE_VERSION` and
 recording a `docs/eval/judge-version-log.md` entry):
 
-  - Model:        `claude-opus-4-5`  (martian's evaluator model)
   - Temperature:  0.0
-  - max_tokens:   512
-  - System msg:   "You are a precise code review evaluator. Always respond with valid JSON."
-  - User prompt:  byte-identical to martian's `JUDGE_PROMPT`
+  - max_tokens:   4096
+  - Prompt:       official MARTIAN_JUDGE_PROMPT as a single user message
 
-Unlike `evals.common.judges.Judge`, this judge is *not* hash-pinned against
-PRD §17 #5 because it intentionally diverges from the OpenBot default judge
-(claude-opus-4-7) to stay byte-identical with martian/open-swe. The judge
-is namespaced (`martian_*`) to make the divergence loud at call sites.
+Model id (formerly hardcoded to ``claude-opus-4-5``) is now resolved via
+:func:`evals.common.judge_client.resolve_judge_model`, which reads
+``OPENBOT_REVIEW_JUDGE_MODEL_ID`` first, then the shared
+``OPENBOT_JUDGE_MODEL_ID``, then a fallback. This is required because the
+configured Anthropic-compatible gateway (``ANTHROPIC_BASE_URL``) routinely
+ships a curated subset of models — pinning a model the gateway doesn't
+expose makes every dev / smoke run crash with 400. The byte-identical
+prompt + temperature + max_tokens are still the load-bearing parts of the
+martian-CRB contract; the model id is recorded in the experiment
+metadata so historical runs are still reproducible.
 
 Upstream source: https://github.com/withmartian/code-review-benchmark
 (MIT licensed; commit 807d469 pinned by
@@ -27,21 +31,32 @@ Upstream source: https://github.com/withmartian/code-review-benchmark
 
 from __future__ import annotations
 
-import json
+import logging
 from typing import Any
 
-from langchain_anthropic import ChatAnthropic
+from pydantic import BaseModel, Field
 
-MARTIAN_JUDGE_VERSION: int = 1
-MARTIAN_JUDGE_MODEL_ID: str = "claude-opus-4-5"
-MARTIAN_JUDGE_TEMPERATURE: float = 0.0
-MARTIAN_JUDGE_MAX_TOKENS: int = 512
+from evals.common.judge_client import get_judge_client, resolve_judge_model
 
-MARTIAN_JUDGE_SYSTEM: str = (
-    "You are a precise code review evaluator. Always respond with valid JSON."
+logger = logging.getLogger(__name__)
+
+# v3: model id moved from a hardcoded ``claude-opus-4-5`` constant to the
+# shared :func:`evals.common.judge_client.resolve_judge_model` resolver, so
+# every judge in the repo follows ``OPENBOT_JUDGE_MODEL_ID`` (with per-judge
+# override via ``OPENBOT_REVIEW_JUDGE_MODEL_ID``). v2 had switched from
+# regex JSON extraction to langchain ``with_structured_output``; the bump
+# to v3 is purely the model-id source-of-truth change. Prompt body,
+# temperature, max_tokens, and system message remain byte-identical to
+# martian's locked surface.
+MARTIAN_JUDGE_VERSION: int = 3
+MARTIAN_JUDGE_MODEL_ID: str = resolve_judge_model(
+    per_judge_env="OPENBOT_REVIEW_JUDGE_MODEL_ID",
 )
+MARTIAN_JUDGE_TEMPERATURE: float = 0.0
+MARTIAN_JUDGE_MAX_TOKENS: int = 4096
 
-MARTIAN_JUDGE_PROMPT: str = """You are evaluating AI code review tools.
+MARTIAN_JUDGE_PROMPT: str = """You are a precise code review evaluator. Always respond with valid JSON.
+You are evaluating AI code review tools.
 Determine if the candidate issue matches the golden (expected) comment.
 
 Golden Comment (the issue we're looking for):
@@ -59,19 +74,27 @@ Respond with ONLY a JSON object:
 {{"reasoning": "brief explanation", "match": true/false, "confidence": 0.0-1.0}}"""
 
 
-_client: ChatAnthropic | None = None
+class MartianVerdict(BaseModel):
+    """Schema-enforced judge reply.
+
+    Field names mirror martian's published ``step3_judge_comments.py`` exactly
+    (``reasoning`` rather than ``rationale``) so the byte-identical prompt
+    contract from the module docstring stays intact. The OpenBot-shaped
+    rename to ``rationale`` happens in :func:`judge_verdict` below.
+    """
+
+    reasoning: str = Field(..., description="One-sentence justification for the verdict.")
+    match: bool = Field(..., description="True iff candidate identifies the same issue.")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Calibrated [0,1] confidence.")
 
 
-def _get_client() -> ChatAnthropic:
-    """Lazy singleton — avoids constructing a client at import time."""
-    global _client
-    if _client is None:
-        _client = ChatAnthropic(
-            model=MARTIAN_JUDGE_MODEL_ID,
-            temperature=MARTIAN_JUDGE_TEMPERATURE,
-            max_tokens=MARTIAN_JUDGE_MAX_TOKENS,
-        )
-    return _client
+def _get_client():  # type: ignore[no-untyped-def]
+    """Shared ``ChatAnthropic`` via :func:`evals.common.judge_client.get_judge_client`."""
+    return get_judge_client(
+        model_id=MARTIAN_JUDGE_MODEL_ID,
+        temperature=MARTIAN_JUDGE_TEMPERATURE,
+        max_tokens=MARTIAN_JUDGE_MAX_TOKENS,
+    )
 
 
 def format_golden(golden: dict[str, Any]) -> str:
@@ -104,35 +127,31 @@ def format_candidate(candidate: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def _parse_judge_reply(raw: str) -> dict[str, Any]:
-    """Pull the JSON object out of the model reply; tolerate code fences."""
-    start, end = raw.find("{"), raw.rfind("}")
-    if start == -1 or end == -1:
-        return {"match": False, "confidence": 0.0, "reasoning": f"unparseable: {raw[:200]}"}
-    try:
-        return json.loads(raw[start : end + 1])
-    except json.JSONDecodeError:
-        return {"match": False, "confidence": 0.0, "reasoning": f"unparseable: {raw[:200]}"}
-
-
 def judge_pair(golden: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     """Run one (golden, candidate) match. Returns the raw judge JSON.
 
     Result shape (per martian step3_judge_comments.py):
       {"reasoning": str, "match": bool, "confidence": float}
+
+    Structured-output strategy: bind :class:`MartianVerdict` via langchain's
+    ``with_structured_output(method="json_schema")`` so the provider either
+    emits a schema-valid object or langchain raises.
     """
     prompt = MARTIAN_JUDGE_PROMPT.format(
         golden_comment=format_golden(golden),
         candidate=format_candidate(candidate),
     )
-    msg = _get_client().invoke(
-        [
-            {"role": "system", "content": MARTIAN_JUDGE_SYSTEM},
-            {"role": "user", "content": prompt},
-        ]
+    messages = [
+        {"role": "user", "content": prompt},
+    ]
+    verdict = (
+        _get_client().with_structured_output(MartianVerdict, method="json_schema").invoke(messages)
     )
-    raw = msg.content if isinstance(msg.content, str) else str(msg.content)
-    return _parse_judge_reply(raw)
+    return {
+        "reasoning": verdict.reasoning,
+        "match": bool(verdict.match),
+        "confidence": float(verdict.confidence),
+    }
 
 
 def judge_verdict(golden: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
