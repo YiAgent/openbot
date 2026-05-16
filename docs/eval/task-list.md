@@ -197,11 +197,11 @@
 - **Effort**: M
 - **PRD ref**: §10.3 · §17 #5
 
-### E1-T06 · Review solver（真实 workflow 入口）
+### E1-T06 · Review solver provider（baseline + future prod contract）
 - **Stream**: SOL
-- **Goal**: 建 `evals/solvers/openbot_review.py`，调真实 `openbot.workflows.review.run(...)`
-- **Deliverables**: `@solver def openbot_review_solver()` —— 把 PR diff 喂给真实 review workflow，返回结构化 findings
-- **AC**: 集成测试用 fake PR diff，确认调到真实 workflow（不 mock）；输出归一化为 `{file, line, body, severity}`
+- **Goal**: 建 review solver provider 边界：先落 `deepagents_baseline`，并为未来 `openbot_prod` 保留同一 task / scorer / judge surface
+- **Deliverables**: baseline provider + solver registry contract；未来 `openbot_prod` 接入时沿同一 surface 比较
+- **AC**: `deepagents_baseline` 可跑；未来 `openbot_prod` 不得替换 baseline，而要作为第二 provider 并行存在；输出归一化为 `{file, line, body, severity}`
 - **Deps**: E1-T04, E1-T05
 - **Effort**: L
 - **PRD ref**: §4.1 强制 · §6.2
