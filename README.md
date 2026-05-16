@@ -229,6 +229,20 @@ make dev      # uvicorn with autoreload
 make hooks    # install git hooks
 ```
 
+Eval workflows intentionally live in their own Makefile:
+
+```bash
+make -C evals help          # discover eval-only targets
+make -C evals data          # safely publish the current eval datasets
+make -C evals data-refresh  # force-refresh all eval datasets
+make -C evals test          # run tests/eval only
+make -C evals smoke         # run the four implemented live smoke evals
+make -C evals check         # eval tests, then live smoke evals
+make -C evals view-open     # bundle eval logs, serve them, and open Inspect View
+```
+
+See [`evals/README.md`](./evals/README.md) for the task map, sandbox boundary, and per-surface targets.
+
 ## Contributing
 
 v0.1 implementation is in progress. Watch the repo for `CONTRIBUTING.md` arriving with the first end-to-end skeleton.

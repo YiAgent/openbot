@@ -2,7 +2,8 @@
 
 > 配套：[`openbot-eval-prd.md`](./openbot-eval-prd.md) §4
 
-每个 cell（5 业务 × 3 阶段 = 15 个 cell）的逐字段定义。PRD §2 矩阵指向这里。
+每个主 cell（4 业务 × 3 阶段 = 12 个 cell）的逐字段定义。PRD §2 矩阵指向这里。  
+`test_swt_bench_verified` 是 Fix 的辅助诊断 suite，单列说明但不增加一个新业务。
 
 ---
 
@@ -58,16 +59,18 @@
 
 | 字段 | 值 |
 |---|---|
-| 数据源 | `github.com/withmartian/code-review-benchmark` offline split |
+| 数据源 | `github.com/withmartian/code-review-benchmark` offline split → LangSmith mirror `martian_2026w20` |
 | 规模 | 50 PR，约 300 条 golden comments，带 severity（Low / Med / High / Critical） |
 | 输入 | `{pr_diff, base_branch, repo_context}` |
 | Grader | LLM-judge（Martian 仓库自带），bot comment 与 golden comment semantic match → P / R |
-| 指标 | `precision @ recall ≥ 0.5`（对齐他们 leaderboard） |
+| 指标 | `mean_f1`（同时保留 per-sample precision / recall / f1 metadata） |
 | Floor | **0.55** |
-| Inspect AI | 包一层 Martian judge 成 Inspect Scorer；dataset 用他们的 JSON |
-| 准备 | 1 天 wrap，验证跑出来的数字与他们 leaderboard baseline 接近 |
+| Inspect AI | `review_martian_baseline_crb`：LangSmith dataset → Inspect `MemoryDataset`；Martian judge 包成 task-local Inspect Scorer |
+| 当前 solver | `deepagents_baseline` review solver（closed-form，无 sandbox） |
+| 准备 | LangSmith mirror 已接；后续 production provider 只换 solver surface |
 | 成本 | ≈ $5 / run |
 | 触发 | 立即；regression + release |
+| 本地入口 | `make -C evals data-review` · `make -C evals smoke-review` |
 
 ### 2.2 `review_internal_v1` · v0.2 内部 curated
 
@@ -107,16 +110,37 @@
 | 数据源 | SWE-bench Verified 500 题，HuggingFace `princeton-nlp/SWE-bench_Verified` |
 | 规模 | 500（抽 100 跑日常，500 跑 release） |
 | 输入 | `{issue_text, repo_at_commit}` |
-| 沙箱 | **Modal**（与生产同栈） |
-| Grader | 跑仓库已有 test，patch 后 pass → 1，fail → 0 |
+| 沙箱 | **Inspect Docker**（`inspect_evals.swe_bench` / Epoch images） |
+| Grader | upstream `swe_bench_scorer()`；scorer 从 sandbox `git diff` 取 patch 后按 SWE-bench 规则验收 |
 | 指标 | `pass@1` |
 | Floor | **0.40** |
-| Inspect AI | `inspect_evals.swe_bench` 官方实现 |
-| 准备 | Modal 沙箱接 Inspect（dev plan 已设计），半天打通 |
+| Inspect AI | `fix_swe_bench_verified_deepagents`：复用 `inspect_evals.swe_bench` 的 dataset / sandbox / scorer surface，solver 换成 DeepAgents baseline |
+| 当前 solver | `deepagents_baseline` + `InspectSandboxBackend` |
+| LangSmith | runtime 仍读 HF；LangSmith `fix_swe_bench_verified` 只做 Experiment mirror |
+| 准备 | 已接通 baseline；未来 internal / production-like eval 再切真实 OpenBot workflow + Modal |
 | 成本 | ≈ $30-50 / 500-task run |
 | 触发 | 立即；weekly（100）+ monthly / release（500） |
+| 本地入口 | `make -C evals data-fix` · `make -C evals smoke-fix` |
 
-### 3.2 `fix_internal_v1` · v0.2 内部 curated
+### 3.2 `test_swt_bench_verified` · v0.1 外部辅助诊断
+
+| 字段 | 值 |
+|---|---|
+| 数据源 | SWT-Bench Verified 433 题，HuggingFace `eth-sri/SWT-bench_Verified_bm25_27k_zsb` |
+| 规模 | 433（抽 100 跑日常，433 跑 release baseline） |
+| 输入 | `{issue_text, repo_at_commit}` |
+| 沙箱 | **Inspect Docker**（复用 SWE-bench instance id / Epoch images） |
+| Grader | 自定义 `swt_bench_scorer()`：只允许 test-only diff；buggy code 上 F2P 必须 fail/error，应用 gold code patch 后 F2P + P2P 必须 pass |
+| 指标 | `swt_bench_success` |
+| Floor | **baseline-only**（v0.1 先积诊断信号，不单独 gate） |
+| Inspect AI | 复用 `inspect_evals.swe_bench` 的 task / sandbox plumbing；保留 upstream react baseline 与 DeepAgents baseline 两个 task entry |
+| 当前 solver | `inspect_evals` default react · `deepagents_baseline` + `InspectSandboxBackend` |
+| LangSmith | runtime 仍读 HF；LangSmith `test_swt_bench_verified` 只做 Experiment mirror |
+| 定位 | Fix 的辅助诊断 suite，测“能否写出暴露 bug 的 regression test”，不替代 `fix_swe_bench_verified` 的产品成功指标 |
+| 触发 | 立即；weekly + release |
+| 本地入口 | `make -C evals data-test` · `make -C evals smoke-test` |
+
+### 3.3 `fix_internal_v1` · v0.2 内部 curated
 
 | 字段 | 值 |
 |---|---|
@@ -127,17 +151,17 @@
 | Grader | 沙箱重跑 bot 的 patch，跑 repo test → `pass@1`；merge 状态作辅助 weak label |
 | 指标 | `pass@1` + `merge_rate`（两个分开报，不合并） |
 | Floor | `pass@1 ≥ 0.50` |
-| Inspect AI | 复用 3.1 task framework，换 dataset |
+| Inspect AI | 复用 3.1 的 offline runner contract，但 solver 必须切真实 OpenBot workflow |
 | 准备 | bot pipeline 记录 `(issue_url, commit_sha, patch, merge_status)` 到 DB |
 | 触发 | PRD §3.1 gate trip 后；regression + release |
 
-### 3.3 `fix_swe_bench_live` · v0.3 外部 live
+### 3.4 `fix_swe_bench_live` · v0.3 外部 live
 
 | 字段 | 值 |
 |---|---|
 | 数据源 | SWE-bench Live 每月新 50（HuggingFace `SWE-bench-Live/SWE-bench-Live`） |
 | 规模 | rolling 3 个月窗口 = 150 题 |
-| 输入 / 沙箱 / Grader | 同 3.1 |
+| 输入 / 沙箱 / Grader | 同 3.1（public benchmark 继续走 Inspect Docker） |
 | 指标 | `pass@1` 滚动 90 天 |
 | Floor | **0.35**（比 Verified 略低，新数据更难） |
 | Inspect AI | 复用 3.1 swe_bench task，只换 dataset 字段 |
@@ -152,16 +176,18 @@
 
 | 字段 | 值 |
 |---|---|
-| 数据源 | SWE-QA-Pro-Bench，HuggingFace [`TIGER-Lab/SWE-QA-Pro-Bench`](https://huggingface.co/datasets/TIGER-Lab/SWE-QA-Pro-Bench) |
-| 规模 | upstream 全量（详见 dataset card） |
+| 数据源 | SWE-QA-Pro-Bench，HuggingFace [`TIGER-Lab/SWE-QA-Pro-Bench`](https://huggingface.co/datasets/TIGER-Lab/SWE-QA-Pro-Bench) → LangSmith mirror `chat_swe_qa_pro_v1` |
+| 规模 | 260（26 个 repo × 10 个左右 QA） |
 | 输入 | `{question, repo_at_commit}` |
-| Grader | 双 LLM-judge：① `correctness` 比较答案要点 ② `groundedness` 验证引用文件路径真实存在且相关 |
-| 指标 | `correctness × groundedness`（乘积，groundedness 是 hard 0/1 mask） |
+| Grader | 论文 Appendix D 5-dim judge（correctness / completeness / relevance / clarity / reasoning） |
+| 指标 | `normalized_overall = overall_50 / 50`（metadata 保留 5 个维度原始分） |
 | Floor | **0.65** |
-| Inspect AI | 自写 task，scorer 用 `model_graded_fact` + 自定义 grounding check |
-| 准备 | 1 天接入 + 写 judge prompt + 抽 20 条人工核对 |
+| Inspect AI | `chat_swe_qa_pro_baseline`：LangSmith dataset → Inspect `MemoryDataset`；scorer = `swe_qa_pro_judge_scorer()` |
+| 当前 solver | `deepagents_baseline` direct-answer（无 tools / 无 sandbox） |
+| 准备 | 当前 baseline 已接；未来 +Agent / production provider 再补 repo-browsing tools |
 | 成本 | ≈ $10-15 / run |
 | 触发 | 立即；regression + release |
+| 本地入口 | `make -C evals data-chat` · `make -C evals smoke-chat` |
 
 ### 4.2 `chat_internal_v1` · v0.2 内部 curated
 

@@ -1,6 +1,6 @@
 # OpenBot Eval · Product Requirements Document
 
-> 版本：**2.0** · 起草日期：2026-05-15 · 状态：可执行
+> 版本：**2.1** · 起草日期：2026-05-15 · 更新日期：2026-05-16 · 状态：可执行
 > 范围：OpenBot v0.1 ~ v0.3 离线 + 在线评测体系
 > 上位：[`openbot-prd.md`](./openbot-prd.md) §8 · 子文档：[`openbot-eval-suites.md`](./openbot-eval-suites.md)（每 cell 详细字段）
 
@@ -27,7 +27,7 @@ eval 形态走三段，**共存于不同业务**（同一时间 Triage 可在 v0
 ## 目录
 
 1. [Executive Summary](#1-executive-summary)
-2. [三阶段 × 五业务矩阵](#2-三阶段--五业务矩阵)
+2. [三阶段 × 四业务矩阵](#2-三阶段--四业务矩阵)
 3. [Phase 转换 gate](#3-phase-转换-gate)
 4. [Suite 清单](#4-suite-清单)（详见 `openbot-eval-suites.md`）
 5. [Non-Functional Requirements](#5-non-functional-requirements)
@@ -50,14 +50,28 @@ eval 形态走三段，**共存于不同业务**（同一时间 Triage 可在 v0
 
 | # | 问题 | 答案 |
 |---|---|---|
-| Q1 | **测什么** | 产品输出，按 **5 业务 × 3 阶段** 矩阵（§2） |
-| Q2 | **用什么测** | Runner = Inspect AI（offline） · Trace / Online eval = LangSmith · Sandbox = Modal（内部 + Fix）+ Inspect Docker（公开非沙箱型） |
+| Q1 | **测什么** | 产品输出，按 **4 业务 × 3 阶段** 主矩阵（Safety 单列；SWT-Bench 为 Fix 辅助诊断） |
+| Q2 | **用什么测** | Runner = Inspect AI（offline） · Trace / Online eval = LangSmith · Public benchmark sandbox = Inspect Docker · Future production-like internal sandbox = Modal |
 | Q3 | **什么时候测** | Smoke · Regression · Weekly · Monthly · Release · Online 六类 trigger（§8） |
 | Q4 | **达不到分怎么办** | Soft（PR warn）/ Hard（block merge）/ Release（block release）/ Online alert 四档（§9） |
 
 ---
 
-## 2. 三阶段 × 五业务矩阵
+### 1.1 当前 v0.1 已实现基线
+
+| Surface | 当前 task entry | Runtime dataset source | Solver | Sandbox | Scorer |
+|---|---|---|---|---|---|
+| Review | `review_martian_baseline_crb` | LangSmith `martian_2026w20` | `deepagents_baseline` | none | Martian-compatible overlap scorer (`precision / recall / f1`) |
+| Fix | `fix_swe_bench_verified_deepagents` | HF `princeton-nlp/SWE-bench_Verified` via `inspect_evals.swe_bench` | `deepagents_baseline` | Inspect Docker | upstream `swe_bench_scorer` |
+| Test generation（Fix 辅助诊断） | `test_swt_bench_verified` / `test_swt_bench_verified_deepagents` | HF `eth-sri/SWT-bench_Verified_bm25_27k_zsb` via `inspect_evals.swe_bench` | upstream react / `deepagents_baseline` | Inspect Docker | custom `swt_bench_scorer` |
+| Chat | `chat_swe_qa_pro_baseline` | LangSmith `chat_swe_qa_pro_v1` | `deepagents_baseline` direct-answer | none | SWE-QA-Pro 5-dim judge |
+
+`review_martian_openbot` / `chat_swe_qa_pro_openbot` 已预留，但在真实 production workflow 落地前仍显式 `raise NotImplementedError`。  
+`test_swt_bench_verified` 是 **Fix 的辅助诊断 suite**：它测“能不能写出暴露 bug 的回归测试”，不单独算一个新业务，也不替代 `fix_swe_bench_verified` 的产品成功信号。
+
+---
+
+## 2. 三阶段 × 四业务矩阵
 
 一格一 suite，不重叠。详细字段见 [`openbot-eval-suites.md`](./openbot-eval-suites.md)。Reproducer 并入 Fix（reproducer 失败已经体现在 `fix_*` 的 `pass@1` 上，不独立报）。
 
@@ -70,6 +84,8 @@ eval 形态走三段，**共存于不同业务**（同一时间 Triage 可在 v0
 
 
 ✅ 真外部 live · ❌ 必须内部（无公开 online 替代） · ⚠️ 半外部（数据外部，curation 内部）
+
+**Fix 辅助诊断**：`test_swt_bench_verified` 与 `fix_swe_bench_verified` 共用公开 benchmark 基础设施，但测的是 regression-test generation，不纳入主矩阵的产品 cell。
 
 ---
 
@@ -112,13 +128,14 @@ Gate **单业务独立**触发。v0.2 解冻 v0.1 仍跑；v0.3 解冻 v0.2 仍�
 | `gitbugs` | v0.1 | Triage | regression + weekly | macro_f1 ≥ 0.55 |
 | `triage_internal_v1` | v0.2 | Triage | regression + weekly | macro_f1 ≥ 0.65 · override < 0.30 |
 | `triage_internal_online` | v0.3 | Triage | nightly | macro_f1_30d ≥ 0.70 · override_30d < 0.25 |
-| `review_codereviewbench` | v0.1 | Review | regression + release | P@R≥0.5 ≥ 0.55 |
+| `review_codereviewbench` | v0.1 | Review | regression + release | mean_f1 ≥ 0.55 |
 | `review_internal_v1` | v0.2 | Review | regression + release | useful_rate ≥ 0.65 |
 | `review_codereviewbench_online` | v0.3 | Review | nightly | action_rate ≥ 0.40 |
 | `fix_swe_bench_verified` | v0.1 | Fix | weekly + monthly + release | pass@1 ≥ 0.40 |
+| `test_swt_bench_verified` | v0.1 | Fix 辅助诊断 | weekly + release | baseline-only（v0.1 不单独 gate） |
 | `fix_internal_v1` | v0.2 | Fix | regression + release | pass@1 ≥ 0.50 |
 | `fix_swe_bench_live` | v0.3 | Fix | monthly | pass@1 (90d) ≥ 0.35 |
-| `chat_swe_qa_pro` | v0.1 | Chat | regression + release | corr × ground ≥ 0.65 |
+| `chat_swe_qa_pro` | v0.1 | Chat | regression + release | normalized_overall ≥ 0.65 |
 | `chat_internal_v1` | v0.2 | Chat | regression + release | correct_rate ≥ 0.70 |
 | `chat_internal_online` | v0.3 | Chat | nightly | corr_30d ≥ 0.75 · follow_up_30d < 0.40 |
 
@@ -129,8 +146,8 @@ Gate **单业务独立**触发。v0.2 解冻 v0.1 仍跑；v0.3 解冻 v0.2 仍�
 | 维度 | 要求 |
 |---|---|
 | 可复现 | 任一 run 给定 `(suite_version, dataset_version, git_sha, prompt_version, model_id, judge_model_id)` 必须能 ±2σ 内复现总分 |
-| 可观测 | 每个 sample 必须有 LangSmith trace；suite-level 必须有 cost / latency / step / retry / sandbox-restart 统计 |
-| 隔离 | 公开（非沙箱型）→ Inspect Docker；内部 + Fix → Modal。**严禁混用** |
+| 可观测 | 每个 sample 必须有 LangSmith trace 或显式记录 `trace_unavailable`；suite-level 必须有 cost / latency / step / retry / sandbox-restart 统计 |
+| 隔离 | 公开 code-editing benchmark（SWE / SWT）→ Inspect Docker；未来 internal / production-like eval → Modal；closed-form review / chat → none。**不得把 benchmark sandbox 误写成生产 sandbox** |
 | 成本可控 | 每个 suite run 必须声明 budget；超限自动 abort + audit log（§11） |
 | 延迟 | smoke ≤ 2 min · regression ≤ 30 min · weekly ≤ 6 h · monthly ≤ 24 h · release ≤ 24 h · online refresh ≤ 1 d；超时自动 alert |
 | 可治理 | judge / scorer / dataset 任一变更 → 必须重跑 baseline 并 PR review（§10.3） |
@@ -141,47 +158,94 @@ Gate **单业务独立**触发。v0.2 解冻 v0.1 仍跑；v0.3 解冻 v0.2 仍�
 
 ## 6. 架构与组件边界
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Inspect AI (UNIQUE offline runner)                         │
-│    tasks/ solvers/ scorers/ datasets/                       │
-└──────────┬────────────────────────────────────┬─────────────┘
-           │ internal + fix                     │ public (non-sandbox)
-           ▼                                    ▼
-┌──────────────────────────┐         ┌──────────────────────────┐
-│ Modal sandbox            │         │ Inspect Docker sandbox   │
-│ via openbot.workflows.*  │         │ via inspect_evals/* / wrap│
-└──────────┬───────────────┘         └──────────┬───────────────┘
-           ▼                                    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  LangSmith (UNIQUE observability + online eval)             │
-│    trace · score · cost · dataset · experiment · annotation │
-│    online eval (v0.3 streaming surfaces)                    │
-└──────────┬──────────────────────────────────────────────────┘
-           ▼
-┌─────────────────────────────────────────────────────────────┐
-│  GitHub Actions (scheduler only — not a runner)             │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph PublicStatic["v0.1 public static"]
+        LSRuntime["LangSmith runtime datasets\nreview / chat"]
+        HFUpstream["HF / inspect_evals runtime datasets\nfix / test"]
+    end
+
+    subgraph Inspect["Inspect AI offline runner"]
+        ClosedForm["review / chat Tasks"]
+        Coding["fix / test Tasks"]
+    end
+
+    subgraph Solver["Current solver layer"]
+        DeepClosed["DeepAgents baseline\nclosed-form"]
+        DeepCoding["DeepAgents baseline\nvia InspectSandboxBackend"]
+        React["inspect_evals default react\n(test only)"]
+    end
+
+    subgraph Runtime["Execution runtime"]
+        NoneBox["none"]
+        InspectDocker["Inspect Docker sandbox\nper sample"]
+        Modal["Modal sandbox\nfuture internal / production-like"]
+    end
+
+    subgraph Score["Scoring"]
+        ReviewScore["review overlap / F1"]
+        ChatScore["SWE-QA-Pro 5-dim judge"]
+        FixScore["upstream SWE-bench scorer"]
+        TestScore["custom SWT-Bench scorer"]
+    end
+
+    subgraph LS["LangSmith"]
+        Traces["traces / feedback"]
+        Experiments["experiment projection"]
+    end
+
+    LSRuntime --> ClosedForm --> DeepClosed --> NoneBox
+    NoneBox --> ReviewScore
+    NoneBox --> ChatScore
+
+    HFUpstream --> Coding
+    Coding --> DeepCoding --> InspectDocker
+    Coding --> React --> InspectDocker
+    InspectDocker --> FixScore
+    InspectDocker --> TestScore
+
+    DeepClosed --> Traces
+    DeepCoding --> Traces
+    FixScore --> Experiments
+    TestScore --> Experiments
+
+    Modal -. future internal evals .-> Score
 ```
 
 ### 6.1 目录结构（PRD 硬约束）
 
-```
+```text
 evals/
-├── common/{config,artifacts,langsmith,metadata,judges,thresholds}.py
-├── solvers/{openbot_review,openbot_triage,openbot_fix,openbot_chat}.py
-├── scorers/{review_overlap,triage_labels,patch_tests,chat_grounded,trajectory}.py
-├── datasets/{*.jsonl, manifests/*.yaml}
+├── common/
+│   ├── datasets.py
+│   ├── deepagents_baseline.py
+│   ├── langsmith.py
+│   └── langsmith_experiments.py
+├── solvers/
+│   ├── review.py
+│   ├── swe_fix.py
+│   ├── swe_test.py
+│   ├── swe_qa.py
+│   └── inspect_sandbox_backend.py
+├── scorers/
+│   ├── review_overlap.py
+│   ├── review_judge.py
+│   ├── swt_bench_scorer.py
+│   ├── swe_qa_judge.py
+│   └── swe_qa_pro.py
 ├── tasks/
-│   ├── triage_oss_seed.py / triage_internal_v1.py
-│   ├── review_codereviewbench.py / review_internal_v1.py
-│   ├── fix_swe_bench_verified.py / fix_internal_v1.py / fix_swe_bench_live.py
-│   ├── chat_swe_qa_pro.py / chat_internal_v1.py
-├── online/{triage_online.py, chat_online.py, review_action_rate.py}
-└── scripts/{build_*,gate_status,export_run_summary,compare_runs}.py
+│   ├── review_martian.py
+│   ├── fix_swe_bench_verified.py
+│   ├── test_swt_bench_verified.py
+│   └── chat_swe_qa_pro.py
+└── scripts/
+    ├── build_review_martian_dataset.py
+    ├── build_swe_bench_verified_dataset.py
+    ├── build_swt_bench_verified_dataset.py
+    └── build_chat_swe_qa_pro_dataset.py
 ```
 
-PR 改 `evals/tasks/` · `scorers/` · `datasets/` · `solvers/` 任一文件，**强制**触发对应 regression suite（§8.2）。
+PR 改 `evals/tasks/` · `evals/scorers/` · `evals/solvers/` · `evals/common/datasets.py` 任一文件，**强制**触发对应 regression suite（§8.2）。
 
 ### 6.2 责任边界
 
@@ -189,19 +253,21 @@ PR 改 `evals/tasks/` · `scorers/` · `datasets/` · `solvers/` 任一文件，
 |---|---|---|
 | Inspect AI | 组织 offline run · 调度 sample · 调 solver · 调 scorer | trace 存储 · streaming online · 长期实验对比 |
 | LangSmith | trace · dataset · experiment · cost · annotation · **online eval** | 跑 offline sample · 跑 sandbox · 触发 schedule |
-| Modal sandbox | 真实 OpenBot workflow（内部 + Fix 公开 suite） | 非沙箱型公开 benchmark |
-| Inspect Docker sandbox | 非沙箱型公开 benchmark（Triage seed / Chat） | 接通真实 OpenBot workflow |
+| DeepAgents | 当前 baseline solver runtime；把任务 prompt / tool use / agent loop 跑起来 | 管理 benchmark 容器生命周期 · 定义 scorer |
+| Inspect Docker sandbox | 当前 public code-editing benchmark（SWE / SWT）执行环境 | 代表真实生产 sandbox |
+| Modal sandbox | 未来 internal / production-like eval 的真实 OpenBot workflow 执行环境 | 承担 public benchmark 兼容层 |
 | GitHub Actions | trigger | eval 语义 / scoring |
 | LiteLLM | model routing + fallback | judge 选型 |
 
 ### 6.3 无 upstream Inspect Task 的公开 benchmark wrap 规范
 
-CodeReviewBench / SWE-QA-Pro / SWE-bench Live 在 `inspect_evals` 没有 upstream。强制 wrap 方式：
+无 upstream Inspect Task 的公开 benchmark，按两类处理：
 
-1. `evals/tasks/<name>.py` 写一个 Inspect `Task`，dataset 通过 `datasets.load_dataset(...)` 或 git submodule 加载，**不复制原始数据**。
-2. Solver = `openbot.workflows.<surface>.run(...)` 真实入口。
-3. Scorer 优先复用 upstream（如 Martian judge），不行才包成自定义 Inspect Scorer。
-4. Manifest 记录：`upstream_commit` / `upstream_url` / `last_synced_at`。
+1. **runtime 走 LangSmith mirror**：如 Martian review / SWE-QA-Pro。build script 固定 upstream revision 后发布到 LangSmith，Task 通过 `evals.common.datasets.langsmith_dataset(...)` 读取。
+2. **runtime 继续走 upstream，LangSmith 只做 mirror**：如 SWE-bench Verified / SWT-Bench Verified。Task 仍由 `inspect_evals.swe_bench.swe_bench(...)` 读取 upstream dataset；LangSmith mirror 仅用于 Experiment row 关联。
+3. Solver 当前允许 baseline provider；当 `openbot.workflows.<surface>.run(...)` 落地后，production provider 必须走真实 workflow。
+4. Scorer 优先复用 upstream；没有 upstream 时才包成自定义 Inspect Scorer。
+5. build script / metadata 必须记录 `upstream_commit` 或 `hf_revision`，以及 mirror dataset 名称。
 
 ---
 
@@ -209,40 +275,41 @@ CodeReviewBench / SWE-QA-Pro / SWE-bench Live 在 `inspect_evals` 没有 upstrea
 
 ### 7.1 通用约束
 
-1. **版本化**——文件名带 `_v{N}`；引入 v{N+1} 时**不删** v{N}。
-2. **冻结输入**——internal jsonl 写入后 SHA256 入 manifest；后续修改必须升版号。
-3. **附 manifest**——每个 dataset 必须有同名 `manifests/<name>.yaml`（§7.2）。
-4. **可 spot-check**——每条样本能回溯到原始 issue / PR URL。
-5. **public / private 分离**——公开 benchmark 用 upstream（仅 commit hash，不复制）；内部 dataset 不入公开 release artifact。
+1. **版本化**——LangSmith dataset 名称或 upstream revision 必须稳定可追踪；引入 v{N+1} 时**不删** v{N}。
+2. **冻结输入**——LangSmith runtime dataset 必须写入 `dataset_sha256`；upstream runtime dataset 必须写入 `hf_revision` / `upstream_commit`。
+3. **单一运行时真源**——每个 suite 必须明确写清自己是 `langsmith_runtime` 还是 `upstream_runtime + langsmith_mirror`，禁止双源静默 fallback。
+4. **可 spot-check**——每条样本能回溯到原始 issue / PR URL 或 upstream instance id。
+5. **public / private 分离**——公开与内部 trace 路由必须走 allowlist；内部 dataset 不入公开 release artifact。
 6. **PII redaction**——内部 issue/PR 进 dataset 前 redact email / token / 内部 URL。
 
-### 7.2 Manifest schema
+### 7.2 Dataset metadata schema
 
 ```yaml
-# evals/datasets/manifests/triage_internal_v1.yaml
-name: triage_internal_v1
-version: 1
-created_at: "2026-08-15"
-source: "OpenBot production triage decisions, 5 repos, 2026-06 ~ 2026-08"
-sampling_rule: "all decisions where maintainer modified bot_label OR confirmed it"
-sample_count: 218
-sha256: "<dataset file hash>"
-golden_generation: "maintainer-final-label from GitHub events stream"
-public: false
-license: "internal-only"
-related_suites: [triage_internal_v1]
-deprecated: false
-notes: "见 scripts/build_triage_internal_dataset.py + docs/eval/dataset-spot-check/"
+# LangSmith example metadata（runtime mirror）
+dataset_version: martian_2026w20
+dataset_sha256: "<canonical payload hash>"
+sample_id: martian-sentry-001
+upstream_commit: "<git sha>"
+public: true
+
+# upstream runtime + LangSmith mirror metadata（SWE / SWT）
+dataset_version: fix_swe_bench_verified
+hf_dataset: princeton-nlp/SWE-bench_Verified
+hf_split: test
+hf_revision: "<revision>"
+instance_id: sympy__sympy-22914
 ```
 
 ### 7.3 v0.1 必交付 dataset
 
-| Dataset | 大小 | 来源 |
+| Dataset | 大小 | 来源 | Runtime source |
 |---|---|---|
-| `triage_oss_seed_v1` | 200 | 10 OSS repo closed issues × maintainer label |
-| `prompt_injection_v0` | 24 | 已有 |
-
-公开 benchmark（SWE-bench Verified / CodeReviewBench / SWE-QA-Pro）通过 upstream 引入，不复制到本 repo。
+| `martian_2026w20` | 50 PR | Martian offline split | LangSmith |
+| `fix_swe_bench_verified` | 500 | SWE-bench Verified mirror | upstream HF at runtime + LangSmith mirror |
+| `test_swt_bench_verified` | 433 | SWT-Bench Verified mirror | upstream HF at runtime + LangSmith mirror |
+| `chat_swe_qa_pro_v1` | 260 | SWE-QA-Pro-Bench mirror | LangSmith |
+| `triage_oss_seed_v1` | 200 | 10 OSS repo closed issues × maintainer label | planned |
+| `prompt_injection_v0` | 24 | 已有 | planned / safety |
 
 ---
 
@@ -259,6 +326,21 @@ notes: "见 scripts/build_triage_internal_dataset.py + docs/eval/dataset-spot-ch
 | Release | `workflow_dispatch` 人工触发 | ≤ 24 h | block release |
 | Online | 生产流量持续采样（v0.3 cell） | 24 h refresh | 不阻塞；dashboard alert |
 
+### 8.1.1 本地操作入口（v0.1 锁定）
+
+eval 专属工作流统一从 `evals/Makefile` 进入；根目录 `Makefile` 只保留通用开发任务。
+
+```bash
+make -C evals data          # 首次发布 / 安全发布当前 4 个 dataset
+make -C evals data-refresh  # 显式 --force 重建当前 4 个 dataset
+make -C evals test          # 仅跑 tests/eval
+make -C evals smoke         # 跑当前 4 条 live smoke eval
+make -C evals check         # test + smoke
+make -C evals view-open     # 打包本地 eval logs，起静态服务并自动打开 Inspect View
+```
+
+单 surface target（如 `smoke-fix` / `data-chat`）允许调试，但 PRD 级验收以组合 target 为准。
+
 ### 8.2 PR path matcher → 触发 suite
 
 PR 改动 path 触发对应业务的当前 phase suite（v0.1 单跑外部；v0.2+ 追加 internal_v1）：
@@ -267,7 +349,7 @@ PR 改动 path 触发对应业务的当前 phase suite（v0.1 单跑外部；v0.
 |---|---|---|
 | `workflows/review*` · `prompts/review*` | `review_codereviewbench` (limit 10) | `review_internal_v1` (limit 20) |
 | `workflows/triage*` · `prompts/triage*` | `triage_oss_seed` (limit 20) | `triage_internal_v1` (limit 20) |
-| `workflows/fix*` · `prompts/fix*` · `middleware/sandbox*` | `fix_swe_bench_verified` (limit 10) | `fix_internal_v1` (limit 10) |
+| `workflows/fix*` · `prompts/fix*` · `middleware/sandbox*` | `fix_swe_bench_verified` (limit 10) + `test_swt_bench_verified` (limit 10, diagnostic) | `fix_internal_v1` (limit 10) |
 | `workflows/chat*` · `prompts/chat*` | `chat_swe_qa_pro` (limit 20) | `chat_internal_v1` (limit 20) |
 | `evals/**` 自身改动 | 对应 suite 全量 | — |
 
@@ -276,7 +358,7 @@ PR 改动 path 触发对应业务的当前 phase suite（v0.1 单跑外部；v0.
 ```yaml
 # eval-weekly.yml — 周一 02:00 UTC
 #   v0.1: triage_oss_seed · review_codereviewbench · fix_swe_bench_verified (limit 100)
-#         chat_swe_qa_pro
+#         test_swt_bench_verified (diagnostic) · chat_swe_qa_pro
 #   v0.2+ 追加: triage_internal_v1 · review_internal_v1 · fix_internal_v1
 #               chat_internal_v1
 
@@ -302,9 +384,9 @@ PR 改动 path 触发对应业务的当前 phase suite（v0.1 单跑外部；v0.
 | Gate | 指标 | 阈值 | 触发 | 行为 |
 |---|---|---|---|---|
 | **G1** Triage seed regression | `triage_oss_seed` macro_f1 vs baseline | ↓ ≥ 5% | regression | warn |
-| **G2** Review external regression | `review_codereviewbench` P@R≥0.5 vs baseline | ↓ ≥ 5% / ≥ 10% | regression | 5%: warn / 10%: **block merge** |
+| **G2** Review external regression | `review_codereviewbench` mean_f1 vs baseline | ↓ ≥ 5% / ≥ 10% | regression | 5%: warn / 10%: **block merge** |
 | **G3** Fix Verified regression | `fix_swe_bench_verified` pass@1 vs baseline | ↓ ≥ 5% | regression | warn |
-| **G4** Chat regression | `chat_swe_qa_pro` corr × ground vs baseline | ↓ ≥ 5% | regression | warn |
+| **G4** Chat regression | `chat_swe_qa_pro` normalized_overall vs baseline | ↓ ≥ 5% | regression | warn |
 | **G5** Cost ceiling | per-suite cost vs budget | > 120% | 所有 mode | abort + alert（§11） |
 | **G7** Internal triage hold | `triage_internal_v1` macro_f1 / override | < 0.65 · > 0.30 | regression (v0.2+) | warn |
 | **G8** Internal review hold | `review_internal_v1` useful_rate | < 0.65 | regression (v0.2+) | warn |
@@ -319,6 +401,7 @@ PR 改动 path 触发对应业务的当前 phase suite（v0.1 单跑外部；v0.
 - Baseline = 上一次成功 release 的分数，存在 LangSmith `experiment_tag=baseline-release-<version>`。
 - judge / prompt / scorer 改动 → 必须重跑 baseline + PR review + 写 `docs/eval/baseline-log.md`。
 - Dataset 升版 v{N}→v{N+1} → 同时跑两版，记 diff，再切 baseline。
+- `test_swt_bench_verified` 在 v0.1 仅作 Fix 辅助诊断，不单独触发 hard/soft gate；先积 baseline，再决定是否升格为正式门槛。
 
 ---
 
@@ -374,13 +457,17 @@ CREATE INDEX ON openbot_eval_counters (business, labeled_at);
 
 每个 release `release-notes` 必须声明 judge model id + judge prompt 版本。
 
-### 10.4 Experiment 命名（PRD 锁定）
+### 10.4 Experiment / trace 命名（PRD 锁定）
 
 ```
-{suite}-{dataset_version}-{git_sha_short}-{model_alias}-{mode}
+# 当前 coding benchmark Experiment project
+{dataset_name}-{solver_family}-{YYYYMMDD-HHMMSS}
+
+# 当前 DeepAgents sample trace
+{dataset_version}/{sample_id}
 ```
 
-例：`triage-oss-seed_v1-a1b2c3-opus47-regression` · `review-codereviewbench-upstream2026w20-d4e5f6-opus47-release` · `chat-swe-qa-pro-upstream2026w12-d4e5f6-opus47-weekly`
+例：`fix_swe_bench_verified-deepagents_baseline-20260516-021530` · `test_swt_bench_verified-inspect_evals_default-20260516-022012` · `fix_swe_bench_verified/sympy__sympy-22914`
 
 **命名违反 = run fail**。
 
@@ -398,6 +485,7 @@ budget:
     review_codereviewbench: 0.60
     review_internal_v1: 0.20
     fix_swe_bench_verified: 1.50   # 单 instance 上限
+    test_swt_bench_verified: 1.50
     fix_internal_v1: 2.50
     fix_swe_bench_live: 1.50
     chat_swe_qa_pro: 0.10
@@ -469,15 +557,19 @@ PRD merge · `evals/` 骨架 · `baseline-log.md` / `judge-version-log.md` 空�
 - [ ] `inspect-ai` + `inspect-evals` 接入
 - [ ] `evals/{common,solvers,scorers}` skeleton
 - [ ] `review_codereviewbench` 5 条 sample 跑通 + LangSmith 上报
+- [ ] `fix_swe_bench_verified_deepagents` 5 条 sample 跑通 + LangSmith Experiment 投影
+- [ ] `test_swt_bench_verified_deepagents` 5 条 sample 跑通 + LangSmith Experiment 投影
+- [ ] `chat_swe_qa_pro_baseline` 5 条 sample 跑通 + LangSmith feedback
 - [ ] `scripts/export_run_summary.py` 输出首份 summary
 
-**验收**：本地一条命令跑 5 sample，每条 trace / score / cost / artifact，metadata 校验通过。
+**验收**：本地 `make -C evals smoke` 一条命令跑通 4 条已实现 surface 的 5-sample smoke；`make -C evals test` 通过；每条 run 的 trace / score / cost / artifact / metadata 符合契约。
 
 ### E2 · v0.1 全量上线
 
 - [ ] `triage_oss_seed` 200 条 + baseline
-- [ ] `review_codereviewbench` 50 PR + 与 Martian leaderboard 对齐
+- [ ] `review_codereviewbench` 50 PR + mean_f1 baseline
 - [ ] `fix_swe_bench_verified` 500 题 release + 100 题 weekly
+- [ ] `test_swt_bench_verified` 433 题 release baseline + weekly diagnostic
 - [ ] `chat_swe_qa_pro` + baseline
 - [ ] `compare_runs.py` + §9 阈值 · counters 表上线
 
@@ -521,9 +613,9 @@ PRD merge · `evals/` 骨架 · `baseline-log.md` / `judge-version-log.md` 空�
 | 业务 | v0.1 外部 Floor | v0.2 内部 Floor | v0.3 online Floor |
 |---|---|---|---|
 | Triage | macro_f1 ≥ 0.55 | macro_f1 ≥ 0.65 · override < 0.30 | macro_f1_30d ≥ 0.70 · override_30d < 0.25 |
-| Review | P@R≥0.5 ≥ 0.55 | useful_rate ≥ 0.65 | action_rate ≥ 0.40 |
+| Review | mean_f1 ≥ 0.55 | useful_rate ≥ 0.65 | action_rate ≥ 0.40 |
 | Fix | pass@1 ≥ 0.40 | pass@1 ≥ 0.50 | pass@1 (90d) ≥ 0.35 |
-| Chat | corr × ground ≥ 0.65 | correct_rate ≥ 0.70 | corr_30d ≥ 0.75 · follow_up_30d < 0.40 |
+| Chat | normalized_overall ≥ 0.65 | correct_rate ≥ 0.70 | corr_30d ≥ 0.75 · follow_up_30d < 0.40 |
 
 **每个 release 必须报当前 phase 已解冻的所有 cell**——一个业务可同时报 v0.1+v0.2，或 v0.2+v0.3，不跳低 phase。
 
@@ -536,9 +628,9 @@ PRD merge · `evals/` 骨架 · `baseline-log.md` / `judge-version-log.md` 空�
 | 把模型能力当产品能力测，分数好看但没人用 | H | C | §0 原则；release report 强制并列报 internal curated / online |
 | 内部 eval 不走真实 workflow，分数虚高 | M | H | §6 强制 solver 走 `openbot.workflows.*`；review checklist |
 | Judge model 漂移 → baseline 不可比 | M | H | §10.3 治理；release 锁版本；升级走 PR + baseline 重跑 |
-| Dataset 静默变更 | L | H | §7.2 manifest + SHA256 + 版本号；CI 校验 hash |
+| Dataset 静默变更 | L | H | §7.2 dataset metadata + `dataset_sha256` / `hf_revision`；升级走显式版本 |
 | 所有 suite 都 PR gate → CI 爆 | M | M | §9 只有 G2-10%/G5 hard gate |
-| Modal vs Inspect Docker 行为差异 | M | M | §6 双 sandbox 策略 + `sandbox_backend` 字段记录 |
+| Public Inspect Docker vs future internal Modal 行为差异 | M | M | §6 双 runtime 策略 + `sandbox_backend` 字段记录；public 分数不冒充 production-like 分数 |
 | SWE-bench Verified 过拟合 | H | M | Live + internal_v1 + online 三路并报；release report 诚信声明 |
 | Cost 失控 | M | H | §11 三层 budget + 自动 abort + monthly hard kill |
 | Flaky sample 污染聚合 | M | M | §12.2 标记 + 自动剔除 + 月度 review |
@@ -557,22 +649,22 @@ PRD merge · `evals/` 骨架 · `baseline-log.md` / `judge-version-log.md` 空�
 | 1 | 测什么 | 产品输出（不是模型能力） |
 | 2 | 三段式 | v0.1 外部静态 → v0.2 内部 curated → v0.3 online |
 | 3 | 解冻方式 | 单业务独立按 §3.1 / §3.2 gate 触发；v0.2 不替换 v0.1，v0.3 不替换 v0.2 |
-| 4 | 业务族 | Triage · Review · Fix · Chat（Reproducer 并入 Fix） |
+| 4 | 业务族 | Triage · Review · Fix · Chat（Safety 单列；SWT-Bench 是 Fix 辅助诊断） |
 | 5 | Offline runner | Inspect AI |
 | 6 | Online eval | LangSmith online eval |
 | 7 | Observability | LangSmith（Langfuse self-hosted 备选） |
 | 8 | Internal sandbox | Modal |
-| 9 | Public sandbox | Inspect Docker；Fix 用 Modal |
+| 9 | Public sandbox | public code-editing benchmark（SWE / SWT）用 Inspect Docker；closed-form review / chat 不用 sandbox |
 | 10 | Judge model | `claude-opus-4-7`；升级走 §10.3 |
 | 11 | 公开 benchmark 接入 | `inspect_evals` upstream 优先；无 upstream 按 §6.3 wrap |
 | 12 | Eval 不进同步 CI | 仅 cheap regression 可阻塞 |
 | 13 | Internal dataset 不入公开 release | 双 LangSmith project 隔离 |
-| 14 | Fix v0.1 baseline | SWE-bench Verified |
+| 14 | Fix v0.1 baseline | 主信号 = SWE-bench Verified；辅助诊断 = SWT-Bench Verified |
 | 15 | Chat v0.1 baseline | SWE-QA-Pro-Bench（TIGER-Lab） |
 | 16 | v0.2 解冻阈值 | 单业务 ≥ 200 真实样本 |
 | 17 | v0.3 解冻阈值 | 单业务月活 ≥ 30 repo 或 日均 ≥ 30-50 交互 |
 | 18 | Baseline 治理 | judge / scorer / dataset 任一变更 → 重跑 + PR review + baseline-log |
-| 19 | Experiment 命名 | `{suite}-{dataset_version}-{git_sha_short}-{model_alias}-{mode}` |
+| 19 | Experiment / trace 命名 | coding benchmark project = `{dataset_name}-{solver_family}-{ts}`；sample trace = `{dataset_version}/{sample_id}` |
 | 21 | Failure category | 固定 10 枚举，禁自由文本 |
 | 22 | Monthly total budget | $1500 / 实例 / 月 |
 | 23 | Cost report | 每 release 出 `docs/reports/eval-cost-<version>.md` |
@@ -604,5 +696,6 @@ PRD merge · `evals/` 骨架 · `baseline-log.md` / `judge-version-log.md` 空�
 **外部 · Dataset / Benchmark**
 - Martian CodeReviewBench · [withmartian/code-review-benchmark](https://github.com/withmartian/code-review-benchmark)（offline + online）
 - SWE-bench · [Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified) · [Live](https://huggingface.co/datasets/SWE-bench-Live/SWE-bench-Live)
+- SWT-Bench Verified · [eth-sri/SWT-bench_Verified_bm25_27k_zsb](https://huggingface.co/datasets/eth-sri/SWT-bench_Verified_bm25_27k_zsb)
 - SWE-QA-Pro-Bench · [TIGER-Lab/SWE-QA-Pro-Bench](https://huggingface.co/datasets/TIGER-Lab/SWE-QA-Pro-Bench)
 - OWASP LLM Top 10 · [genai.owasp.org](https://genai.owasp.org/llm-top-10/) · MITRE ATLAS · [atlas.mitre.org](https://atlas.mitre.org/) · CVE · [cve.mitre.org](https://cve.mitre.org/)
