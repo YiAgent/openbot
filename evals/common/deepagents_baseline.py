@@ -71,9 +71,9 @@ _DEFAULT_FALLBACK = "anthropic:claude-sonnet-4-6"
 # nudges termination after ``run_limit`` LLM calls. ``recursion_limit`` is
 # LangGraph's hard backstop and only fires if both middlewares fail to
 # converge.
-_DEFAULT_MODEL_CALL_LIMIT = 100
-_DEFAULT_TOOL_CALL_LIMIT = 200
-_DEFAULT_RECURSION_LIMIT = 400
+_DEFAULT_MODEL_CALL_LIMIT = 20
+_DEFAULT_TOOL_CALL_LIMIT = 40
+_DEFAULT_RECURSION_LIMIT = 100
 
 
 def _env_int(name: str, default: int) -> int:
