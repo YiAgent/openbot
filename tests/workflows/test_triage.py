@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openbot.config_repo import baked_in_defaults
 from openbot.events import EventKind, UnifiedEvent
+from openbot.llm.router import Feature
+from openbot.middleware import PreflightContext
+from openbot.router import Dispatch, derive_task_id
 from openbot.workflows.triage import maybe_run_triage
 
 _INSTALL_ID = 132_536_131
@@ -41,12 +45,32 @@ def _adapter() -> Any:
     return a
 
 
+def _ctx(adapter: Any, event: UnifiedEvent) -> PreflightContext:
+    """Build a minimal PreflightContext for workflow stub tests.
+
+    `session_factory=None` skips audit_log writes — those are exercised
+    in tests/middleware/test_preflight_order.py. `redis=None` is fine for
+    workflow tests; only middleware uses redis.
+    """
+    dispatch = Dispatch(
+        feature=Feature.TRIAGE, handler=maybe_run_triage, task_id=derive_task_id(event)
+    )
+    return PreflightContext(
+        event=event,
+        dispatch=dispatch,
+        config=baked_in_defaults(),
+        adapter=adapter,
+        session_factory=None,
+        redis=None,
+    )
+
+
 # ───── happy path ─────
 
 
 async def test_acks_issue_opened() -> None:
     adapter = _adapter()
-    await maybe_run_triage(adapter, _event())
+    await maybe_run_triage(_ctx(adapter, _event()))
 
     adapter.reply.assert_awaited_once()
     posted_event, posted_msg = adapter.reply.await_args.args
@@ -58,7 +82,7 @@ async def test_acks_issue_opened() -> None:
 
 async def test_message_falls_back_when_actor_unknown() -> None:
     adapter = _adapter()
-    await maybe_run_triage(adapter, _event(actor=""))
+    await maybe_run_triage(_ctx(adapter, _event(actor="")))
 
     _, msg = adapter.reply.await_args.args
     # No "@" placeholder leftover; uses "there" as fallback.
@@ -81,7 +105,7 @@ async def test_message_falls_back_when_actor_unknown() -> None:
 )
 async def test_does_not_ack_other_event_kinds(kind: EventKind) -> None:
     adapter = _adapter()
-    await maybe_run_triage(adapter, _event(kind=kind))
+    await maybe_run_triage(_ctx(adapter, _event(kind=kind)))
     adapter.reply.assert_not_awaited()
 
 
@@ -90,7 +114,7 @@ async def test_skips_when_installation_id_missing(
 ) -> None:
     adapter = _adapter()
     with caplog.at_level(logging.WARNING, logger="openbot.workflows.triage"):
-        await maybe_run_triage(adapter, _event(installation_id=None))
+        await maybe_run_triage(_ctx(adapter, _event(installation_id=None)))
     adapter.reply.assert_not_awaited()
     assert any(r.message == "triage_skipped_missing_context" for r in caplog.records)
 
@@ -100,7 +124,7 @@ async def test_skips_when_issue_number_missing(
 ) -> None:
     adapter = _adapter()
     with caplog.at_level(logging.WARNING, logger="openbot.workflows.triage"):
-        await maybe_run_triage(adapter, _event(issue_number=None))
+        await maybe_run_triage(_ctx(adapter, _event(issue_number=None)))
     adapter.reply.assert_not_awaited()
     assert any(r.message == "triage_skipped_missing_context" for r in caplog.records)
 
@@ -120,7 +144,7 @@ async def test_does_not_ack_bot_authored_issue(
     assert bot_event.is_from_bot is True  # sanity
 
     with caplog.at_level(logging.INFO, logger="openbot.workflows.triage"):
-        await maybe_run_triage(adapter, bot_event)
+        await maybe_run_triage(_ctx(adapter, bot_event))
 
     adapter.reply.assert_not_awaited()
     assert any(r.message == "triage_skipped_bot_actor" for r in caplog.records)
@@ -129,7 +153,7 @@ async def test_does_not_ack_bot_authored_issue(
 async def test_acks_human_authored_issue_with_explicit_user_type() -> None:
     """Belt-and-suspenders: events with actor_type='User' must still ACK."""
     adapter = _adapter()
-    await maybe_run_triage(adapter, _event(actor_type="User"))
+    await maybe_run_triage(_ctx(adapter, _event(actor_type="User")))
     adapter.reply.assert_awaited_once()
 
 
@@ -137,7 +161,7 @@ async def test_acks_when_actor_type_missing() -> None:
     """Defensive: if actor_type is None (older / partial payload), do NOT
     over-skip — only Bot is skipped, not "unknown"."""
     adapter = _adapter()
-    await maybe_run_triage(adapter, _event(actor_type=None))
+    await maybe_run_triage(_ctx(adapter, _event(actor_type=None)))
     adapter.reply.assert_awaited_once()
 
 
@@ -153,7 +177,7 @@ async def test_reply_failure_is_logged_not_raised(
     with caplog.at_level(logging.ERROR, logger="openbot.workflows.triage"):
         # Must NOT raise — background tasks that 500 would be invisible to GitHub
         # but visible as nasty traceback in logs every time. Audit + drop instead.
-        await maybe_run_triage(adapter, _event())
+        await maybe_run_triage(_ctx(adapter, _event()))
 
     assert any(r.message == "triage_ack_failed" for r in caplog.records)
     assert any(r.exc_info is not None for r in caplog.records if r.message == "triage_ack_failed")

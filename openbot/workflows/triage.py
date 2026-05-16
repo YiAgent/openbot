@@ -1,26 +1,32 @@
 """Triage workflow — PRD §4.1.
 
-v0.1 Week 1 vertical slice: only the ACK comment.
+Slice A refactor: now takes a `PreflightContext` (matching the other
+three workflow stubs) and writes STARTED/COMPLETED/FAILED audit rows
+through the shared `audit_lifecycle` helper.
 
-Full PRD §4.1 pipeline arrives in subsequent commits:
-  1. Auto-label  (this commit: TODO marker only)
-  2. Reproduce   (LLM-decided, Modal sandbox)
-  3. Priority    (P0..P3 label)
+Behavior unchanged from Week 1:
+  - Post an ACK comment on `issues.opened` so the reporter knows
+    OpenBot saw the issue.
+  - Skip bot-authored issues (PRD §4 echo-loop defense; Router also
+    blocks these but defense-in-depth is cheap).
+  - Skip when installation_id or issue_number is missing.
+  - Never raise — background-task failures must not surface as 5xx.
 
-Today: receive `issues.opened` → post an acknowledgement comment so the
-reporter knows OpenBot saw the issue. Runs in FastAPI BackgroundTasks
-*after* the webhook 202s, so a slow GitHub API doesn't make GitHub retry.
-
-Failures here MUST NOT crash the webhook flow — they are logged at
-ERROR level (PRD §9.4 audit_log surface) and swallowed.
+PRD §4.1's full pipeline (auto-label → reproduce → priority) still
+lands in upcoming commits.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from openbot.adapters.github import GitHubAdapter
-from openbot.events import EventKind, UnifiedEvent
+from openbot.events import EventKind
+from openbot.persistence.models import Workflow
+from openbot.workflows._lifecycle import audit_lifecycle
+
+if TYPE_CHECKING:
+    from openbot.middleware.preflight import PreflightContext
 
 _logger = logging.getLogger(__name__)
 
@@ -31,24 +37,18 @@ _ACK_TEMPLATE = (
 )
 
 
-async def maybe_run_triage(adapter: GitHubAdapter, event: UnifiedEvent) -> None:
-    """Run the triage workflow if the event is a fresh issue.
-
-    Args:
-        adapter:  GitHubAdapter with `auth` set (needed for `reply`).
-        event:    UnifiedEvent already produced by `adapter.parse_event`.
-
-    Silent no-op if the event doesn't qualify; never raises.
-    """
+async def maybe_run_triage(ctx: PreflightContext) -> None:
+    event = ctx.event
     if event.kind is not EventKind.ISSUE_OPENED:
+        # Defense-in-depth: Router only dispatches ISSUE_OPENED to triage, but
+        # any future caller (backfill scripts, plugins) should be no-op'd here
+        # rather than ACK'ing a PR / comment event.
+        _logger.info(
+            "triage_skipped_wrong_kind",
+            extra={"delivery_id": event.delivery_id, "kind": event.kind.value},
+        )
         return
-
     if event.is_from_bot:
-        # Two reasons to skip bot-authored issues:
-        #   1. dependabot / github-actions / coderabbit etc. open routine
-        #      issues; auto-ACK'ing them adds noise without value.
-        #   2. defense-in-depth against echo loops if a future workflow
-        #      ever opens issues under our own App identity.
         _logger.info(
             "triage_skipped_bot_actor",
             extra={"delivery_id": event.delivery_id, "actor": event.actor},
@@ -56,8 +56,6 @@ async def maybe_run_triage(adapter: GitHubAdapter, event: UnifiedEvent) -> None:
         return
 
     if event.installation_id is None or event.issue_number is None:
-        # Defensive: PRD §5.1 guarantees these for authentic issue events, but
-        # log if a real webhook ever lacks them so we can spot it in audit.
         _logger.warning(
             "triage_skipped_missing_context",
             extra={
@@ -70,21 +68,20 @@ async def maybe_run_triage(adapter: GitHubAdapter, event: UnifiedEvent) -> None:
         return
 
     message = _ACK_TEMPLATE.format(actor=event.actor or "there")
-
     try:
-        result = await adapter.reply(event, message)
-        _logger.info(
-            "triage_ack_posted",
-            extra={
-                "delivery_id": event.delivery_id,
-                "repo": event.repo,
-                "issue_number": event.issue_number,
-                "comment_id": result.get("id"),
-            },
-        )
+        async with audit_lifecycle(ctx, workflow=Workflow.TRIAGE) as audit:
+            result = await ctx.adapter.reply(event, message)
+            audit.outcome = f"comment_id={result.get('id')}"
+            _logger.info(
+                "triage_ack_posted",
+                extra={
+                    "delivery_id": event.delivery_id,
+                    "repo": event.repo,
+                    "issue_number": event.issue_number,
+                    "comment_id": result.get("id"),
+                },
+            )
     except Exception:
-        # Background-task failures must not leak as 500s on the webhook —
-        # by the time this runs, GitHub already got its 202. Audit + drop.
         _logger.exception(
             "triage_ack_failed",
             extra={

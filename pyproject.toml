@@ -40,6 +40,11 @@ dependencies = [
     "inspect-ai>=0.3.220",
     "inspect-evals>=0.12.0",
     "deepagents>=0.6.1",
+    # Config — `.openbot/config.yaml` loader (harness spec §3 M1).
+    # Pinned to PyYAML (not ruamel) because we only need safe_load + the
+    # config file is round-trip-stable already (PRs review the diff, not
+    # the formatting). `yaml.safe_load` is required — `yaml.load` is banned.
+    "pyyaml>=6.0",
 ]
 
 [project.urls]

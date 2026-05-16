@@ -28,6 +28,8 @@ from openbot.adapters.base import SignatureError
 from openbot.adapters.github import GitHubAdapter
 from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
+from openbot.config_repo import load_for_repo
+from openbot.middleware import PreflightContext, run_preflight
 from openbot.persistence import (
     DedupOutcome,
     WebhookDedup,
@@ -36,13 +38,16 @@ from openbot.persistence import (
     make_engine,
     make_session_factory,
 )
-from openbot.workflows import maybe_run_triage
+from openbot.router import dispatch_for
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     import redis.asyncio as redis_async
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
+    from openbot.events import UnifiedEvent
+    from openbot.router import Dispatch
 
 _logger = logging.getLogger("openbot.webapp")
 
@@ -229,13 +234,101 @@ async def github_webhook(
         },
     )
 
-    # Dispatch workflows. Each handler decides whether the event qualifies;
-    # `maybe_run_*` are designed to be idempotent + swallow their own failures.
-    background.add_task(maybe_run_triage, adapter, event)
+    # Router → workflow dispatch (harness spec §3 M2).
+    # `dispatch_for` is pure: no GitHub API calls, no DB. If the event
+    # has no matching handler (e.g. push, star, bot author) we still
+    # 202 — GitHub only needs to know we received the delivery.
+    dispatch = dispatch_for(event)
+    if dispatch is None:
+        return {
+            "status": "ignored",
+            "delivery_id": event.delivery_id,
+            "kind": event.kind.value,
+            "relevant": event.is_relevant,
+        }
+
+    # Pre-flight + workflow dispatch run in the background so the
+    # webhook can 202 within GitHub's 10s budget. The config load
+    # (GitHub Contents API) lives inside the background task because
+    # it can take ~50ms and the 202 is more important than fresh config.
+    background.add_task(
+        _run_dispatch,
+        request.app,
+        adapter,
+        event,
+        dispatch,
+    )
 
     return {
         "status": "accepted",
         "delivery_id": event.delivery_id,
         "kind": event.kind.value,
+        "feature": dispatch.feature.value,
+        "task_id": dispatch.task_id,
         "relevant": event.is_relevant,
     }
+
+
+async def _run_dispatch(
+    app_instance: FastAPI,
+    adapter: GitHubAdapter,
+    event: UnifiedEvent,
+    dispatch: Dispatch,
+) -> None:
+    """Background task: load config → pre-flight → handler.
+
+    Lives in webapp.py rather than middleware/preflight.py so the
+    pre-flight runner stays test-friendly (it accepts a ready
+    `PreflightContext` and a middleware iterable; the webapp is
+    responsible for assembling both).
+
+    Errors here must NEVER raise out — the webhook already returned
+    202 and a stack trace at this layer would just go to logs.
+    """
+    try:
+        config = await load_for_repo(adapter, event)
+    except Exception:
+        _logger.exception(
+            "preflight_config_load_failed",
+            extra={"delivery_id": event.delivery_id, "repo": event.repo},
+        )
+        return
+
+    ctx = PreflightContext(
+        event=event,
+        dispatch=dispatch,
+        config=config,
+        adapter=adapter,
+        session_factory=getattr(app_instance.state, "db_session_factory", None),
+        redis=getattr(app_instance.state, "redis", None),
+    )
+
+    # Slice A: pre-flight middleware list is empty — every dispatched
+    # event reaches its workflow. Slices B+C plug real gates in here.
+    middlewares: list = []
+    try:
+        decision = await run_preflight(ctx, middlewares)
+    except Exception:
+        _logger.exception(
+            "preflight_runner_crashed",
+            extra={"delivery_id": event.delivery_id, "repo": event.repo},
+        )
+        return
+
+    from openbot.middleware import MiddlewareResult
+
+    if decision.result is not MiddlewareResult.PROCEED:
+        # Audit + comment already handled by run_preflight; nothing else.
+        return
+
+    try:
+        await dispatch.handler(ctx)
+    except Exception:
+        _logger.exception(
+            "workflow_handler_crashed",
+            extra={
+                "delivery_id": event.delivery_id,
+                "repo": event.repo,
+                "feature": dispatch.feature.value,
+            },
+        )
