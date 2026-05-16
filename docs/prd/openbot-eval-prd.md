@@ -123,11 +123,12 @@ OpenBot 的 eval 体系回答四个问题：
 
 | Suite | 引入版本 | Dataset | Solver | Scorer | Run mode |
 |---|---|---|---|---|---|
-| `review_martian` | v0.1 | Martian 50 PR × 5 repo | 真实 review workflow | LLM judge → P/R/F1 | regression + release |
+| `review_martian` | v0.1 | Martian 50 PR × 5 repo | shared review solver surface (`deepagents_baseline` now, `openbot_prod` later) | LLM judge → P/R/F1 | regression + release |
 | `review_shadow` | 🕒 DEFERRED · 解冻见 §4.0 | `internal_prs_v1`（自建 30-50 PR） | 真实 review workflow | `review_overlap` (precision/recall/F1) | smoke + regression + release |
 | `review_shadow_xl` | 🕒 DEFERRED · 解冻见 §4.0 | `internal_prs_v2`（扩到 100 PR） | 同上 | 同上 + unmatched diff dump | release |
 
-**强制**：solver **必须**走 `openbot.workflows.review.run(...)` 真实入口；不允许 mock workflow。
+**强制**：同一 suite 内的 solver provider 必须共享 dataset / scorer / judge / reporting surface。
+`deepagents_baseline` 是长期保留的对照组；`openbot_prod` 上线后必须走 `openbot.workflows.review.run(...)` 真实入口，不能用 mock workflow 冒充生产路径。
 
 ### 4.2 Triage 族
 

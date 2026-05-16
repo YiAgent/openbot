@@ -21,6 +21,8 @@ REQUIRED_RUN_METADATA_FIELDS: tuple[tuple[str, str], ...] = (
     ("git_sha", "current commit"),
     ("prompt_version", "openbot/prompts/__version__"),
     ("workflow_version", "openbot/workflows/__version__"),
+    ("solver_id", "e.g. deepagents_baseline"),
+    ("solver_family", "baseline | production"),
     ("model_id", "e.g. anthropic/claude-opus-4-7"),
     ("judge_model_id", "e.g. anthropic/claude-opus-4-7"),
     ("judge_prompt_version", "integer"),
