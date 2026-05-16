@@ -1,12 +1,12 @@
 """@openbot chat workflow — PRD §4.4 entry stub.
 
-v0.1 Week 2 (slice A): ACK reply + audit. The tool-using chat agent
-(read_file / glob / grep / shell_readonly / web_fetch / search_*)
-lands once the agent slice ships.
+Slice C wires `chat_parser.parse` so a `@openbot help` returns a canned
+help reply (vs. the generic ACK) and a `@openbot <freeform>` still
+reaches the LLM path (currently still a stub — the tool-using chat
+agent lands once Modal + LangGraph are integrated).
 
-Cancel comment parsing (`@openbot stop` / 停 / 取消) lives in slice C's
-cancel middleware, not here — by the time the dispatch reaches this
-stub the cancel middleware has already returned BLOCKED for those.
+Cancel parsing lives in `CancelCommentMiddleware`; by the time this
+handler runs, any cancel comment has already returned BLOCKED upstream.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from openbot.persistence.models import Workflow
 from openbot.workflows._lifecycle import audit_lifecycle
+from openbot.workflows.chat_parser import parse as parse_chat_command
 
 if TYPE_CHECKING:
     from openbot.middleware.preflight import PreflightContext
@@ -26,6 +27,17 @@ _ACK_TEMPLATE = (
     ":robot: Hi @{actor} — OpenBot received your message and is thinking.\n\n"
     "_v0.1 alpha: only the ACK is automated so far. Tool-using chat agent "
     "(read_file / grep / web_fetch / search) lands in an upcoming commit._"
+)
+
+_HELP_TEMPLATE = (
+    ":robot: **OpenBot chat** — v0.1 alpha\n\n"
+    "Usage: `@openbot <your question or request>`\n\n"
+    "**Available structural commands**\n"
+    "- `@openbot stop` / `cancel` / `停` / `取消` — cancel the current task\n"
+    "- `@openbot help` / `?` / `帮助` — show this message\n\n"
+    "Anything else is treated as a freeform request. v0.1 alpha replies with "
+    "an ACK only; tool-using responses arrive in an upcoming commit.\n\n"
+    "Docs: https://github.com/YiAgent/openbot/blob/main/docs/prd/openbot-prd.md"
 )
 
 
@@ -40,17 +52,45 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
         )
         return
 
-    message = _ACK_TEMPLATE.format(actor=event.actor or "there")
+    command = parse_chat_command(event.comment_body)
+    if command is None:
+        # Router accepted this as a chat mention but our stricter parser
+        # rejected it (e.g. lookalike login, body too long). Drop quietly
+        # — replying would just spam.
+        _logger.info(
+            "chat_skipped_unparseable_mention",
+            extra={"delivery_id": event.delivery_id, "repo": event.repo},
+        )
+        return
+
+    # Branch on structural intent:
+    #   is_cancel   → never reached in practice (CancelCommentMiddleware
+    #                 short-circuits earlier); defensive no-op.
+    #   is_help     → canned help reply (cheap, no LLM call).
+    #   freeform    → LLM ACK stub.
+    if command.is_cancel:
+        _logger.info(
+            "chat_cancel_reached_workflow_unexpected",
+            extra={"delivery_id": event.delivery_id, "repo": event.repo},
+        )
+        return
+
+    message = (
+        _HELP_TEMPLATE if command.is_help else _ACK_TEMPLATE.format(actor=event.actor or "there")
+    )
+
     try:
         async with audit_lifecycle(ctx, workflow=Workflow.CHAT) as audit:
             result = await ctx.adapter.reply(event, message)
-            audit.outcome = f"comment_id={result.get('id')}"
+            outcome_intent = "help" if command.is_help else "freeform"
+            audit.outcome = f"intent={outcome_intent} comment_id={result.get('id')}"
             _logger.info(
                 "chat_ack_posted",
                 extra={
                     "delivery_id": event.delivery_id,
                     "repo": event.repo,
                     "target": target_number,
+                    "intent": outcome_intent,
                     "comment_id": result.get("id"),
                 },
             )

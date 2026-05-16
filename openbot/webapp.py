@@ -30,9 +30,11 @@ from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
 from openbot.config_repo import load_for_repo
 from openbot.middleware import (
+    ActorRoleMiddleware,
     BudgetMiddleware,
     CancelCommentMiddleware,
     CancelLabelMiddleware,
+    ForkPRGateMiddleware,
     KillSwitchMiddleware,
     PreflightContext,
     RateLimitMiddleware,
@@ -311,21 +313,25 @@ async def _run_dispatch(
         redis=getattr(app_instance.state, "redis", None),
     )
 
-    # Slice B chain (harness spec §3 M3, locked order):
+    # Slice C chain (harness spec §3 M3, locked order):
     #
-    #   1. KillSwitch       cheapest check; admin emergency stop wins everything
-    #   2. CancelLabel      label-on-issue/PR drop (one GitHub call, cached)
-    #   3. CancelComment    chat-only @openbot stop|cancel (also seeds cancel set)
-    #   4. RateLimit        chat-only daily/hourly quotas
-    #   5. Budget           global hard kill + per-repo monthly soft cap (DB)
+    #   1. KillSwitch       env emergency stop; cheapest check, runs first
+    #   2. CancelLabel      `cancel-openbot` label drop (one GitHub call, cached)
+    #   3. CancelComment    chat-only `@openbot stop|cancel|停|取消` + seeds cancel set
+    #   4. ForkPRGate       review-only: fork PR default-deny + `/ok-to-test` opt-in
+    #   5. ActorRole        fix-only (and chat when `allow_anyone: false`)
+    #   6. RateLimit        chat-only daily/hourly quotas
+    #   7. Budget           global hard kill + per-repo monthly soft cap (DB)
     #
-    # Slice C inserts ForkPRGate + ActorRole between RateLimit and Budget.
-    # The middleware instances are stateless aside from class-level
-    # constants, so reusing one tuple per request is safe and cheap.
+    # Security gates sit BEFORE rate limit / budget so an unauthorized
+    # actor doesn't burn quota or audit-row noise just by repeatedly
+    # hitting the webhook.
     middlewares: list = [
         KillSwitchMiddleware(),
         CancelLabelMiddleware(),
         CancelCommentMiddleware(),
+        ForkPRGateMiddleware(),
+        ActorRoleMiddleware(),
         RateLimitMiddleware(),
         BudgetMiddleware(),
     ]
