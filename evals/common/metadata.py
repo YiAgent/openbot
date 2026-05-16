@@ -17,6 +17,8 @@ Caller-supplied fields:
   - suite_name, mode      : positional args
   - dataset_version       : keyword (per-suite, lives in manifest)
   - dataset_sha256        : keyword (per-suite, lives in manifest)
+  - solver_id             : keyword (provider id, e.g. deepagents_baseline)
+  - solver_family         : keyword (baseline | production)
   - model_id / judge_model_id / sandbox_backend / suite_version : keyword with defaults
 """
 
@@ -85,6 +87,8 @@ def collect_run_metadata(
     *,
     dataset_version: str,
     dataset_sha256: str,
+    solver_id: str,
+    solver_family: str,
     model_id: str = _DEFAULT_MODEL_ID,
     judge_model_id: str = _DEFAULT_MODEL_ID,
     sandbox_backend: str = _DEFAULT_SANDBOX_BACKEND,
@@ -103,6 +107,8 @@ def collect_run_metadata(
         "git_sha": _git_sha(),
         "prompt_version": _try_module_version("openbot.prompts"),
         "workflow_version": _try_module_version("openbot.workflows"),
+        "solver_id": solver_id,
+        "solver_family": solver_family,
         "model_id": model_id,
         "judge_model_id": judge_model_id,
         "judge_prompt_version": _judge_prompt_version(),

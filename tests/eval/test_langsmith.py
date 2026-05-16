@@ -24,6 +24,8 @@ def _full_metadata() -> dict[str, Any]:
         "git_sha": "abc1234",
         "prompt_version": 1,
         "workflow_version": 1,
+        "solver_id": "deepagents_baseline",
+        "solver_family": "baseline",
         "model_id": "anthropic/claude-opus-4-7",
         "judge_model_id": "anthropic/claude-opus-4-7",
         "judge_prompt_version": 1,
@@ -108,8 +110,8 @@ def test_log_run_metadata_raises_when_any_required_field_missing(
 
 
 def test_log_run_metadata_field_count_matches_prd_spec() -> None:
-    """Hard pin the field count at 15 — drift fails this test loudly."""
-    assert len(REQUIRED_RUN_FIELD_NAMES) == 15
+    """Hard pin the field count at 17 — drift fails this test loudly."""
+    assert len(REQUIRED_RUN_FIELD_NAMES) == 17
 
 
 # ─── log_sample: PRD §10.2 — 13 required fields ──────────────────────────────
@@ -119,6 +121,16 @@ def test_log_sample_with_all_fields_passes() -> None:
     client = MagicMock()
     ls.log_sample(client, "run-1", _full_sample())
     client.create_feedback.assert_called_once()
+
+
+def test_log_sample_uses_scalar_primary_score_for_langsmith_feedback() -> None:
+    client = MagicMock()
+    sample = _full_sample()
+
+    ls.log_sample(client, "run-1", sample)
+
+    assert client.create_feedback.call_args.kwargs["score"] == 0.7
+    assert client.create_feedback.call_args.kwargs["value"] == sample
 
 
 @pytest.mark.parametrize("missing_field", sorted(REQUIRED_SAMPLE_FIELD_NAMES))
@@ -134,6 +146,31 @@ def test_log_sample_raises_when_any_required_field_missing(missing_field: str) -
 def test_log_sample_field_count_matches_prd_spec() -> None:
     """Hard pin the §10.2 field count at 13."""
     assert len(REQUIRED_SAMPLE_FIELD_NAMES) == 13
+
+
+# ─── E2-T16 wiring (Codex P2): failure_category enum enforced at write site ──
+
+
+def test_log_sample_rejects_non_enum_failure_category() -> None:
+    """A sample with a free-text failure_category must raise before LangSmith write."""
+    sample = _full_sample()
+    sample["failure_category"] = "random_bug"  # not in PRD §12.4 enum
+    client = MagicMock()
+    with pytest.raises(ValueError, match="PRD"):
+        ls.log_sample(client, "run-1", sample)
+    client.create_feedback.assert_not_called()
+
+
+def test_log_sample_accepts_each_enum_value() -> None:
+    """Every PRD §12.4 enum value must pass at the write site."""
+    from evals.common._metadata_spec import ALLOWED_FAILURE_CATEGORIES
+
+    for cat in ALLOWED_FAILURE_CATEGORIES:
+        client = MagicMock()
+        sample = _full_sample()
+        sample["failure_category"] = cat
+        ls.log_sample(client, "run-1", sample)
+        client.create_feedback.assert_called_once()
 
 
 # ─── Source-of-truth alignment: script vs library ────────────────────────────
