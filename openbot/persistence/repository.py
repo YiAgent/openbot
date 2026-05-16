@@ -87,7 +87,13 @@ class CostMeterRepo:
         return Decimal(str(result.scalar_one()))
 
     async def sum_for_repo_since(self, repo: str, since: datetime) -> Decimal:
-        """Total cost for a repo since `since` — drives monthly_soft_cap."""
+        """Total cost for a repo since `since` (all rows, including degraded).
+
+        Useful for raw spend reporting. **Do not** use this for budget
+        enforcement — `pricing_failed` rows contribute 0 and would
+        silently let real spend exceed the cap. Use
+        `sum_recorded_for_repo_since` for that.
+        """
         stmt = select(func.coalesce(func.sum(CostMeter.cost_usd), 0)).where(
             CostMeter.repo == repo,
             CostMeter.created_at >= since,
@@ -95,10 +101,36 @@ class CostMeterRepo:
         result = await self._session.execute(stmt)
         return Decimal(result.scalar_one())
 
+    async def sum_recorded_for_repo_since(self, repo: str, since: datetime) -> Decimal:
+        """Repo spend since `since`, counting only `RECORDED` rows.
+
+        Harness spec §3 M5: BudgetEnforcement must filter to RECORDED so
+        a stream of `pricing_failed` rows can't slip past the cap by
+        contributing zero. Degraded rows still exist for audit, but
+        they're explicitly excluded from cap math.
+        """
+        stmt = select(func.coalesce(func.sum(CostMeter.cost_usd), 0)).where(
+            CostMeter.repo == repo,
+            CostMeter.created_at >= since,
+            CostMeter.cost_status == CostStatus.RECORDED,
+        )
+        result = await self._session.execute(stmt)
+        return Decimal(result.scalar_one())
+
     async def sum_global_since(self, since: datetime) -> Decimal:
-        """Total cost across all repos — drives global_hard_kill."""
+        """Total cost across all repos (all rows). For reporting; see
+        `sum_recorded_global_since` for the enforcement-grade variant."""
         stmt = select(func.coalesce(func.sum(CostMeter.cost_usd), 0)).where(
             CostMeter.created_at >= since,
+        )
+        result = await self._session.execute(stmt)
+        return Decimal(result.scalar_one())
+
+    async def sum_recorded_global_since(self, since: datetime) -> Decimal:
+        """Global spend since `since`, RECORDED rows only — `global_hard_kill` source."""
+        stmt = select(func.coalesce(func.sum(CostMeter.cost_usd), 0)).where(
+            CostMeter.created_at >= since,
+            CostMeter.cost_status == CostStatus.RECORDED,
         )
         result = await self._session.execute(stmt)
         return Decimal(result.scalar_one())
