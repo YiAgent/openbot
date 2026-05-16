@@ -38,8 +38,22 @@ dependencies = [
     "langsmith>=0.8.4",
     # Eval runner (PRD §8.3) — inspect-ai harness + reference task suites
     "inspect-ai>=0.3.220",
-    "inspect-evals>=0.12.0",
+    "inspect-evals[swe_bench]>=0.12.0",
     "deepagents>=0.6.1",
+    # Optional future judge provider for chat_swe_qa_pro. The current local
+    # development scorer intentionally stays on Anthropic while documenting
+    # its deviation from the paper's GPT-5 protocol.
+    "langchain-openai>=0.2",
+    # Agent sandbox (PRD §3.1) — DeepAgents executes inside a per-sample
+    # *local* Docker container via docker-py. Official benchmark Docker
+    # harnesses (SWE-bench / SWT-bench) are run offline against the
+    # exported predictions.jsonl, kept fully separate from the agent
+    # sandbox so cost stays bounded.
+    "docker>=7",
+    # SWE-bench / SWT-Bench dataset loaders pull straight from HuggingFace
+    # (LangSmith only mirrors curated, lower-volume datasets such as
+    # martian_2026w20 and chat_swe_qa_pro_v1).
+    "datasets>=3.0",
 ]
 
 [project.urls]
@@ -68,7 +82,12 @@ packages = ["openbot"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = [".venv", "build", "dist", "docs/research"]
+extend-exclude = [
+    ".venv",
+    "build",
+    "dist",
+    "docs/research",
+]
 
 [tool.ruff.lint]
 select = [

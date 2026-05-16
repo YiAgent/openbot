@@ -77,7 +77,7 @@ artifacts/
 *.sqlite
 *.sqlite3
 *.db
-
+log-www/
 # Local eval / agent runs
 eval-logs/
 inspect-logs/
@@ -87,7 +87,7 @@ logs/
 *.eval
 .inspect/
 .langgraph/
-
+logs-www/
 # Docker
 docker-compose.override.yml
 
@@ -98,3 +98,5 @@ docker-compose.override.yml
 # Large benchmark datasets — committed in gzipped form; the plain JSONL is
 # lazily materialized at task load time (evals/tasks/review_martian.py).
 evals/datasets/martian_2026w20.jsonl
+.inspect/
+.smoke/
