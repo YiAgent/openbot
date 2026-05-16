@@ -258,7 +258,7 @@ class LangSmithExperiment:
             self.dataset_id = str(ds.id)
             self.instance_to_example = instance_to_example
             logger.info(
-                "LangSmith experiment %r ready (project=%s, dataset=%s, " "%d examples indexed)",
+                "LangSmith experiment %r ready (project=%s, dataset=%s, %d examples indexed)",
                 self.experiment_name,
                 project.id,
                 ds.id,
