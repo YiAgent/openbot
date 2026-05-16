@@ -81,6 +81,10 @@ artifacts/
 # Local eval / agent runs
 eval-logs/
 inspect-logs/
+# inspect-ai default log dir; PRD §8.4 forbids commit
+logs/
+# any stray eval log file
+*.eval
 .inspect/
 .langgraph/
 
