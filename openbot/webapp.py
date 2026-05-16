@@ -28,18 +28,7 @@ from openbot.adapters.base import SignatureError
 from openbot.adapters.github import GitHubAdapter
 from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
-from openbot.config_repo import load_for_repo
-from openbot.middleware import (
-    ActorRoleMiddleware,
-    BudgetMiddleware,
-    CancelCommentMiddleware,
-    CancelLabelMiddleware,
-    ForkPRGateMiddleware,
-    KillSwitchMiddleware,
-    PreflightContext,
-    RateLimitMiddleware,
-    run_preflight,
-)
+from openbot.dispatch import run_dispatch
 from openbot.persistence import (
     DedupOutcome,
     WebhookDedup,
@@ -48,6 +37,7 @@ from openbot.persistence import (
     make_engine,
     make_session_factory,
 )
+from openbot.queue import QueuePayload, enqueue
 from openbot.router import dispatch_for
 
 if TYPE_CHECKING:
@@ -257,10 +247,38 @@ async def github_webhook(
             "relevant": event.is_relevant,
         }
 
-    # Pre-flight + workflow dispatch run in the background so the
-    # webhook can 202 within GitHub's 10s budget. The config load
-    # (GitHub Contents API) lives inside the background task because
-    # it can take ~50ms and the 202 is more important than fresh config.
+    # Hand off to the worker queue if Redis is configured; otherwise
+    # fall back to FastAPI BackgroundTasks (dev / unit tests).
+    #
+    # The queue path is what production runs — workflows survive a
+    # webapp restart because the entry persists in Redis until a
+    # worker XACKs it. The fallback exists so `make dev` without
+    # docker-compose still gives a working bot.
+    redis_client = getattr(request.app.state, "redis", None)
+    if redis_client is not None:
+        try:
+            payload = QueuePayload.from_event(
+                event, feature=dispatch.feature, task_id=dispatch.task_id
+            )
+            entry_id = await enqueue(redis_client, payload)
+            return {
+                "status": "accepted",
+                "delivery_id": event.delivery_id,
+                "kind": event.kind.value,
+                "feature": dispatch.feature.value,
+                "task_id": dispatch.task_id,
+                "entry_id": entry_id,
+                "relevant": event.is_relevant,
+            }
+        except Exception:
+            # Redis enqueue failed (RDB save in progress, OOM, etc.).
+            # Don't 5xx the webhook — degrade to BackgroundTask so the
+            # event isn't lost. The next event will retry the queue path.
+            _logger.exception(
+                "queue_enqueue_failed_falling_back_to_background_task",
+                extra={"delivery_id": event.delivery_id, "repo": event.repo},
+            )
+
     background.add_task(
         _run_dispatch,
         request.app,
@@ -285,79 +303,21 @@ async def _run_dispatch(
     event: UnifiedEvent,
     dispatch: Dispatch,
 ) -> None:
-    """Background task: load config → pre-flight → handler.
+    """In-process dispatch — used as the fallback when Redis is absent.
 
-    Lives in webapp.py rather than middleware/preflight.py so the
-    pre-flight runner stays test-friendly (it accepts a ready
-    `PreflightContext` and a middleware iterable; the webapp is
-    responsible for assembling both).
+    Production runs through the Redis queue worker (``openbot.queue.runner``)
+    instead; this path exists so `make dev` without docker-compose still
+    delivers a working bot and so unit tests don't need fakeredis just
+    to exercise the webhook flow.
 
-    Errors here must NEVER raise out — the webhook already returned
-    202 and a stack trace at this layer would just go to logs.
+    The actual middleware chain + handler invocation lives in
+    ``openbot.dispatch.run_dispatch`` so the worker and the webapp can't
+    drift apart.
     """
-    try:
-        config = await load_for_repo(adapter, event)
-    except Exception:
-        _logger.exception(
-            "preflight_config_load_failed",
-            extra={"delivery_id": event.delivery_id, "repo": event.repo},
-        )
-        return
-
-    ctx = PreflightContext(
+    await run_dispatch(
+        adapter=adapter,
         event=event,
         dispatch=dispatch,
-        config=config,
-        adapter=adapter,
         session_factory=getattr(app_instance.state, "db_session_factory", None),
         redis=getattr(app_instance.state, "redis", None),
     )
-
-    # Slice C chain (harness spec §3 M3, locked order):
-    #
-    #   1. KillSwitch       env emergency stop; cheapest check, runs first
-    #   2. CancelLabel      `cancel-openbot` label drop (one GitHub call, cached)
-    #   3. CancelComment    chat-only `@openbot stop|cancel|停|取消` + seeds cancel set
-    #   4. ForkPRGate       review-only: fork PR default-deny + `/ok-to-test` opt-in
-    #   5. ActorRole        fix-only (and chat when `allow_anyone: false`)
-    #   6. RateLimit        chat-only daily/hourly quotas
-    #   7. Budget           global hard kill + per-repo monthly soft cap (DB)
-    #
-    # Security gates sit BEFORE rate limit / budget so an unauthorized
-    # actor doesn't burn quota or audit-row noise just by repeatedly
-    # hitting the webhook.
-    middlewares: list = [
-        KillSwitchMiddleware(),
-        CancelLabelMiddleware(),
-        CancelCommentMiddleware(),
-        ForkPRGateMiddleware(),
-        ActorRoleMiddleware(),
-        RateLimitMiddleware(),
-        BudgetMiddleware(),
-    ]
-    try:
-        decision = await run_preflight(ctx, middlewares)
-    except Exception:
-        _logger.exception(
-            "preflight_runner_crashed",
-            extra={"delivery_id": event.delivery_id, "repo": event.repo},
-        )
-        return
-
-    from openbot.middleware import MiddlewareResult
-
-    if decision.result is not MiddlewareResult.PROCEED:
-        # Audit + comment already handled by run_preflight; nothing else.
-        return
-
-    try:
-        await dispatch.handler(ctx)
-    except Exception:
-        _logger.exception(
-            "workflow_handler_crashed",
-            extra={
-                "delivery_id": event.delivery_id,
-                "repo": event.repo,
-                "feature": dispatch.feature.value,
-            },
-        )
