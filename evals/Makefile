@@ -43,6 +43,7 @@ endef
         data-review data-chat data-fix data-test \
         data-review-refresh data-chat-refresh data-fix-refresh data-test-refresh \
         test smoke smoke-docker smoke-review smoke-fix smoke-test smoke-chat check \
+        sandbox-clean sandbox-status \
         view-bundle view-open view-stop
 
 help: ## Show eval-only targets
@@ -108,11 +109,27 @@ smoke-test: ## Run SWT-Bench test-generation baseline smoke eval
 		'evals/tasks/test_swt_bench_verified.py@test_swt_bench_verified_deepagents' \
 		--limit $(LIMIT) $(INSPECT_FLAGS)
 
-smoke-chat: ## Run SWE-QA-Pro chat baseline smoke eval
-	$(call inspect_banner,chat_swe_qa_pro_baseline)
+smoke-chat: ## Run SWE-QA-Pro chat "+Agent" smoke eval — paper Table 2 right column (Docker sandbox + repo clone + read tools)
+	$(call inspect_banner,chat_swe_qa_pro_openbot)
 	cd .. && $(DOPPLER) $(INSPECT) eval \
-		'evals/tasks/chat_swe_qa_pro.py@chat_swe_qa_pro_baseline' \
+		'evals/tasks/chat_swe_qa_pro.py@chat_swe_qa_pro_openbot' \
 		--limit $(LIMIT) $(INSPECT_FLAGS)
+
+# ─── Sandbox housekeeping ───────────────────────────────────────
+# Force-remove any DockerSandboxBackend containers left behind by a crashed
+# eval run. Matches strictly on our label so user-owned containers are safe.
+sandbox-status: ## List eval sandbox containers (any state)
+	@docker ps -a --filter "label=openbot.eval.sandbox=1" \
+		--format "table {{.Names}}\t{{.Status}}\t{{.CreatedAt}}" || true
+
+sandbox-clean: ## Force-remove all leftover eval sandbox containers
+	@ids="$$(docker ps -aq --filter 'label=openbot.eval.sandbox=1' 2>/dev/null)"; \
+	if [ -z "$$ids" ]; then \
+		echo "no orphan sandbox containers"; \
+	else \
+		echo "removing $$(echo $$ids | wc -w | tr -d ' ') sandbox container(s)…"; \
+		docker rm -f $$ids; \
+	fi
 
 # ─── Inspect log viewer ─────────────────────────────────────────
 view-bundle: ## Build a static Inspect viewer bundle from eval logs

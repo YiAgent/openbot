@@ -33,12 +33,17 @@ Lifecycle::
 from __future__ import annotations
 
 import asyncio
+import atexit
 import base64
 import binascii
+import contextlib
 import logging
+import os
 import re
 import shlex
+import subprocess
 import uuid
+import weakref
 from typing import TYPE_CHECKING, Any
 
 from deepagents.backends.protocol import (
@@ -107,6 +112,156 @@ _INSTALL_GIT_SCRIPT = (
 # bash-session minimum.
 _DEFAULT_RUN_TIMEOUT_S = 600
 
+# Identifying label applied to every container we create. Used by:
+#  * the startup orphan sweep (kills containers left over from a previous
+#    crashed run before they pile up), and
+#  * the per-process `atexit` hook (force-removes anything still alive when
+#    the eval process exits, even on SIGTERM / pytest cancel).
+# We never match on container *name* (the user could rename them) and we
+# never touch containers without this label — that would risk hitting the
+# user's own dev containers.
+_LABEL_KEY = "openbot.eval.sandbox"
+_LABEL_VALUE = "1"
+_LABEL_SESSION_KEY = "openbot.eval.session"
+# One session id per Python process. Lets us scope the `atexit` cleanup to
+# *our* containers without nuking containers a sibling process is actively
+# using (e.g. parallel `make smoke-fix` + `make smoke-test`).
+_SESSION_ID = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+# Container ids alive in this process. We use a set rather than a WeakSet of
+# backends because the atexit hook needs to survive past Python object GC.
+_LIVE_CONTAINER_IDS: set[str] = set()
+
+
+def _shell_rm_container(container_id: str) -> None:
+    """Best-effort force-remove via the docker CLI.
+
+    Called from ``atexit`` and ``weakref.finalize``, both of which may run
+    after the asyncio loop has closed — so we cannot use docker-py's async
+    paths or our own ``aexecute``. The CLI is the only thing guaranteed to
+    work at interpreter shutdown. Stderr is discarded; the container might
+    already be gone (race with normal aclose), which is fine.
+    """
+    # Docker daemon down, CLI missing, or container already cleaned — nothing
+    # we can do at exit time. The orphan sweep on next startup will mop up.
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(
+            ["docker", "rm", "-f", container_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+
+
+def _atexit_sweep() -> None:
+    """Force-remove every container this process started that's still alive.
+
+    Runs unconditionally at interpreter shutdown — catches SIGTERM, uncaught
+    exceptions, and `sys.exit()` paths that bypassed solver-level finally
+    blocks. Safe to call repeatedly; ids that were already cleaned just no-op.
+    """
+    for cid in list(_LIVE_CONTAINER_IDS):
+        _shell_rm_container(cid)
+    _LIVE_CONTAINER_IDS.clear()
+
+
+atexit.register(_atexit_sweep)
+
+
+def _sweep_orphans_from_prior_runs() -> None:
+    """Force-remove containers labelled by *previous* eval processes.
+
+    Runs once per process, lazily, the first time we start a container.
+    Filters strictly on our label, so user-owned containers are safe. We
+    explicitly skip containers tagged with the current session id, because
+    a sibling eval process may have legitimately started those.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-aq",
+                "--filter",
+                f"label={_LABEL_KEY}={_LABEL_VALUE}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        # Docker daemon unreachable — defer; the real start_container call
+        # will surface a clearer error.
+        return
+    if result.returncode != 0:
+        return
+    ids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not ids:
+        return
+    # Inspect each candidate's session label and skip any that match the
+    # current process — those belong to us and are still in use.
+    keep_alive: set[str] = set()
+    try:
+        inspect = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "--format",
+                '{{.Id}} {{index .Config.Labels "' + _LABEL_SESSION_KEY + '"}}',
+                *ids,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if inspect.returncode == 0:
+            for line in inspect.stdout.splitlines():
+                parts = line.strip().split(" ", 1)
+                if len(parts) == 2 and parts[1] == _SESSION_ID:
+                    keep_alive.add(parts[0])
+    except (OSError, subprocess.SubprocessError):
+        pass
+    to_remove = [cid for cid in ids if cid not in keep_alive]
+    if not to_remove:
+        return
+    logger.info(
+        "removing %d orphan sandbox container(s) from prior eval runs",
+        len(to_remove),
+    )
+    subprocess.run(
+        ["docker", "rm", "-f", *to_remove],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+        check=False,
+    )
+
+
+_orphan_sweep_done = False
+
+
+def _ensure_orphan_sweep() -> None:
+    """Idempotent wrapper — sweep once per process."""
+    global _orphan_sweep_done
+    if _orphan_sweep_done:
+        return
+    _orphan_sweep_done = True
+    _sweep_orphans_from_prior_runs()
+
+
+def _shell_rm_container_and_forget(container_id: str) -> None:
+    """Finalizer payload: remove container and drop it from the live set.
+
+    Module-level so :func:`weakref.finalize` can hold the reference without
+    keeping the backend instance alive (a bound method would defeat the
+    point of finalize).
+    """
+    _LIVE_CONTAINER_IDS.discard(container_id)
+    _shell_rm_container(container_id)
+
 
 def _docker() -> Any:
     """Import :mod:`docker` lazily and surface a clear error if it's missing.
@@ -160,6 +315,20 @@ class DockerSandboxBackend(BaseSandbox):
         # Set by ``create_for_sample`` when the requested SHA wasn't reachable
         # and we fell back to the default branch HEAD.
         self._used_sha_fallback: bool = False
+
+        # Track this container in the process-global set and register a
+        # weakref finalizer. Two layered safety nets:
+        #   * if aclose() runs → finalizer cancels itself (clean path)
+        #   * if backend is GC'd without aclose → finalizer force-removes
+        #   * if process exits without GC → atexit sweeps _LIVE_CONTAINER_IDS
+        cid = getattr(container, "id", None)
+        if cid:
+            _LIVE_CONTAINER_IDS.add(cid)
+            self._finalizer: weakref.finalize | None = weakref.finalize(
+                self, _shell_rm_container_and_forget, cid
+            )
+        else:
+            self._finalizer = None
 
     # ── factories ──────────────────────────────────────────────────────────
 
@@ -243,6 +412,9 @@ class DockerSandboxBackend(BaseSandbox):
 
         # Validate up-front so the error surfaces before we hit the daemon.
         validated_image = _validate_image(image)
+        # One-shot orphan cleanup before the first container of this process.
+        # Cheap (single `docker ps` call) and idempotent.
+        _ensure_orphan_sweep()
 
         def _do_start() -> Any:
             docker = _docker()
@@ -268,6 +440,14 @@ class DockerSandboxBackend(BaseSandbox):
                 "auto_remove": False,
                 "name": f"openbot-agent-{uuid.uuid4().hex[:12]}",
                 "network_mode": "bridge",
+                # Labels enable the orphan sweep and atexit cleanup to
+                # safely identify our containers without touching anything
+                # the user owns. ``session`` lets sibling eval processes
+                # coexist (sweep skips other live sessions).
+                "labels": {
+                    _LABEL_KEY: _LABEL_VALUE,
+                    _LABEL_SESSION_KEY: _SESSION_ID,
+                },
             }
             return client.containers.run(**run_kwargs)  # nosemgrep
 
@@ -418,18 +598,33 @@ class DockerSandboxBackend(BaseSandbox):
         if self._closed:
             return
         self._closed = True
+        cid = getattr(self._container, "id", None)
 
         def _do_close() -> None:
             try:
-                self._container.stop(timeout=2)
+                # Slightly longer than before — 2s wasn't always enough for
+                # in-flight pytest subprocesses to wind down; 5s still
+                # caps total teardown well under the eval per-sample budget.
+                self._container.stop(timeout=5)
             except Exception:
                 logger.warning("Container stop failed", exc_info=True)
             try:
-                self._container.remove(force=True)
+                # ``v=True`` also reaps any anonymous volumes the container
+                # accumulated (apt cache, pip cache); otherwise dangling
+                # volumes pile up on disk and `docker system df` grows.
+                self._container.remove(force=True, v=True)
             except Exception:
                 logger.warning("Container remove failed", exc_info=True)
 
         await asyncio.to_thread(_do_close)
+
+        # Clean exit: drop tracking + cancel the finalize fallback so it
+        # doesn't fire later trying to remove an already-gone container.
+        if cid:
+            _LIVE_CONTAINER_IDS.discard(cid)
+        if self._finalizer is not None:
+            self._finalizer.detach()
+            self._finalizer = None
 
     async def __aenter__(self) -> DockerSandboxBackend:
         return self

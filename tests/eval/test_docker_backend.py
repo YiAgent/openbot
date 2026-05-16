@@ -111,8 +111,9 @@ class _FakeContainer:
     def stop(self, *, timeout: int = 0) -> None:
         self.stopped = True
 
-    def remove(self, *, force: bool = False) -> None:
+    def remove(self, *, force: bool = False, v: bool = False) -> None:
         self.removed = True
+        self.volumes_removed = v
 
 
 class _FakeImageStore:
