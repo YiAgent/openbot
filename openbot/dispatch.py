@@ -26,14 +26,17 @@ from typing import TYPE_CHECKING
 from openbot.config_repo import load_for_repo
 from openbot.middleware import (
     ActorRoleMiddleware,
+    AuditStartMiddleware,
     BudgetMiddleware,
     CancelCommentMiddleware,
     CancelLabelMiddleware,
+    FeatureToggleMiddleware,
     ForkPRGateMiddleware,
     KillSwitchMiddleware,
     MiddlewareResult,
     PreflightContext,
     RateLimitMiddleware,
+    SanitizeInputsMiddleware,
     run_preflight,
 )
 
@@ -49,20 +52,48 @@ _logger = logging.getLogger(__name__)
 
 
 def build_preflight_chain() -> list:
-    """The locked input-side chain (harness spec §3 M3, slice C order).
+    """The locked input-side chain (harness spec §3 M3 + plan §5 amendments).
+
+    Order rationale (cheapest first, then sharper teeth, then audit):
+
+      1. ``sanitize_inputs``  byte-level entry gate; must run first so
+                              every downstream middleware sees the
+                              cleaned event via ``sanitized_event(ctx)``.
+      2. ``kill_switch``      env-var check; admin-controlled override
+                              that should silence everything below it.
+      3. ``feature_toggle``   `.openbot/config.yaml` features.{x}=false
+                              gate. Cheaper than a GitHub API call but
+                              user-controlled so sits *after* kill switch.
+      4. ``cancel_label``     one GitHub API call; result cached on
+                              ``ctx.cache`` for downstream reuse.
+      5. ``cancel_comment``   regex on comment body; only fires on chat
+                              events. Spec §9.4 says always-reply.
+      6. ``fork_pr_gate``     PRD §4.8 hard gate; consults same labels
+                              cache from ``cancel_label``.
+      7. ``actor_role``       per-feature role allow-list (FIX / CHAT).
+                              Caches role on ``ctx.cache`` for #8.
+      8. ``rate_limit``       Redis counters for chat-feature day/hour.
+      9. ``budget``           Postgres ``cost_meter`` sum check.
+      10. ``audit_start``     last gate before handler — records the
+                              STARTED row so a handler that import-errors
+                              still leaves a "preflight passed" trail
+                              (spec §3 M9).
 
     Returned as a list (not a tuple) because asyncio Protocol consumers
-    iterate it once per call and we don't reuse instances across
-    requests today. New gates append; reordering needs a spec amendment.
+    iterate it once per call. Reordering needs a spec amendment + the
+    test in ``tests/middleware/test_chain_order.py``.
     """
     return [
+        SanitizeInputsMiddleware(),
         KillSwitchMiddleware(),
+        FeatureToggleMiddleware(),
         CancelLabelMiddleware(),
         CancelCommentMiddleware(),
         ForkPRGateMiddleware(),
         ActorRoleMiddleware(),
         RateLimitMiddleware(),
         BudgetMiddleware(),
+        AuditStartMiddleware(),
     ]
 
 

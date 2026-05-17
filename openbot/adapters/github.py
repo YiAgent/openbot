@@ -72,10 +72,22 @@ class GitHubAdapter(ChannelAdapter):
         # HMAC needs bytes; store once.
         self._secret = webhook_secret.encode("utf-8")
         self._auth = auth
-        self._http = http or httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS)
+        # Lazy-init the httpx client so callers that only need
+        # ``verify_signature`` / ``parse_event`` (sync, pure functions) don't
+        # leak a socket pool when the adapter is GC'd without ``aclose``.
+        # When the caller passes their own client we never own it.
+        self._http: httpx.AsyncClient | None = http
         self._owns_http = http is None
         self._api_base = api_base.rstrip("/")
         self._user_agent = f"OpenBot/{__version__}"
+
+    def _get_http(self) -> httpx.AsyncClient:
+        """Return the httpx client, lazily creating one if we own it."""
+        if self._http is None:
+            # ``_owns_http`` was set to True in ``__init__`` for this branch;
+            # no need to re-check.
+            self._http = httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS)
+        return self._http
 
     def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
         sent = self._header(headers, _SIGNATURE_HEADER)
@@ -163,7 +175,7 @@ class GitHubAdapter(ChannelAdapter):
         # `safe=""` so `/` and other path-special chars in label names get encoded.
         url = f"{self._api_base}/repos/{event.repo}/issues/{number}/labels/{quote(label, safe='')}"
         token = await self._installation_token(event)
-        response = await self._http.delete(url, headers=self._headers(token.token))
+        response = await self._get_http().delete(url, headers=self._headers(token.token))
         if response.status_code == 404:
             return  # idempotent: removing an absent label is fine
         response.raise_for_status()
@@ -179,8 +191,9 @@ class GitHubAdapter(ChannelAdapter):
         return str(data.get("permission") or "none")
 
     async def aclose(self) -> None:
-        if self._owns_http:
+        if self._owns_http and self._http is not None:
             await self._http.aclose()
+            self._http = None
 
     # ───────────────────────── internals ─────────────────────────
 
@@ -193,7 +206,7 @@ class GitHubAdapter(ChannelAdapter):
         json_body: dict[str, Any] | None = None,
     ) -> Any:
         token = await self._installation_token(event)
-        response = await self._http.request(
+        response = await self._get_http().request(
             method, url, json=json_body, headers=self._headers(token.token)
         )
         response.raise_for_status()

@@ -88,9 +88,25 @@ async def audit_lifecycle(
     The handle's `outcome` is written on the COMPLETED row. Exceptions
     are re-raised after the FAILED row is written, so callers can decide
     whether to swallow them (workflow stubs do — see each stub).
+
+    Coordination with ``AuditStartMiddleware`` (spec §3 M3 + §3 M9):
+    when the middleware already wrote STARTED at the end of preflight,
+    it sets ``ctx.cache[AUDIT_STARTED_CACHE_KEY] = True``. We skip our
+    own STARTED write in that case so there's exactly one STARTED row
+    per webhook delivery. The middleware path is preferred because it
+    catches handler-side import / crash before the ``async with`` body
+    even runs; the in-context fallback here exists for tests + dev
+    modes that bypass the chain.
     """
+    # Import locally to avoid an import cycle: openbot.middleware.audit
+    # already imports from preflight, which imports models — a top-level
+    # import here would pull middleware into workflows. The cache key
+    # is a single constant string so the cost is trivial.
+    from openbot.middleware.audit import AUDIT_STARTED_CACHE_KEY
+
     handle = _AuditHandle()
-    await _write_phase(ctx, workflow=workflow, phase=WorkflowPhase.STARTED, outcome=None)
+    if not ctx.cache.get(AUDIT_STARTED_CACHE_KEY):
+        await _write_phase(ctx, workflow=workflow, phase=WorkflowPhase.STARTED, outcome=None)
     try:
         yield handle
     except Exception as exc:

@@ -21,7 +21,7 @@ TARGET_URL := http://$(HOST):$(PORT)/webhook/github
 SMEE_URL := $(shell sed -n 's/^OPENBOT_GITHUB_WEBHOOK_PROXY_URL=\(.*\)$$/\1/p' .env 2>/dev/null)
 
 .PHONY: help install sync hooks test test-fast lint lint-fix fmt fmt-check check \
-        dev dev-server dev-smee run smoke setup secret-scan \
+        dev dev-server dev-smee run smoke setup secret-scan doctor \
         compose-up compose-down compose-logs compose-ps clean distclean
 
 help: ## Show this help
@@ -92,6 +92,9 @@ smoke: ## Hit /health to verify server is up
 
 setup: ## Interactive GitHub App + .env wizard (manifest flow)
 	uv run python -m openbot.setup_wizard
+
+doctor: ## First-run self-check (ENV / Postgres / Redis / schema / webhook round-trip)
+	$(PY) python scripts/doctor.py
 
 secret-scan: ## Run trufflehog over full git history
 	bash scripts/hooks/trufflehog-full.sh

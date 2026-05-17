@@ -156,16 +156,36 @@ def dispatch_for(event: UnifiedEvent) -> Dispatch | None: ...
 
 ### M3 + M9. Pre-flight middleware 链 — `openbot/middleware/preflight.py`
 
-**链路顺序**（严格自上而下，PRD §5.2 锁定）
+**链路顺序**（严格自上而下，PRD §5.2 锁定，最末次修订 2026-05-17 / slice E amendments）
 
 ```
-1. SanitizeInputs   → 2. KillSwitch    → 3. CancelLabel  → 4. ForkPRGate
-5. ActorRole        → 6. RateLimit     → 7. BudgetCheck  → 8. AuditStart
-                                                              ↓
-                                                         Workflow handler
-                                                              ↓
-                                                         9. AuditEnd
+ 1. SanitizeInputs   →  2. KillSwitch    →  3. FeatureToggle
+                                                    ↓
+ 4. CancelLabel      →  5. CancelComment →  6. ForkPRGate
+                                                    ↓
+ 7. ActorRole        →  8. RateLimit     →  9. BudgetCheck
+                                                    ↓
+                                            10. AuditStart
+                                                    ↓
+                                            Workflow handler
+                                                    ↓
+                                            11. AuditEnd  (即 audit_lifecycle)
 ```
+
+排序原则（cheap → sharp → audit）：
+
+- **SanitizeInputs**（字节级入口闸）必须**先于**所有下游 middleware，因为
+  其余 middleware 通过 `sanitized_event(ctx)` 读已清洗副本，绕过它就拿到
+  原始字节。与 M8 的 `wrap_user_input` 互补 — 前者管"危险字节进系统"，
+  后者管"危险结构进 LLM"。
+- **FeatureToggle**（spec §3 M1 隐含承诺）紧跟 KillSwitch：
+  `features.chat=false` 必须真的 BLOCK；放在最便宜的纯内存读层。
+- **CancelComment** 与 CancelLabel 并列：spec 原本只在 M4 描述了 cancel-
+  comment 路径，链表里未列。每条 cancel 路径独立 middleware 让 audit 行能
+  指明触发机制（label / comment / env），便于事后定位。
+- **AuditStart** 在 chain 末尾、handler 之前**强制**写一行 STARTED，
+  这样即使 handler import-error / 一进门就 raise，audit 表也留有 trace。
+  与 `audit_lifecycle` 的协调见下方 §3 M9。
 
 **统一接口**
 
@@ -208,6 +228,36 @@ class PreflightContext:
 - [ ] `run_preflight(ctx, middlewares) -> MiddlewareDecision` 首个 `BLOCKED` 短路
 - [ ] 每个被 BLOCK 的请求都写一行 `AuditLog(phase=REJECTED/SKIPPED, outcome=<reason>, details={"middleware": name})`
 - [ ] 单元测试：fake middleware 链 + 验证顺序敏感
+
+#### M9 协调：`AuditStart` middleware 与 `audit_lifecycle` 上下文管理器
+
+链中第 10 步 `AuditStartMiddleware` 与跨模块的 `audit_lifecycle(...)` 都能写
+`AuditLog(phase=STARTED, …)`。**默认权威**：middleware 写，`audit_lifecycle`
+只在 middleware 未写过时补写 —— 防重复 STARTED 行，同时让走非 middleware
+路径（CLI / 异步重放）也能保持 schema 完整。
+
+约定（**实现锁定**）：
+
+- `openbot/middleware/audit_start.py` 导出常量
+  `AUDIT_STARTED_CACHE_KEY = "audit_started"`。
+- `AuditStartMiddleware.__call__` 写完 STARTED 行后置位
+  `ctx.cache[AUDIT_STARTED_CACHE_KEY] = True`（`PreflightContext.cache` 是
+  `dict[str, Any]`，frozen dataclass 上唯一可变字段）。
+- `openbot/persistence/audit.audit_lifecycle(...)` 进入时先读
+  `cache.get(AUDIT_STARTED_CACHE_KEY)`；为 `True` 则跳过 STARTED 写入，
+  只负责 COMPLETED/FAILED 终态行；为 `False` 或 cache 缺失则保持原行为
+  （STARTED + 终态都写）。
+- 终态行（COMPLETED / FAILED）**永远**由 `audit_lifecycle` 写，
+  middleware 不碰 —— handler 抛异常时只有 `__aexit__` 看得见。
+
+正确性矩阵：
+
+| 路径 | STARTED 由谁写 | 终态由谁写 | 结果 |
+|---|---|---|---|
+| 正常 webhook（middleware 全过） | AuditStartMiddleware | audit_lifecycle | 1×STARTED + 1×终态 ✓ |
+| Pre-flight BLOCKED（链中段短路） | 被 BLOCK 的 middleware 自己（REJECTED/SKIPPED 行） | — | 1× 终态行（无 STARTED） ✓ |
+| CLI / 重放（无 middleware 链） | audit_lifecycle | audit_lifecycle | 1×STARTED + 1×终态 ✓ |
+| Handler import-error | AuditStartMiddleware | audit_lifecycle（FAILED） | STARTED 留有 trace ✓ |
 
 ---
 
@@ -480,13 +530,23 @@ env (OPENBOT_*) > .openbot/config.yaml > baked-in default
 | Middleware | `tests/middleware/test_rate_limit.py` | 8 |
 | Middleware | `tests/middleware/test_security.py` | 8 |
 | Middleware | `tests/middleware/test_preflight_order.py` | 4 |
+| Middleware | `tests/middleware/test_sanitize.py`（slice E G1） | 8 |
+| Middleware | `tests/middleware/test_feature_toggle.py`（slice E G2） | 8 |
+| Middleware | `tests/middleware/test_audit_start.py`（slice E G3） | 3 |
 | Unit | `tests/llm/test_sanitize.py` | 6 |
 | Unit | `tests/workflows/test_chat_parser.py` | 8 |
 | Integration | `tests/test_webhook_endpoint.py`（扩） | +10（每个 BLOCKED 路径） |
 | Queue | `tests/queue/test_enqueue_worker.py` | 6 |
-| **小计** | | **≈ 86 新 cases** |
+| E2E | `tests/e2e/test_spec_demos.py`（slice E G5；§7 验收 demo 全量） | 9 |
+| Lint | `tests/test_no_raw_user_input.py`（slice E G4 — AST 扫 workflow 包） | 4 |
+| **小计** | | **≈ 118 新 cases** |
 
-目标完成后总 test count：132 → **~218**。
+目标完成后总 test count：132 → **~250**。
+
+`tests/e2e/test_spec_demos.py` 是 §7 8 个 demo 的可执行镜像 + 多一个 "worker
+PEL recovery" 用例（合计 9）；CI 直接跑它即视为 §7 验收闸通过，无需手动布
+fixture repo。Slice E 文件全部走 `pytest-asyncio mode=auto` + fakeredis +
+in-memory aiosqlite，不需要外部依赖。
 
 ---
 
