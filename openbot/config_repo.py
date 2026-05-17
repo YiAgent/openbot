@@ -274,7 +274,7 @@ async def _fetch_yaml(adapter: Any, event: UnifiedEvent) -> str | None:
     url = f"{adapter._api_base}/repos/{event.repo}/contents/.openbot/config.yaml"
     headers = adapter._headers(token.token)
     try:
-        response = await adapter._http.get(url, headers=headers)
+        response = await adapter._http_client.get(url, headers=headers)
     except httpx.HTTPError as exc:
         _logger.warning(
             "config_fetch_http_error",

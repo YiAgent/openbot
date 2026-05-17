@@ -62,6 +62,10 @@ def _make_adapter(response: httpx.Response, *, token_raises: Exception | None = 
         adapter._installation_token = AsyncMock(side_effect=token_raises)
     adapter._http = AsyncMock()
     adapter._http.get = AsyncMock(return_value=response)
+    # Property mocks are tricky: we need to mock the type, or the instance's __class__.
+    # Simplest for this test: make _http a real-ish property or just mock the helper.
+    adapter._get_http = lambda: adapter._http
+    type(adapter)._http_client = property(lambda self: self._get_http())
     return adapter
 
 

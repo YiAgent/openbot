@@ -120,10 +120,13 @@ class GitHubAdapter(ChannelAdapter):
     def _get_http(self) -> httpx.AsyncClient:
         """Return the httpx client, lazily creating one if we own it."""
         if self._http is None:
-            # ``_owns_http`` was set to True in ``__init__`` for this branch;
-            # no need to re-check.
             self._http = httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS)
         return self._http
+
+    @property
+    def _http_client(self) -> httpx.AsyncClient:
+        """Helper to ensure we always get a valid client via _get_http()."""
+        return self._get_http()
 
     def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
         """HMAC-SHA-256 trust boundary (PRD §4.8).
