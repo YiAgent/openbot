@@ -6,7 +6,7 @@ import pytest
 
 from openbot.events import EventKind, UnifiedEvent
 from openbot.llm.router import Feature
-from openbot.router import _CHAT_PREFIX, derive_task_id, dispatch_for
+from openbot.router import _CHAT_PREFIX_DEFAULT, derive_task_id, dispatch_for
 from openbot.workflows import maybe_run_chat, maybe_run_fix, maybe_run_review, maybe_run_triage
 
 
@@ -164,7 +164,20 @@ def test_dispatches_mention_comment_to_chat(kind: EventKind) -> None:
     d = dispatch_for(
         _event(
             kind=kind,
-            comment_body=f"{_CHAT_PREFIX}help me reproduce this",
+            comment_body=f"{_CHAT_PREFIX_DEFAULT}help me reproduce this",
+        )
+    )
+    assert d is not None
+    assert d.feature is Feature.CHAT
+    assert d.handler is maybe_run_chat
+
+
+def test_dispatches_yibots_mention_to_chat() -> None:
+    """Production support for the custom App handle '@yibots '."""
+    d = dispatch_for(
+        _event(
+            kind=EventKind.ISSUE_COMMENT_CREATED,
+            comment_body="@yibots help me reproduce this",
         )
     )
     assert d is not None
