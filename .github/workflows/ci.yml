@@ -78,15 +78,3 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - run: echo "No Python sources yet — CI lint/test will activate once pyproject.toml lands."
-
-  # E0-T04: LangSmith run validator stub. Real client wiring lands in E1-T02.
-  # Kept as a noop placeholder job so the CI surface exists and future PRs can
-  # depend on it without re-architecting the workflow file.
-  eval-validate-langsmith:
-    needs: detect
-    if: needs.detect.outputs.has_python == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@v6
-      - name: validate_langsmith_run.py --help (stub smoke)
-        run: python3 scripts/validate_langsmith_run.py --help
