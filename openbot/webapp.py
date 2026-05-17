@@ -234,7 +234,21 @@ async def github_webhook(
         )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
 
-    event = adapter.parse_event(body, headers)
+    try:
+        event = adapter.parse_event(body, headers)
+    except SignatureError as exc:
+        # parse_event raises SignatureError for "valid HMAC + invalid JSON"
+        # by design (github.py docstring): a passer-by who can sign but
+        # sends garbage is a more pointed probe than one who can't sign at
+        # all, so we collapse it into the same 401 lane rather than 500.
+        # Distinct log key so dashboards can separate the two failure
+        # modes — alert on bad-JSON-after-good-HMAC differently than
+        # plain HMAC-mismatch noise.
+        _logger.warning(
+            "webhook_payload_unparseable",
+            extra={"delivery_id": headers.get("x-github-delivery", "?"), "reason": str(exc)},
+        )
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
 
     # Dedup: if GitHub re-delivers the same X-GitHub-Delivery (our slow handler
     # or any 5xx makes them retry), we still 202 but skip workflow dispatch.

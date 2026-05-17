@@ -62,8 +62,13 @@ def test_unknown_env_var_fails_loud(
         get_default_sandbox_kind()
 
 
-def test_explicit_kind_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Passing ``kind=`` ignores the env so call sites can force one backend."""
+async def test_explicit_kind_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Passing ``kind=`` ignores the env so call sites can force one backend.
+
+    Async (not sync + ``asyncio.run``) so pytest-asyncio manages the loop —
+    a sync ``asyncio.run`` here leaks the loop pytest-asyncio later auto-
+    creates via ``asyncio.get_event_loop()`` during fixture restoration.
+    """
 
     captured: dict[str, Any] = {}
 
@@ -79,32 +84,24 @@ def test_explicit_kind_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(DockerSandboxBackend, "create_for_sample", _docker_factory)
 
-    import asyncio
-
     spec = RepoSpec(repo="x/y", base_commit="abc")
-    asyncio.run(create_sandbox_for_sample(repo_spec=spec, kind=DOCKER))
+    await create_sandbox_for_sample(repo_spec=spec, kind=DOCKER)
 
     assert captured["kind"] == "docker"
     assert captured["kwargs"]["repo_spec"] is spec
 
 
-def test_unsupported_kind_raises() -> None:
+async def test_unsupported_kind_raises() -> None:
     """Unknown ``kind`` arg fails loudly rather than guessing."""
-    import asyncio
-
     with pytest.raises(ValueError, match="Unsupported sandbox backend"):
-        asyncio.run(
-            create_sandbox_for_sample(
-                repo_spec=RepoSpec(repo="x/y", base_commit="abc"),
-                kind="kubernetes",
-            )
+        await create_sandbox_for_sample(
+            repo_spec=RepoSpec(repo="x/y", base_commit="abc"),
+            kind="kubernetes",
         )
 
 
-def test_create_bare_dispatches_by_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_bare_dispatches_by_kind(monkeypatch: pytest.MonkeyPatch) -> None:
     """``create_bare_sandbox`` follows the same dispatch logic."""
-    import asyncio
-
     captured: dict[str, Any] = {}
 
     async def _docker_bare(**kwargs: Any) -> Any:
@@ -116,7 +113,7 @@ def test_create_bare_dispatches_by_kind(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(DockerSandboxBackend, "create_bare", _docker_bare)
 
-    asyncio.run(create_bare_sandbox(kind=DOCKER, workspace="/tmp/ws"))
+    await create_bare_sandbox(kind=DOCKER, workspace="/tmp/ws")
     assert captured["called"] == "docker"
     assert captured["kwargs"]["workspace"] == "/tmp/ws"
 
