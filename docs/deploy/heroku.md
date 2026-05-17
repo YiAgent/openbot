@@ -68,6 +68,9 @@ cat ./secrets/github-app-private.pem | \
 |--------------------------------------|----------------------------------------------------|
 | `OPENBOT_GITHUB_APP_ID`              | 没有这个，写回（评论 / label）功能整体禁用          |
 | `OPENBOT_GITHUB_APP_PRIVATE_KEY_PEM` | 同上                                              |
+| `OPENBOT_SENTRY_DSN`                 | 没有就不上报错误到 Sentry（`sentry_sdk.init(dsn=None)` 文档保证 no-op）|
+| `OPENBOT_ENVIRONMENT`                | 默认 `development`；prod 应设 `production` 给 Sentry event 打 tag |
+| `OPENBOT_SENTRY_TRACES_SAMPLE_RATE`  | 默认 0.0（仅 error）；想看性能 trace 设 `0.05-0.2`，注意吃 Sentry 配额 |
 
 `webapp._build_auth` 看到 `app_id` 或 `pem` 任一为空就返回 `None`，webhook 仍能接受 + 验签 + 入队，只是 worker 跑完 workflow 后没法发表评论。Receive-only 部署可以先这样上线。
 

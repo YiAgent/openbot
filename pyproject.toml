@@ -74,6 +74,25 @@ dependencies = [
     # (LangSmith only mirrors curated, lower-volume datasets such as
     # martian_2026w20 and chat_swe_qa_pro_v1).
     "datasets>=3.0",
+    # Error tracking + perf trace (PRD §9.4 audit_log handles domain events;
+    # Sentry handles cross-cutting exception capture). DSN is optional —
+    # `sentry_sdk.init(dsn=None)` is a documented no-op so dev / CI runs
+    # never need a Sentry project. Heroku sets SENTRY_DSN via
+    # `heroku config:set OPENBOT_SENTRY_DSN=...`.
+    "sentry-sdk[fastapi]>=2.18",
+    # GitHub webhook + REST primitives (sans-IO). Replaces ~30 lines of
+    # hand-rolled HMAC + payload parsing in adapters/github.py with the
+    # canonical implementation used by the Python GitHub bot ecosystem.
+    # We only use `gidgethub.sansio` — the HTTP layer stays httpx.
+    "gidgethub>=5.4",
+    # Retry decorator for transient GitHub 5xx + connect/read timeouts.
+    # NOT a circuit breaker (we don't need one at v0.1 scale) — pure
+    # exponential-backoff retry with bounded attempts.
+    "tenacity>=9.0",
+    # /metrics endpoint for Heroku dyno metrics + future Prometheus
+    # scraping. Default instrumentator exposes request count / latency
+    # histograms; no PII, no body sampling.
+    "prometheus-fastapi-instrumentator>=7.0",
 ]
 
 [project.urls]

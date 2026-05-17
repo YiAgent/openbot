@@ -29,6 +29,7 @@ from openbot.adapters.github import GitHubAdapter
 from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
 from openbot.dispatch import run_dispatch
+from openbot.obs import init_sentry
 from openbot.persistence import (
     DedupOutcome,
     WebhookDedup,
@@ -95,6 +96,9 @@ def _build_auth(settings: Settings) -> GitHubAppAuth | None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
+    # Initialise Sentry first so any later startup error (Postgres
+    # unreachable, malformed PEM, etc.) is captured.
+    init_sentry(settings, component="webapp")
     auth = _build_auth(settings)
 
     redis_client: redis_async.Redis | None = (
@@ -156,6 +160,33 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
+
+
+def _attach_prometheus_metrics(app: FastAPI) -> None:
+    """Mount ``/metrics`` with the default Prometheus instrumentator.
+
+    Wrapped in a try/except so a missing ``prometheus-fastapi-instrumentator``
+    in a slim image fails open (warning + no /metrics endpoint) rather than
+    breaking app boot. /metrics is unauthenticated by design — Heroku's
+    metrics endpoint is fronted by their own auth; for self-host setups the
+    user should fence /metrics off in their reverse proxy.
+    """
+    try:
+        from prometheus_fastapi_instrumentator import Instrumentator
+    except ImportError:
+        _logger.warning("prometheus_instrumentator_not_installed")
+        return
+
+    # Default config exposes request count + latency histograms keyed by
+    # (handler, method, status). No body sampling, no PII. ``expose`` adds
+    # the /metrics route; ``instrument`` wires the request middleware.
+    instrumentator = Instrumentator(
+        excluded_handlers=["/metrics"],  # don't measure the meta endpoint
+    )
+    instrumentator.instrument(app).expose(app, include_in_schema=False, tags=["meta"])
+
+
+_attach_prometheus_metrics(app)
 
 
 @app.get("/health")

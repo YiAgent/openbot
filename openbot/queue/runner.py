@@ -27,6 +27,7 @@ from openbot import __version__
 from openbot.adapters.github import GitHubAdapter
 from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
+from openbot.obs import init_sentry
 from openbot.persistence import (
     create_schema,
     make_client,
@@ -73,6 +74,9 @@ def _build_auth(settings: Settings) -> GitHubAppAuth | None:
 async def _main() -> int:
     """Boot Redis + Postgres + adapter; run N consumers until SIGTERM."""
     settings = get_settings()
+    # Sentry first — captures any subsequent startup crash (bad DSN
+    # for Redis/Postgres, malformed PEM, etc.) on the worker dyno.
+    init_sentry(settings, component="worker")
     if settings.redis_url is None:
         _logger.error("worker_no_redis_url")
         return 2
