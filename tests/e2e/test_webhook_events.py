@@ -109,6 +109,7 @@ def test_issue_opened_dispatches_triage(client: TestClient) -> None:
         "feature": Feature.TRIAGE.value,
         "task_id": _expected_task_id(delivery_id="e2e-iss-1"),
         "relevant": True,
+        "check_run_id": None,
     }
 
 
