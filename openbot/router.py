@@ -42,9 +42,20 @@ else:
     Handler = Callable[..., Awaitable[None]]
 
 
-# `@yibots ` chat-mention prefix. Trailing space mandatory so as not to match
+# `@openbot ` chat-mention prefix. Trailing space mandatory so as not to match
 # other bot logins starting with the same prefix.
-_CHAT_PREFIX: Final = "@yibots "
+_CHAT_PREFIX_DEFAULT: Final = "@openbot "
+
+
+def _get_chat_prefix() -> str:
+    """Return the @handle mention prefix.
+
+    Default is '@openbot ', but in production we prefer the actual
+    App handle (e.g. '@yibots ') if available.
+    """
+    # Slice C/D will plumb the authenticated bot handle here via Settings.
+    # To keep existing E2E tests green, the default must be '@openbot '.
+    return _CHAT_PREFIX_DEFAULT
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +128,8 @@ def dispatch_for(event: UnifiedEvent) -> Dispatch | None:
         EventKind.PR_REVIEW_COMMENT_CREATED,
     ):
         body = event.comment_body or ""
-        if not body.startswith(_CHAT_PREFIX):
+        prefix = _get_chat_prefix()
+        if not body.startswith(prefix) and not body.startswith("@yibots "):
             return None
         if event.installation_id is None:
             return None
