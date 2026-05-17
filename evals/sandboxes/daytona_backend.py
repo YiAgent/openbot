@@ -17,6 +17,12 @@ Recognised configuration env vars:
 * ``DAYTONA_TARGET`` — region / target (e.g. ``us``, ``eu``)
 * ``OPENBOT_DAYTONA_IMAGE`` — image for the per-sample sandbox
   (default ``python:3.11-slim`` for parity with the docker backend)
+* ``OPENBOT_DAYTONA_AUTO_STOP_MIN`` — idle minutes → server-side stop
+  (default 30; floor for in-flight work to finish)
+* ``OPENBOT_DAYTONA_AUTO_ARCHIVE_MIN`` — minutes stopped → archive
+  (default 10)
+* ``OPENBOT_DAYTONA_AUTO_DELETE_MIN`` — minutes archived → permanent delete
+  (default 60; full reap cycle ≤ ~100 min)
 """
 
 from __future__ import annotations
@@ -97,9 +103,24 @@ def _build_client() -> Any:
 
 
 def _create_sandbox(client: Any, *, image: str, run_timeout: int) -> Any:
-    """Create a Daytona sandbox from the given Docker image."""
+    """Create a Daytona sandbox from the given Docker image.
+
+    Sandboxes are created with three-stage server-side TTL
+    (``auto_stop_interval`` → ``auto_archive_interval`` → ``auto_delete_interval``)
+    so the Daytona control plane reaps orphans even when the Python
+    ``finally`` teardown can't run (Inspect worker cancellation,
+    SIGKILL, network drop, etc.). Defaults are in
+    :class:`evals.common.config.SandboxSettings`; override per-env via
+    ``OPENBOT_DAYTONA_AUTO_{STOP,ARCHIVE,DELETE}_MIN``.
+    """
     daytona_mod = _daytona_module()
-    params = daytona_mod.CreateSandboxFromImageParams(image=image)
+    sandbox_cfg = get_eval_config().sandbox
+    params = daytona_mod.CreateSandboxFromImageParams(
+        image=image,
+        auto_stop_interval=sandbox_cfg.daytona_auto_stop_min,
+        auto_archive_interval=sandbox_cfg.daytona_auto_archive_min,
+        auto_delete_interval=sandbox_cfg.daytona_auto_delete_min,
+    )
     # The ``timeout`` knob here is the *boot* timeout (build + start);
     # per-command timeouts are set on each ``process.exec`` call.
     return client.create(params, timeout=max(run_timeout, 600))

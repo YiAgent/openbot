@@ -305,26 +305,37 @@ grade-test: ## Run vendored SWT-bench harness on remote docker (DOCKER_HOST) aga
 
 # ─── Offline SWE-bench grading (Path A, parallel to SWT) ────────
 # Uses the pip-installed `swebench` package (no vendor needed; unlike
-# SWT it ships official PyPI distributions). Pulls per-instance
-# eval images from docker.io/swebench/sweb.eval.x86_64.<inst>:latest
-# (Docker Hub public registry — no auth required).
+# SWT it ships official PyPI distributions) with its built-in Modal
+# execution backend (`--modal=true`). Each instance lands in its own
+# `modal.Sandbox.create()`, built from the official per-instance image
+# spec, so verdicts are bit-exact with the local-docker path but the
+# user doesn't have to keep a docker host warm. The docker fallback
+# is still reachable via `GRADE_FIX_MODAL=false` for emergencies.
 #
 # Knobs mirror grade-test, with the FIX_* prefix replacing the SWT-only
 # defaults so both pipelines can hold state in the same Make invocation.
 #   GRADE_FIX_PREDICTIONS  — predictions.jsonl from `make smoke-fix`
-#   GRADE_FIX_MAX_WORKERS  — concurrent instances (default 4)
+#   GRADE_FIX_MODAL        — true (default) | false; true → run on Modal,
+#                            false → fall back to local/remote docker
+#                            (DOCKER_HOST + namespace + cache_level)
+#   GRADE_FIX_MAX_WORKERS  — concurrent instances (default 4); ignored
+#                            by the modal backend, which uses Modal's
+#                            own concurrency via `starmap`
 #   GRADE_FIX_RUN_ID       — name for this grading run + report basename
 #   GRADE_FIX_DATASET      — princeton-nlp/SWE-bench_Verified by default
 #   GRADE_FIX_INSTANCE_IDS — optional space-separated subset
 #   GRADE_FIX_NAMESPACE    — Docker Hub namespace for prebuilt images
-#                            (default `swebench`; set to a private mirror
-#                            if you've baked your own)
+#                            (default `swebench`; docker-mode only —
+#                            Modal builds its own image per instance)
 #   GRADE_FIX_REPORT_DIR   — where swebench writes <run_id>.<model>.json
-#                            (default `evaluation_results_swe` — kept
-#                            separate from SWT's `evaluation_results`
-#                            so writeback can pick by directory)
-#   GRADE_FIX_CACHE_LEVEL  — none|base|env|instance (default `env`)
+#                            (default `evals/logs/swe_bench/results` —
+#                            kept under evals/logs/ so all harness
+#                            artefacts stay together; writeback picks
+#                            the most recent json from this dir)
+#   GRADE_FIX_CACHE_LEVEL  — none|base|env|instance (docker-mode only,
+#                            default `env`)
 GRADE_FIX_PREDICTIONS  ?= $(shell ls -1t outputs/fix_swe_bench_verified/*.predictions.jsonl 2>/dev/null | head -1)
+GRADE_FIX_MODAL        ?= true
 GRADE_FIX_MAX_WORKERS  ?= 4
 GRADE_FIX_RUN_ID       ?= openbot-fix-$(shell date -u +%Y%m%dT%H%M%SZ)
 GRADE_FIX_DATASET      ?= princeton-nlp/SWE-bench_Verified
@@ -337,30 +348,55 @@ GRADE_FIX_NAMESPACE    ?= swebench
 GRADE_FIX_REPORT_DIR   ?= evals/logs/swe_bench/results
 GRADE_FIX_CACHE_LEVEL  ?= env
 
-grade-fix: ## Run pip-installed swebench harness on remote docker against GRADE_FIX_PREDICTIONS
+grade-fix: ## Run pip-installed swebench harness (Modal by default) against GRADE_FIX_PREDICTIONS
 	@if [ -z "$(GRADE_FIX_PREDICTIONS)" ]; then \
 		echo "no predictions.jsonl under evals/outputs/fix_swe_bench_verified/ — run make smoke-fix first" >&2; \
 		exit 1; \
 	fi
-	@printf '\033[36m▶ swe-bench grade\033[0m %s\n  \033[2mDOCKER_HOST=%s run_id=%s workers=%s namespace=%s\033[0m\n' \
-		"$(GRADE_FIX_PREDICTIONS)" "$(DOCKER_HOST)" "$(GRADE_FIX_RUN_ID)" "$(GRADE_FIX_MAX_WORKERS)" "$(GRADE_FIX_NAMESPACE)"
+	@if [ "$(GRADE_FIX_MODAL)" = "true" ]; then \
+		printf '\033[36m▶ swe-bench grade\033[0m %s\n  \033[2mbackend=modal run_id=%s\033[0m\n' \
+			"$(GRADE_FIX_PREDICTIONS)" "$(GRADE_FIX_RUN_ID)"; \
+	else \
+		printf '\033[36m▶ swe-bench grade\033[0m %s\n  \033[2mbackend=docker DOCKER_HOST=%s run_id=%s workers=%s namespace=%s\033[0m\n' \
+			"$(GRADE_FIX_PREDICTIONS)" "$(DOCKER_HOST)" "$(GRADE_FIX_RUN_ID)" "$(GRADE_FIX_MAX_WORKERS)" "$(GRADE_FIX_NAMESPACE)"; \
+	fi
 	@mkdir -p "../$(GRADE_FIX_REPORT_DIR)"
 	@# Resolve the predictions path to absolute BEFORE the `cd …` below,
 	@# since the recipe's working dir changes to the report dir so
 	@# swebench's cwd-relative `<model>.<run_id>.json` write lands in
-	@# the right place. Also forwards --report_dir (currently ignored by
-	@# upstream — reporting.py:152 silently uses cwd — but kept so the
-	@# flag works automatically once swebench fixes the bug). Same
-	@# Doppler-bypass reasoning as grade-test.
-	cd ../$(GRADE_FIX_REPORT_DIR) && $(PY) python -m swebench.harness.run_evaluation \
-		--dataset_name $(GRADE_FIX_DATASET) \
-		--predictions_path "$(abspath ../$(GRADE_FIX_PREDICTIONS))" \
-		--max_workers $(GRADE_FIX_MAX_WORKERS) \
-		--run_id $(GRADE_FIX_RUN_ID) \
-		--cache_level $(GRADE_FIX_CACHE_LEVEL) \
-		--namespace $(GRADE_FIX_NAMESPACE) \
-		--report_dir . \
-		$(if $(GRADE_FIX_INSTANCE_IDS),--instance_ids $(GRADE_FIX_INSTANCE_IDS))
+	@# the right place. The modal backend goes through the SAME
+	@# make_run_report(...) at the end (modal_eval/run_evaluation_modal.py:462)
+	@# so report layout is identical to docker mode.
+	@#
+	@# Modal needs MODAL_TOKEN_ID / MODAL_TOKEN_SECRET from Doppler;
+	@# docker mode deliberately bypasses Doppler so the configured
+	@# DOCKER_HOST=tcp://… isn't clobbered by the colima socket
+	@# injected by `doppler run`. The conditional below routes each
+	@# backend through the right env.
+	@# GRADE_FIX_PREDICTIONS is given relative to Make's cwd (evals/),
+	@# so $(abspath ...) resolves it correctly BEFORE the `cd …` swaps
+	@# the shell into the report dir. (The earlier `../` prefix walked
+	@# one level too high — left over from a copy-paste from grade-test
+	@# whose paths are relative to repo root.)
+	@if [ "$(GRADE_FIX_MODAL)" = "true" ]; then \
+		cd ../$(GRADE_FIX_REPORT_DIR) && $(DOPPLER) $(PY) python -m swebench.harness.run_evaluation \
+			--dataset_name $(GRADE_FIX_DATASET) \
+			--predictions_path "$(abspath $(GRADE_FIX_PREDICTIONS))" \
+			--run_id $(GRADE_FIX_RUN_ID) \
+			--report_dir . \
+			--modal true \
+			$(if $(GRADE_FIX_INSTANCE_IDS),--instance_ids $(GRADE_FIX_INSTANCE_IDS)); \
+	else \
+		cd ../$(GRADE_FIX_REPORT_DIR) && $(PY) python -m swebench.harness.run_evaluation \
+			--dataset_name $(GRADE_FIX_DATASET) \
+			--predictions_path "$(abspath $(GRADE_FIX_PREDICTIONS))" \
+			--max_workers $(GRADE_FIX_MAX_WORKERS) \
+			--run_id $(GRADE_FIX_RUN_ID) \
+			--cache_level $(GRADE_FIX_CACHE_LEVEL) \
+			--namespace $(GRADE_FIX_NAMESPACE) \
+			--report_dir . \
+			$(if $(GRADE_FIX_INSTANCE_IDS),--instance_ids $(GRADE_FIX_INSTANCE_IDS)); \
+	fi
 
 writeback-fix: ## Writeback SWE harness verdicts → LangSmith swe_bench_pass_at_1 feedback
 	@# Resolve paths to absolute BEFORE the `cd ..` below — otherwise the

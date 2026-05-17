@@ -75,6 +75,12 @@ SWE_QA_JUDGE_MODEL_ENV: Final[str] = "OPENBOT_SWE_QA_JUDGE_MODEL"
 SANDBOX_BACKEND_ENV: Final[str] = "OPENBOT_SANDBOX_BACKEND"
 SANDBOX_BACKENDS_SUPPORTED: Final[tuple[str, ...]] = ("docker", "modal", "daytona")
 DAYTONA_IMAGE_ENV: Final[str] = "OPENBOT_DAYTONA_IMAGE"
+# Daytona server-side TTL knobs (minutes). Defaults are sized so that even if
+# the eval process is SIGKILLed mid-sample, Daytona reaps the orphan within
+# ~2 hours — protecting the org-wide 30 GiB disk quota from leaks.
+DAYTONA_AUTO_STOP_MIN_ENV: Final[str] = "OPENBOT_DAYTONA_AUTO_STOP_MIN"
+DAYTONA_AUTO_ARCHIVE_MIN_ENV: Final[str] = "OPENBOT_DAYTONA_AUTO_ARCHIVE_MIN"
+DAYTONA_AUTO_DELETE_MIN_ENV: Final[str] = "OPENBOT_DAYTONA_AUTO_DELETE_MIN"
 MODAL_IMAGE_ENV: Final[str] = "OPENBOT_MODAL_IMAGE"
 MODAL_APP_ENV: Final[str] = "OPENBOT_MODAL_APP"
 
@@ -197,6 +203,20 @@ class SandboxSettings(BaseSettings):
     daytona_image: str | None = Field(default=None, validation_alias=DAYTONA_IMAGE_ENV)
     modal_image: str | None = Field(default=None, validation_alias=MODAL_IMAGE_ENV)
     modal_app: str = Field(default="openbot-eval-sandbox", validation_alias=MODAL_APP_ENV)
+    # Daytona server-side TTL (minutes). The Python ``finally`` teardown in
+    # solvers can't fire when Inspect cancels in-flight workers (e.g.
+    # ``fail-on-error`` triggers) or the process is SIGKILLed — so we lean on
+    # Daytona's three-stage idle→stop→archive→delete reaper as the only
+    # mechanism that survives a hard crash.
+    daytona_auto_stop_min: PositiveInt = Field(
+        default=30, validation_alias=DAYTONA_AUTO_STOP_MIN_ENV
+    )
+    daytona_auto_archive_min: PositiveInt = Field(
+        default=10, validation_alias=DAYTONA_AUTO_ARCHIVE_MIN_ENV
+    )
+    daytona_auto_delete_min: PositiveInt = Field(
+        default=60, validation_alias=DAYTONA_AUTO_DELETE_MIN_ENV
+    )
 
 
 class LangSmithSettings(BaseSettings):
