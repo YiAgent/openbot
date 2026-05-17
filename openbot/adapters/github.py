@@ -18,15 +18,21 @@ out to the API.
 
 from __future__ import annotations
 
-import hmac
 import json
 import logging
 from collections.abc import Mapping
-from hashlib import sha256
 from typing import Any, Final
 from urllib.parse import quote
 
 import httpx
+from gidgethub import ValidationFailure
+from gidgethub.sansio import validate_event
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from openbot import __version__
 from openbot.adapters.base import ChannelAdapter, SignatureError
@@ -55,6 +61,34 @@ _EVENT_TABLE: Final[dict[tuple[str, str], EventKind]] = {
 _API_BASE_DEFAULT: Final = "https://api.github.com"
 _HTTP_TIMEOUT_SECONDS: Final = 10.0
 
+# Retry policy for GitHub REST calls (PRD §4.8 outbound resilience).
+# Three attempts: original + 2 retries. Exponential backoff caps at 4s
+# so a 503 storm doesn't push a single webhook past the 45-min agent
+# budget (PRD §4.3). LiteLLM owns LLM retry; this only covers
+# adapter-level GitHub calls.
+_RETRY_MAX_ATTEMPTS: Final = 3
+_RETRY_BACKOFF_MIN: Final = 0.5
+_RETRY_BACKOFF_MAX: Final = 4.0
+# Status codes worth retrying. 502/503/504 are transient gateway errors;
+# anything else (401/403/404/422) is a contract failure that retrying
+# only delays. 429 is intentionally NOT retried here — GitHub returns
+# Retry-After and we surface that as a low-rate-limit warning instead.
+_RETRYABLE_STATUSES: Final = frozenset({502, 503, 504})
+
+
+def _is_retryable_github_error(exc: BaseException) -> bool:
+    """Retry on transient network + gateway errors only.
+
+    Kept module-level so tests can monkeypatch / inspect it. Tenacity
+    calls this for every raised exception; non-retryable ones bubble
+    up immediately.
+    """
+    if isinstance(exc, httpx.ConnectError | httpx.ReadTimeout | httpx.RemoteProtocolError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRYABLE_STATUSES
+    return False
+
 
 class GitHubAdapter(ChannelAdapter):
     name = "github"
@@ -69,7 +103,9 @@ class GitHubAdapter(ChannelAdapter):
     ) -> None:
         if not webhook_secret:
             raise ValueError("GitHubAdapter requires a non-empty webhook_secret")
-        # HMAC needs bytes; store once.
+        # gidgethub.sansio.validate_event accepts str; we used to store bytes
+        # for the manual HMAC. Keep the bytes form so any future code paths
+        # using the raw secret directly still get the right encoding.
         self._secret = webhook_secret.encode("utf-8")
         self._auth = auth
         # Lazy-init the httpx client so callers that only need
@@ -90,13 +126,28 @@ class GitHubAdapter(ChannelAdapter):
         return self._http
 
     def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
+        """HMAC-SHA-256 trust boundary (PRD §4.8).
+
+        Delegates to ``gidgethub.sansio.validate_event`` — same constant-time
+        comparison we used to roll by hand, but tracks any future GitHub
+        signature-scheme additions (sha1 was deprecated, sha512 may appear)
+        without this code changing. We surface failures as the same
+        ``SignatureError`` the dispatcher already catches.
+        """
         sent = self._header(headers, _SIGNATURE_HEADER)
+        # gidgethub's ``validate_event`` raises if signature is None, but
+        # the message ("missing signature") differs from the legacy
+        # ``"missing or malformed"`` contract some callers may rely on.
+        # Pre-check so the SignatureError text stays stable.
         if not sent or not sent.startswith(_SIGNATURE_PREFIX):
             raise SignatureError("missing or malformed X-Hub-Signature-256")
-        expected = _SIGNATURE_PREFIX + hmac.new(self._secret, body, sha256).hexdigest()
-        # Constant-time comparison — PRD §4.8.
-        if not hmac.compare_digest(sent, expected):
-            raise SignatureError("signature mismatch")
+        try:
+            validate_event(body, signature=sent, secret=self._secret.decode())
+        except ValidationFailure as exc:
+            # ValidationFailure subclasses GidgetHubException; we translate
+            # to SignatureError so existing ``except SignatureError`` blocks
+            # in webapp.py and tests keep working unchanged.
+            raise SignatureError("signature mismatch") from exc
 
     def parse_event(self, body: bytes, headers: Mapping[str, str]) -> UnifiedEvent:
         delivery_id = self._header(headers, _DELIVERY_HEADER) or ""
@@ -197,6 +248,19 @@ class GitHubAdapter(ChannelAdapter):
 
     # ───────────────────────── internals ─────────────────────────
 
+    @retry(
+        retry=retry_if_exception(_is_retryable_github_error),
+        stop=stop_after_attempt(_RETRY_MAX_ATTEMPTS),
+        wait=wait_exponential(
+            multiplier=_RETRY_BACKOFF_MIN,
+            min=_RETRY_BACKOFF_MIN,
+            max=_RETRY_BACKOFF_MAX,
+        ),
+        # Re-raise the original exception (not tenacity's RetryError) so
+        # the dispatcher's existing ``except httpx.HTTPStatusError`` paths
+        # see what they always saw.
+        reraise=True,
+    )
     async def _authed_json(
         self,
         method: str,
