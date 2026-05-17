@@ -28,6 +28,7 @@ from openbot.adapters.base import SignatureError
 from openbot.adapters.github import GitHubAdapter
 from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
+from openbot.dispatch import run_dispatch
 from openbot.persistence import (
     DedupOutcome,
     WebhookDedup,
@@ -36,13 +37,17 @@ from openbot.persistence import (
     make_engine,
     make_session_factory,
 )
-from openbot.workflows import maybe_run_triage
+from openbot.queue import QueuePayload, enqueue
+from openbot.router import dispatch_for
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     import redis.asyncio as redis_async
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+
+    from openbot.events import UnifiedEvent
+    from openbot.router import Dispatch
 
 _logger = logging.getLogger("openbot.webapp")
 
@@ -229,13 +234,90 @@ async def github_webhook(
         },
     )
 
-    # Dispatch workflows. Each handler decides whether the event qualifies;
-    # `maybe_run_*` are designed to be idempotent + swallow their own failures.
-    background.add_task(maybe_run_triage, adapter, event)
+    # Router → workflow dispatch (harness spec §3 M2).
+    # `dispatch_for` is pure: no GitHub API calls, no DB. If the event
+    # has no matching handler (e.g. push, star, bot author) we still
+    # 202 — GitHub only needs to know we received the delivery.
+    dispatch = dispatch_for(event)
+    if dispatch is None:
+        return {
+            "status": "ignored",
+            "delivery_id": event.delivery_id,
+            "kind": event.kind.value,
+            "relevant": event.is_relevant,
+        }
+
+    # Hand off to the worker queue if Redis is configured; otherwise
+    # fall back to FastAPI BackgroundTasks (dev / unit tests).
+    #
+    # The queue path is what production runs — workflows survive a
+    # webapp restart because the entry persists in Redis until a
+    # worker XACKs it. The fallback exists so `make dev` without
+    # docker-compose still gives a working bot.
+    redis_client = getattr(request.app.state, "redis", None)
+    if redis_client is not None:
+        try:
+            payload = QueuePayload.from_event(
+                event, feature=dispatch.feature, task_id=dispatch.task_id
+            )
+            entry_id = await enqueue(redis_client, payload)
+            return {
+                "status": "accepted",
+                "delivery_id": event.delivery_id,
+                "kind": event.kind.value,
+                "feature": dispatch.feature.value,
+                "task_id": dispatch.task_id,
+                "entry_id": entry_id,
+                "relevant": event.is_relevant,
+            }
+        except Exception:
+            # Redis enqueue failed (RDB save in progress, OOM, etc.).
+            # Don't 5xx the webhook — degrade to BackgroundTask so the
+            # event isn't lost. The next event will retry the queue path.
+            _logger.exception(
+                "queue_enqueue_failed_falling_back_to_background_task",
+                extra={"delivery_id": event.delivery_id, "repo": event.repo},
+            )
+
+    background.add_task(
+        _run_dispatch,
+        request.app,
+        adapter,
+        event,
+        dispatch,
+    )
 
     return {
         "status": "accepted",
         "delivery_id": event.delivery_id,
         "kind": event.kind.value,
+        "feature": dispatch.feature.value,
+        "task_id": dispatch.task_id,
         "relevant": event.is_relevant,
     }
+
+
+async def _run_dispatch(
+    app_instance: FastAPI,
+    adapter: GitHubAdapter,
+    event: UnifiedEvent,
+    dispatch: Dispatch,
+) -> None:
+    """In-process dispatch — used as the fallback when Redis is absent.
+
+    Production runs through the Redis queue worker (``openbot.queue.runner``)
+    instead; this path exists so `make dev` without docker-compose still
+    delivers a working bot and so unit tests don't need fakeredis just
+    to exercise the webhook flow.
+
+    The actual middleware chain + handler invocation lives in
+    ``openbot.dispatch.run_dispatch`` so the worker and the webapp can't
+    drift apart.
+    """
+    await run_dispatch(
+        adapter=adapter,
+        event=event,
+        dispatch=dispatch,
+        session_factory=getattr(app_instance.state, "db_session_factory", None),
+        redis=getattr(app_instance.state, "redis", None),
+    )
