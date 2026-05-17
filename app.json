@@ -1,0 +1,81 @@
+{
+  "name": "openbot",
+  "description": "Open-source, self-hosted, BYO-API-key GitHub maintenance bot for individual OSS maintainers.",
+  "repository": "https://github.com/YiAgent/openbot",
+  "keywords": ["github", "bot", "agent", "llm", "code-review", "triage", "fastapi"],
+  "stack": "heroku-24",
+  "buildpacks": [
+    { "url": "heroku/python" }
+  ],
+  "formation": {
+    "web": { "quantity": 1, "size": "basic" },
+    "worker": { "quantity": 1, "size": "eco" }
+  },
+  "addons": [],
+  "env": {
+    "OPENBOT_GITHUB_WEBHOOK_SECRET": {
+      "description": "HMAC-SHA-256 secret set when creating the GitHub App. Without it /webhook/github responds 503.",
+      "required": true
+    },
+    "OPENBOT_GITHUB_APP_ID": {
+      "description": "Numeric App ID from the GitHub App settings page. Required for write-back (reply / labels).",
+      "required": false
+    },
+    "OPENBOT_GITHUB_APP_PRIVATE_KEY_PEM": {
+      "description": "PEM-encoded private key as a literal string (begins with '-----BEGIN'). Use `heroku config:set OPENBOT_GITHUB_APP_PRIVATE_KEY_PEM=\"$(cat key.pem)\"`. Mutually exclusive with OPENBOT_GITHUB_APP_PRIVATE_KEY_PATH; pem wins.",
+      "required": false
+    },
+    "OPENBOT_REDIS_URL": {
+      "description": "Upstash Redis URL (rediss://...). Used for webhook dedup, rate limit, and the workflow queue.",
+      "required": true
+    },
+    "OPENBOT_POSTGRES_URL": {
+      "description": "Neon Postgres URL using the asyncpg driver: postgresql+asyncpg://USER:PASS@HOST/DB?sslmode=require. Required for cost tracking + audit log.",
+      "required": true
+    },
+    "OPENBOT_WORKER_CONCURRENCY": {
+      "description": "asyncio consumer tasks per worker process. Eco dyno (512MB) — keep at 4 unless you've profiled memory.",
+      "value": "4"
+    },
+    "OPENBOT_DEBUG": {
+      "description": "Verbose logs. Never enable in production.",
+      "value": "false"
+    },
+    "ANTHROPIC_API_KEY": {
+      "description": "Anthropic key for the agent's primary model (litellm picks it up from env).",
+      "required": false
+    },
+    "OPENAI_API_KEY": {
+      "description": "OpenAI key — optional fallback / judge model.",
+      "required": false
+    },
+    "LANGSMITH_API_KEY": {
+      "description": "LangSmith key for tracing / experiments. Without it traces fall back to stdout.",
+      "required": false
+    },
+    "LANGSMITH_ENDPOINT": {
+      "description": "LangSmith endpoint URL (defaults to https://api.smith.langchain.com).",
+      "required": false
+    },
+    "DAYTONA_API_KEY": {
+      "description": "Daytona API key for the agent sandbox backend (OPENBOT_SANDBOX_BACKEND=daytona).",
+      "required": false
+    },
+    "OPENBOT_SANDBOX_BACKEND": {
+      "description": "Sandbox factory selector — daytona | modal | docker. Heroku has no docker daemon, so use daytona.",
+      "value": "daytona"
+    },
+    "PYTHONUNBUFFERED": {
+      "description": "Flush stdout/stderr immediately so Heroku logs surface in real time.",
+      "value": "1"
+    }
+  },
+  "scripts": {},
+  "environments": {
+    "test": {
+      "scripts": {
+        "test": "pytest -q"
+      }
+    }
+  }
+}

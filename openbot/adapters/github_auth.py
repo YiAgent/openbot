@@ -87,6 +87,31 @@ class GitHubAppAuth:
         # type: ignore[arg-type] — kwargs flows through verbatim
         return cls(app_id=app_id, private_key_pem=pem, **kwargs)  # type: ignore[arg-type]
 
+    @classmethod
+    def from_pem_or_path(
+        cls,
+        *,
+        app_id: int,
+        private_key_pem: bytes | str | None,
+        private_key_path: Path | str | None,
+        **kwargs: object,
+    ) -> GitHubAppAuth:
+        """Construct from inline PEM bytes/str, falling back to a filesystem path.
+
+        Inline PEM wins when both are set — the Heroku / Render style where
+        no persistent disk exists and the secret rides in an env var. Local
+        dev keeps using the file path written by ``setup.sh`` (PRD §7).
+
+        Raises ValueError when neither source is provided so callers don't
+        accidentally instantiate an auth object that will 500 on first JWT.
+        """
+        if private_key_pem is not None:
+            data = private_key_pem.encode() if isinstance(private_key_pem, str) else private_key_pem
+            return cls(app_id=app_id, private_key_pem=data, **kwargs)  # type: ignore[arg-type]
+        if private_key_path is not None:
+            return cls.from_pem_file(app_id=app_id, private_key_path=private_key_path, **kwargs)
+        raise ValueError("either private_key_pem or private_key_path must be set")
+
     def app_jwt(self, *, now: int | None = None) -> str:
         """Mint a short-lived JWT identifying the App (not any installation).
 

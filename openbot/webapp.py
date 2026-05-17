@@ -66,19 +66,26 @@ def _build_auth(settings: Settings) -> GitHubAppAuth | None:
     chmod, dir typo, etc. — and crashing startup on each variant gives no
     useful signal beyond what the WARNING log already provides.
     """
-    if settings.github_app_id is None or settings.github_app_private_key_path is None:
+    if settings.github_app_id is None:
+        return None
+    pem_secret = settings.github_app_private_key_pem
+    if pem_secret is None and settings.github_app_private_key_path is None:
         return None
     try:
-        return GitHubAppAuth.from_pem_file(
+        return GitHubAppAuth.from_pem_or_path(
             app_id=settings.github_app_id,
+            private_key_pem=pem_secret.get_secret_value() if pem_secret else None,
             private_key_path=settings.github_app_private_key_path,
             user_agent=f"OpenBot/{__version__}",
         )
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         _logger.warning(
             "github_app_pem_unreadable",
             extra={
-                "path": str(settings.github_app_private_key_path),
+                "source": "pem" if pem_secret else "path",
+                "path": str(settings.github_app_private_key_path)
+                if settings.github_app_private_key_path
+                else None,
                 "reason": f"{type(exc).__name__}: {exc}",
             },
         )

@@ -72,6 +72,64 @@ def test_rejects_non_pem_key() -> None:
         GitHubAppAuth(app_id=_APP_ID, private_key_pem=b"not-a-pem")
 
 
+# ───── from_pem_or_path (ephemeral-host construction) ─────
+
+
+def test_from_pem_or_path_prefers_inline_pem_bytes(rsa_private_key_pem: bytes) -> None:
+    # Heroku-style: PEM lives in an env var, no filesystem path is configured.
+    auth = GitHubAppAuth.from_pem_or_path(
+        app_id=_APP_ID,
+        private_key_pem=rsa_private_key_pem,
+        private_key_path=None,
+    )
+    assert auth._private_key == rsa_private_key_pem
+
+
+def test_from_pem_or_path_accepts_str_pem(rsa_private_key_pem: bytes) -> None:
+    auth = GitHubAppAuth.from_pem_or_path(
+        app_id=_APP_ID,
+        private_key_pem=rsa_private_key_pem.decode(),
+        private_key_path=None,
+    )
+    assert auth._private_key == rsa_private_key_pem
+
+
+def test_from_pem_or_path_inline_wins_over_path(rsa_private_key_pem: bytes, tmp_path: Any) -> None:
+    # Both set → inline wins (lets deploys roll forward without touching the path).
+    stale_path = tmp_path / "stale.pem"
+    stale_path.write_bytes(b"-----BEGIN STALE-----\nnot-loaded\n-----END STALE-----\n")
+    auth = GitHubAppAuth.from_pem_or_path(
+        app_id=_APP_ID,
+        private_key_pem=rsa_private_key_pem,
+        private_key_path=stale_path,
+    )
+    assert auth._private_key == rsa_private_key_pem
+
+
+def test_from_pem_or_path_falls_back_to_file(rsa_private_key_pem: bytes, tmp_path: Any) -> None:
+    path = tmp_path / "key.pem"
+    path.write_bytes(rsa_private_key_pem)
+    auth = GitHubAppAuth.from_pem_or_path(
+        app_id=_APP_ID,
+        private_key_pem=None,
+        private_key_path=path,
+    )
+    assert auth._private_key == rsa_private_key_pem
+
+
+def test_from_pem_or_path_requires_one_source() -> None:
+    with pytest.raises(ValueError, match="either private_key_pem or private_key_path"):
+        GitHubAppAuth.from_pem_or_path(app_id=_APP_ID, private_key_pem=None, private_key_path=None)
+
+
+def test_from_pem_or_path_rejects_non_pem_inline() -> None:
+    # Reaches the inner constructor's PEM-shape check.
+    with pytest.raises(ValueError, match="PEM"):
+        GitHubAppAuth.from_pem_or_path(
+            app_id=_APP_ID, private_key_pem=b"oops", private_key_path=None
+        )
+
+
 # ───── app_jwt ─────
 
 
