@@ -1,73 +1,334 @@
-# `evals/` — OpenBot Eval Workspace
+# OpenBot evals
 
-> 上位文档：[`docs/prd/openbot-eval-prd.md`](../docs/prd/openbot-eval-prd.md) · [`docs/eval/task-list.md`](../docs/eval/task-list.md)
-> Locked runner: **Inspect AI** · Locked observability: **LangSmith** · Locked sandbox: **Modal**（内部）/ **Inspect Docker**（公开 benchmark）
+This directory contains the **currently implemented** offline eval surfaces for OpenBot.
+It documents the code that exists today, not the full target-state described in the PRD.
 
-`evals/` 是 Inspect AI 跑 eval 的根目录。任何 LLM-behavior / prompt-quality 断言都进这里，**不要**放到 `tests/`（PRD §8.3）。
+At a high level:
 
-## 目录结构（PRD §6.1）
+- **Inspect AI** is the offline runner: it owns `Task`, `Solver`, `Scorer`, sample execution, and `.inspect/logs/...`.
+- **DeepAgents** is the current agent framework used by every implemented OpenBot-side solver.
+- **LangSmith** has two roles:
+  - source-of-truth dataset storage for the `review` and `chat` evals;
+  - tracing / experiment projection for all evals where wired.
+- **Local Docker** is the primary sandbox backend for agent-based evals (`fix`, `test`, `chat`). Each sample spins up its own container, clones the repo, and is torn down after the run.
 
+## Current architecture
+
+```mermaid
+flowchart LR
+    subgraph Upstream["Upstream benchmark sources"]
+        Martian["Martian Code Review Bench"]
+        SWEQA["SWE-QA-Pro-Bench"]
+        SWEBench["SWE-bench Verified"]
+        SWTBench["SWT-Bench Verified"]
+    end
+
+    subgraph DatasetBuild["Dataset build / mirror scripts"]
+        BuildReview["build_review_martian_dataset.py"]
+        BuildChat["build_chat_swe_qa_pro_dataset.py"]
+        BuildFix["build_swe_bench_verified_dataset.py"]
+        BuildTest["build_swt_bench_verified_dataset.py"]
+    end
+
+    subgraph LangSmith["LangSmith"]
+        LSDatasets["Datasets"]
+        LSTraces["Traces / Feedback"]
+        LSExperiments["Experiment projects"]
+    end
+
+    subgraph Inspect["Inspect AI offline runner"]
+        ReviewTask["review_martian_baseline_crb"]
+        ChatTask["chat_swe_qa_pro_openbot"]
+        FixTask["fix_swe_bench_verified_deepagents"]
+        TestTask["test_swt_bench_verified_deepagents"]
+    end
+
+    subgraph Solvers["Implemented solvers"]
+        ReviewSolver["deepagents review\nclosed-form"]
+        ChatSolver["deepagents chat agent\n(+Agent variant)"]
+        FixSolver["deepagents fix\nDockerSandboxBackend"]
+        TestSolver["deepagents test\nDockerSandboxBackend"]
+    end
+
+    subgraph Sandbox["Per-sample execution"]
+        Docker["Local Docker sandbox\nper sample"]
+    end
+
+    subgraph Scorers["Scoring"]
+        ReviewScore["review overlap\nLLM judge -> P/R/F1"]
+        ChatScore["SWE-QA-Pro 5-dim judge"]
+        FixScore["prediction_exporter\n(offline grading)"]
+        TestScore["custom swt_bench_scorer"]
+    end
+
+    Martian --> BuildReview --> LSDatasets
+    SWEQA --> BuildChat --> LSDatasets
+    SWEBench --> BuildFix --> LSDatasets
+    SWTBench --> BuildTest --> LSDatasets
+
+    LSDatasets --> ReviewTask
+    LSDatasets --> ChatTask
+
+    SWEBench --> FixTask
+    SWTBench --> TestTask
+
+    ReviewTask --> ReviewSolver --> ReviewScore
+    ChatTask --> ChatSolver --> Docker --> ChatScore
+    FixTask --> FixSolver --> Docker --> FixScore
+    TestTask --> TestSolver --> Docker --> TestScore
+
+    ReviewSolver --> LSTraces
+    ChatSolver --> LSTraces
+    ChatScore --> LSTraces
+    FixSolver --> LSTraces
+    TestSolver --> LSTraces
+    FixScore --> LSExperiments
+    TestScore --> LSExperiments
 ```
+
+## What is implemented today
+
+| Surface | Task entry | Runtime dataset source | Solver | Sandbox | Scorer | Status |
+|---|---|---|---|---|---|---|
+| Review | `review_martian_baseline_crb` | LangSmith `martian_2026w20` | DeepAgents baseline review solver | none | Martian-compatible overlap scorer (`precision / recall / F1`) | implemented |
+| Fix | `fix_swe_bench_verified_deepagents` | HF `princeton-nlp/SWE-bench_Verified` | DeepAgents baseline fix solver | Local Docker | `prediction_exporter` (offline grading) | implemented |
+| Test generation | `test_swt_bench_verified_deepagents` | HF `eth-sri/SWT-bench_Verified_bm25_27k_zsb` | DeepAgents baseline test solver | Local Docker | custom `swt_bench_scorer` | implemented |
+| Chat / repo QA | `chat_swe_qa_pro_openbot` | LangSmith `chat_swe_qa_pro_v1` | DeepAgents Agent (+Agent) | Local Docker | SWE-QA-Pro 5-dim judge | implemented |
+
+## How each flow works
+
+### 1. Review: `review_martian_baseline_crb`
+
+1. `build_review_martian_dataset.py` mirrors the pinned Martian benchmark into LangSmith.
+2. `evals/tasks/review_martian.py` materializes that LangSmith dataset into an Inspect `MemoryDataset`.
+3. `evals/solvers/review.py` runs a closed-form DeepAgents review prompt over each PR diff.
+4. The solver stores parsed findings in `state.metadata["candidate_findings"]`.
+5. The task-local overlap scorer compares those findings with gold findings using the Martian-compatible judge and returns `precision`, `recall`, and `f1`.
+
+There is **no sandbox** in this flow because the model only reads a diff and emits review findings.
+
+### 2. Fix: `fix_swe_bench_verified_deepagents`
+
+1. The task loads the SWE-bench dataset from HuggingFace.
+2. `DockerSandboxBackend` (local Docker) clones the repo at the base commit into `/workspace`.
+3. DeepAgents baseline fix solver edits the code using its native tools.
+4. `prediction_exporter` captures the `git diff` and appends it to `evals/outputs/.../*.predictions.jsonl`.
+5. **Real grading is offline** via the official SWE-bench Docker harness.
+
+### 3. Test generation: `test_swt_bench_verified_deepagents`
+
+1. The task loads the SWT-Bench Verified dataset.
+2. Similar to Fix, it uses `DockerSandboxBackend` to host the agent.
+3. The custom `swt_bench_scorer()` runs inside the same sandbox to validate the regression test.
+
+### 4. Chat / repo QA: `chat_swe_qa_pro_openbot`
+
+1. `build_chat_swe_qa_pro_dataset.py` mirrors SWE-QA-Pro-Bench into LangSmith.
+2. The task loads it from LangSmith.
+3. The solver is `deepagents_agent_swe_qa_solver` (+Agent variant).
+4. Each sample spins up a `DockerSandboxBackend` where the repo is cloned.
+5. The agent uses `ls`, `grep`, `read_file` to browse the code before answering.
+6. `swe_qa_pro_judge_scorer()` calls the 5-dimension judge for scoring.
+
+## Sandbox boundary
+
+The repo currently uses **Local Docker** for all agent-based evals:
+
+```text
+DeepAgents solver
+  -> DockerSandboxBackend
+  -> Local Docker container
+```
+
+Inspect AI owns the Task orchestration, but **DeepAgents owns the sandbox lifecycle** for these tasks.
+The sandbox is created by the solver at the start of each sample and destroyed at the end.
+
+## LangSmith behavior
+
+There are three distinct LangSmith integrations in the current code:
+
+1. **Dataset storage**
+   - runtime source for `martian_2026w20`
+   - runtime source for `chat_swe_qa_pro_v1`
+   - mirror-only storage for `fix_swe_bench_verified`
+   - mirror-only storage for `test_swt_bench_verified`
+
+2. **Trace routing**
+   - `configure_tracing_for_dataset(...)` sends public datasets to `LANGSMITH_PROJECT_PUBLIC`
+   - every other dataset falls back to `LANGSMITH_PROJECT_INTERNAL`
+
+3. **Experiment / feedback projection**
+   - `LangSmithExperiment.wrap(...)` projects per-sample SWE-bench / SWT-Bench results into LangSmith Experiment projects
+   - `swe_qa_pro_judge_scorer()` attaches per-dimension feedback to the live LangSmith trace
+
+## Directory map
+
+```text
 evals/
-├── README.md               ← 本文件
-├── common/                 ← langsmith / metadata / config / artifacts / judges
-├── solvers/                ← openbot_review / triage / fix / redteam 等 solver
-├── scorers/                ← review_overlap / triage_labels / patch_tests / reproducer / safety / trajectory
-├── datasets/               ← *.jsonl 数据文件
-│   └── manifests/          ← 每条 dataset 的 *.yaml manifest（schema 见 eval PRD §7.2）
-├── tasks/                  ← Inspect task 入口（一个 file = 一个 suite）
-└── scripts/                ← build_* / export_run_summary / compare_runs
+├── common/
+│   ├── datasets.py                  # LangSmith dataset -> Inspect MemoryDataset
+│   ├── deepagents_baseline.py       # shared DeepAgents baseline factory
+│   ├── langsmith.py                 # public/internal trace routing
+│   └── langsmith_experiments.py     # Inspect score -> LangSmith Experiment bridge
+├── scorers/
+│   ├── review_overlap.py            # review overlap math
+│   ├── swt_bench_scorer.py          # SWT-Bench Success metric
+│   └── swe_qa_pro.py                # SWE-QA-Pro judge wrapper
+├── solvers/
+│   ├── review.py                    # review baseline
+│   ├── swe_fix.py                   # SWE-bench fixing baseline
+│   ├── swe_test.py                  # SWT-Bench test-writing baseline
+│   └── swe_qa.py                    # SWE-QA-Pro agent-based solver
+├── sandboxes/
+│   ├── docker_backend.py            # Local Docker sandbox implementation
+│   └── repo_setup.py                # Clone / Checkout logic
+├── scripts/
+│   ├── build_review_martian_dataset.py
+│   ├── build_chat_swe_qa_pro_dataset.py
+│   ├── build_swe_bench_verified_dataset.py
+│   └── build_swt_bench_verified_dataset.py
+└── tasks/
+    ├── review_martian.py
+    ├── fix_swe_bench_verified.py
+    ├── test_swt_bench_verified.py
+    └── chat_swe_qa_pro.py
 ```
 
-PR 改动 `evals/tasks/` · `evals/scorers/` · `evals/datasets/` · `evals/solvers/` 任一文件 → 强制触发对应 regression suite（eval PRD §8.2 trigger 表）。
+## Makefile entry points
 
-## Review solver providers
+Eval workflows live in `evals/Makefile`, not the repo-root `Makefile`.
 
-Review evals keep one shared task / dataset / scorer surface and vary only the solver provider:
+From the repo root:
 
-| Provider | Status | Purpose |
-|---|---|---|
-| `deepagents_baseline` | active | Durable external baseline used for apples-to-apples comparison |
-| `openbot_prod` | future | Future production OpenBot review workflow on the same harness |
+```bash
+# discover commands
+make -C evals help
 
-The intended comparison is **same dataset + same scorer + same judge + same report path, different solver**. `deepagents_baseline` is not a disposable stand-in; it stays after `openbot_prod` arrives so the project can show where its own system is better.
+# publish datasets safely; existing LangSmith datasets make the target stop
+make -C evals data
 
-## v0.1 / v0.2 suite 列表
+# explicitly rebuild all four datasets
+make -C evals data-refresh
 
-下表覆盖 eval PRD §4.0 范围调整后**实际计划构建**的 suite。`Status` 标 🕒 的为 **DEFERRED**（等 §4.0 gate trip 后再做），E0 阶段仅占位、不创建对应文件。
+# run eval-only pytest coverage
+make -C evals test
 
-| Suite | Stream | Status | Task ID | 数据源 |
-|---|---|---|---|---|
-| `review_martian` | REVIEW (公开 baseline) | active | E2-T01 / T02 | Martian upstream 5–50 samples |
-| `swe_bench_lite` | FIX (公开 benchmark) | active | E2-T11 | `inspect_evals/swe_bench_lite`（commit hash 锁定） |
-| `redteam_prompt_injection` | SAFETY (hard gate) | active | E2-T12..T14 | 手写 prompts，不依赖真实数据 |
-| `redteam_prompt_injection_xl` | SAFETY (扩容) | active | E4-T10 | 手写 prompts |
-| `libro_reproducer` | FIX 辅助 | active | E4-T03 | 公开 LIBRO benchmark |
-| `swe_bench_pro` | FIX quarterly | active | E5-T04 | 公开 benchmark |
-| 🕒 `internal_issues_v1` (triage) | TRIAGE | deferred | E2-T03..T06 | 解冻：≥ 50 closed issue 含 label/priority/dup-of |
-| 🕒 `fix_internal_smoke` | FIX | deferred | E2-T09 / T10 | 解冻：≥ 10 issue→PR retrospective |
-| 🕒 `internal_prs_v1` | REVIEW shadow | deferred | E4-T01 | 解冻：≥ 30 PR 含 ≥ 2 reviewer comments |
-| 🕒 `internal_issues_v2` | TRIAGE 扩容 | deferred | E4-T08 | triage gate trip 之后 |
-| 🕒 `internal_prs_v2` | REVIEW 扩容 | deferred | E5-T01 | review gate trip 之后 |
-| 🕒 `review_shadow` | REVIEW shadow | deferred | E5-T02 | review gate trip |
-| 🕒 `review_shadow_xl` | REVIEW shadow release | deferred | E5-T03 | review gate trip |
+# run all four implemented live smoke evals
+make -C evals smoke
 
-完整解冻条件见 eval PRD §4.0；E0 阶段不创建 🕒 suite 的 task 文件，但本目录树足以承接它们解冻后的代码落点。
+# tests first, then live smoke evals
+make -C evals check
 
-## 怎么跑
+# build the Inspect static viewer bundle from eval logs
+make -C evals view-bundle
 
-当前已具备本地 smoke 能力；后续 suite 继续按 `docs/eval/task-list.md` 上线：
+# build + serve + open the Inspect viewer in one step
+make -C evals view-open
+```
 
-- **本地 smoke baseline**：`inspect eval 'evals/tasks/review_martian.py@review_martian_baseline' --limit 5`
-- **公开 benchmark**（E2-T11 之后）：`inspect eval inspect_evals/swe_bench_lite --solver evals.solvers.openbot_fix`
-- **CI 触发**（E3 之后）：PR matcher / cron 由 `.github/workflows/eval.yml` 调度
-- **把本地 `.eval` 同步到 LangSmith**：
-  `uv run python -m evals.scripts.export_run_summary <path.eval> --push-langsmith --project openbot-eval-internal --dataset-sha256 <sha256> --mode smoke`
-- **LangSmith 校验**（每次 run）：`uv run python scripts/validate_langsmith_run.py <run_id>`
-- **直接从 LangSmith 出 summary**：`uv run python -m evals.scripts.export_run_summary --from-langsmith <run_id>`
+Useful per-surface targets:
 
-## 边界提示
+```bash
+make -C evals data-review
+make -C evals data-chat
+make -C evals data-fix
+make -C evals data-test
 
-- `evals/` 不被 pytest 收集：`Makefile` 的 `test` target 与 `scripts/hooks/pytest-pre-push.sh` 均带 `--ignore=evals`。
-- Budget 常量（`PER_SAMPLE_USD` / `PER_SUITE_RUN_USD` / `MONTHLY_TOTAL_USD`）将落在 `evals/common/config.py`（E0-T05）。
-- 治理日志（baseline / judge version / flaky samples / dataset spot-check）在 `docs/eval/` 下，由 E0-T03 建立模板。
+make -C evals smoke-review
+make -C evals smoke-fix
+make -C evals smoke-test
+make -C evals smoke-chat
+make -C evals view-stop
+```
+
+Tunables:
+
+```bash
+# change the smoke sample count
+make -C evals smoke LIMIT=3
+
+# change coding-model ids without editing the Makefile
+OPENBOT_DEEPAGENTS_MODEL=mimo-v2.5 make -C evals smoke-fix
+OPENBOT_DEEPAGENTS_MODEL=mimo-v2.5 make -C evals smoke-test
+
+# point the viewer at Makefile-produced smoke logs or a different port
+make -C evals view-open VIEW_LOG_DIR=evals/logs VIEW_OUTPUT_DIR=evals/logs-www
+make -C evals view-open VIEW_PORT=8124
+```
+
+## Reliability: timeouts, retries, and resume
+
+Evals talk to flaky model endpoints — a half-closed TCP socket from a
+provider mid-completion would previously hang a sample indefinitely. Two
+layers of defense, each independently tunable, plus a checkpoint-style
+resume.
+
+### Layer 1 — HTTP-client timeout + retries (per request)
+
+Every `deepagents` LLM call is constructed through `build_chat_model(...)`
+in [`evals/common/deepagents_baseline.py`](common/deepagents_baseline.py),
+which sets explicit `timeout` and `max_retries` on the provider httpx
+client. Defaults: **90 s timeout, 3 retries** on retryable HTTP errors
+(429 / 5xx / connection drops).
+
+```bash
+# per-request HTTP timeout — applies to every model call
+OPENBOT_DEEPAGENTS_MODEL_TIMEOUT_S=60 make -C evals smoke-review
+
+# HTTP-layer retry count for transient errors (429 / 5xx / network)
+OPENBOT_DEEPAGENTS_MODEL_MAX_RETRIES=5 make -C evals smoke-review
+```
+
+### Layer 2 — Inspect per-sample resilience
+
+`INSPECT_FLAGS` includes `--no-fail-on-error --score-on-error
+--retry-on-error=2 --attempt-timeout 180 --max-samples 4` by default,
+so:
+
+- A poisoned sample doesn't kill 49 healthy ones (`--no-fail-on-error`).
+- Errored samples score 0 in the aggregate rather than disappearing
+  (`--score-on-error`).
+- Each sample gets up to 2 sample-level retries after the HTTP layer
+  gives up (`--retry-on-error=2`).
+- A single model attempt that takes longer than 180 s is abandoned and
+  retried (`--attempt-timeout 180`).
+- At most 4 samples run concurrently — avoids stampeding a rate-limited
+  endpoint (`--max-samples 4`).
+
+Override at the Make command line:
+
+```bash
+# tighter sample-level retry, smaller concurrency for a flaky endpoint
+make -C evals smoke-review RETRY_ON_ERROR=4 MAX_SAMPLES=2 ATTEMPT_TIMEOUT=90
+
+# disable the resilience floor (strict mode — fail fast on first error)
+make -C evals smoke-review RESILIENCE_FLAGS="--max-samples 4"
+```
+
+The two layers are independent on purpose: HTTP retries keep the agent
+loop alive through transient provider blips without losing context;
+sample retries rerun the whole agent from scratch when an error escapes
+that layer.
+
+### Resume a partial / errored run
+
+`inspect eval-retry` reads a `.eval` log, identifies samples that
+errored or never completed, and re-runs **just those**. Cleanly-scored
+samples are skipped — so a 50-sample run that was killed at sample 23
+resumes at 24, and a run where 7 samples errored gets exactly 7 reruns.
+
+```bash
+# resume the most recent partial run under evals/logs/
+make -C evals resume
+
+# resume an explicit log
+make -C evals resume LOG=evals/logs/20260516-165534-review-full/-I*.eval
+```
+
+Resume inherits the same resilience flags as the original run.
+
+## Current limits
+
+- No production `openbot_prod` solver is implemented yet for review or chat; those task entries are deliberate placeholders.
+- `review` uses no sandbox; it is a closed-form baseline.
+- The SWT-Bench integration is local to this repo: it reuses Inspect's task/plumbing but the scorer is custom.

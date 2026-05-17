@@ -78,21 +78,29 @@ def test_both_empty_is_vacuously_perfect() -> None:
 
 
 def test_empty_candidate_misses_all_golden() -> None:
+    """Eval-trap fix: empty candidate must not inflate precision to 1.0.
+
+    The pre-fix scorer returned ``precision = 1.0`` whenever ``len(candidate)
+    == 0`` (formal "no false positives" reading of the formula's zero
+    denominator). That silently boosted dataset-level precision averages
+    every time the agent truncated mid-thought or otherwise emitted nothing.
+    Aligned with sklearn's ``zero_division=0`` convention so an empty
+    contribution scores 0, not 1.
+    """
     golden = [_f("a.py", 1, "g1")]
     report = compute_review_overlap(golden, [], _stub_judge(golden, [], set()))
-    # No candidate to be wrong about → precision = 1.0 (no false positives)
-    # No candidate caught any → recall = 0
-    assert report.precision == 1.0
+    assert report.precision == 0.0
     assert report.recall == 0.0
     assert report.f1 == 0.0
     assert report.unmatched_golden == [0]
 
 
 def test_empty_golden_makes_all_candidate_false_positives() -> None:
+    """Symmetric: invented findings on a clean PR must not score recall=1.0."""
     candidate = [_f("x.py", 1, "noise")]
     report = compute_review_overlap([], candidate, _stub_judge([], candidate, set()))
     assert report.precision == 0.0
-    assert report.recall == 1.0  # nothing to recall = vacuously full
+    assert report.recall == 0.0
     assert report.f1 == 0.0
     assert report.unmatched_candidate == [0]
 
@@ -112,28 +120,37 @@ def test_greedy_match_consumes_golden_at_most_once() -> None:
     assert report.unmatched_candidate == [1]
 
 
-def test_judge_is_called_through_locked_model() -> None:
-    """PRD §10.3: judge must run through the locked model — wire test.
+def test_judge_is_called_through_locked_martian_model(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Judge must run through the resolver-driven model — wire test.
 
-    We don't call a real LLM here. Instead we assert that the injected judge
-    *is* the construct that supplies `Judge.fingerprint()` — i.e. callers can
-    use `evals.common.judges.Judge` as the source of truth.
+    Asserts ``evals.scorers.review_judge.MARTIAN_JUDGE_MODEL_ID`` reflects
+    whatever the shared judge-model resolver chose, so callers downstream
+    (overlap scorer, task metadata, LangSmith experiment record) all see
+    the same id. Pre-v3 this pinned the literal ``claude-opus-4-5``; v3
+    moved the id to :func:`evals.common.judge_client.resolve_judge_model`
+    so per-gateway overrides work without touching code.
     """
-    from evals.common.judges import DEFAULT_JUDGE_MODEL_ID, Judge
+    import importlib
 
-    j = Judge()
-    assert j.model_id == DEFAULT_JUDGE_MODEL_ID
+    from evals.common import judge_client
+    from evals.scorers import review_judge
 
-    # Build a judge_fn closure that, in real life, would call the LLM via j.
-    seen: list[tuple[Finding, Finding, str]] = []
+    monkeypatch.setenv("OPENBOT_REVIEW_JUDGE_MODEL_ID", "anthropic:test-judge-model")
+    importlib.reload(review_judge)
+    try:
+        seen_models: list[str] = []
 
-    def judge_fn(golden: Finding, candidate: Finding) -> JudgeVerdict:
-        # In production: `result = call_llm(model=j.model_id, prompt=j.prompt_body, ...)`
-        seen.append((golden, candidate, j.model_id))
-        return _verdict(match=False)
+        def judge_fn(golden: Finding, candidate: Finding) -> JudgeVerdict:
+            seen_models.append(review_judge.MARTIAN_JUDGE_MODEL_ID)
+            return _verdict(match=False)
 
-    compute_review_overlap([_f("a.py", 1, "g")], [_f("a.py", 1, "c")], judge_fn)
-    assert seen and seen[0][2] == DEFAULT_JUDGE_MODEL_ID
+        compute_review_overlap([_f("a.py", 1, "g")], [_f("a.py", 1, "c")], judge_fn)
+        assert seen_models == ["anthropic:test-judge-model"]
+    finally:
+        # Restore module-level constant for downstream tests in this session.
+        monkeypatch.delenv("OPENBOT_REVIEW_JUDGE_MODEL_ID", raising=False)
+        importlib.reload(judge_client)
+        importlib.reload(review_judge)
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────

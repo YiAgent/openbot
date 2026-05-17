@@ -29,7 +29,7 @@ make hooks   # install git pre-commit / pre-push hooks
 
 ## Locked boundaries (do not substitute)
 
-- **Sandbox = Modal**, reused per thread. Daytona / local are stub interfaces only — do not implement by default.
+- **Sandbox = pluggable via `evals.sandboxes.factory`** (`OPENBOT_SANDBOX_BACKEND` ∈ `daytona` | `modal` | `docker`, default `daytona`). All three are real implementations behind the same `SandboxBackend` protocol; solvers depend on the protocol, never on a concrete class.
 - **Observability = LangSmith**. Langfuse is a fallback, do not mix them.
 - **Eval runner = Inspect AI**. LangSmith handles only tracing / dataset / experiment / online eval / annotation.
 - v0.1 channel is GitHub only — do not write Slack / Discord / Linear adapter code.
@@ -44,6 +44,6 @@ Repo is at **v0.1 Week 1 skeleton**. `openbot/` currently contains only `webapp.
 - Manage issues via the `gh` CLI; triage labels: [`docs/agents/triage-labels.md`](./docs/agents/triage-labels.md).
 - Domain docs use a single-context layout: root `CONTEXT.md` + `docs/adr/` (lazily created — silent if absent).
 
-## Eval task workflow
+## Eval workflow
 
-When the user asks to continue eval work or says "next eval task" (or 继续下一个 eval 任务), follow the protocol in [`docs/eval/RESUME.md`](./docs/eval/RESUME.md). **One task per session.** Read [`docs/eval/STATE.md`](./docs/eval/STATE.md) first for the `Next task:` pointer, then read the matching `### <id>` section in [`docs/eval/task-list.md`](./docs/eval/task-list.md) and any `Deps:` handoffs under `docs/eval/handoffs/`. Finish by writing a handoff, updating STATE.md, and committing on branch `eval/<milestone>`.
+Eval scope and per-suite contracts live in [`docs/prd/openbot-eval-prd.md`](./docs/prd/openbot-eval-prd.md) (commitments / gates / SLOs) and [`docs/prd/openbot-eval-suites.md`](./docs/prd/openbot-eval-suites.md) (per-cell suite details). Eval code is under `evals/` per PRD §6.1; datasets live in LangSmith (allowlist routing in `evals/common/langsmith.py`).

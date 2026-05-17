@@ -1,94 +1,79 @@
-"""Unit tests for the dual-project routing in evals.common.langsmith — PRD §13.2."""
+"""Unit tests for single-project trace routing in evals.common.langsmith."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+import os
 
 import pytest
 
 from evals.common import langsmith as ls
 
-# ─── is_public_dataset: manifest reading ─────────────────────────────────────
+
+def test_configure_tracing_skips_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LANGSMITH_API_KEY", raising=False)
+    state = ls.configure_tracing_for_dataset("martian_2026w20")
+    assert state["source"] == "skipped:no-api-key"
+    assert state["project"] is None
 
 
-def test_public_true_in_manifest_returns_true(tmp_path: Path) -> None:
-    (tmp_path / "martian_review_v1.yaml").write_text("name: martian\npublic: true\n")
-    assert ls.is_public_dataset("martian_review_v1", manifest_dir=tmp_path) is True
-
-
-def test_public_false_in_manifest_returns_false(tmp_path: Path) -> None:
-    (tmp_path / "internal_prs_v1.yaml").write_text("name: internal_prs\npublic: false\n")
-    assert ls.is_public_dataset("internal_prs_v1", manifest_dir=tmp_path) is False
-
-
-def test_missing_manifest_fails_safe_to_internal(tmp_path: Path) -> None:
-    """A missing manifest must default to internal, never accidentally public."""
-    assert ls.is_public_dataset("nonexistent_v1", manifest_dir=tmp_path) is False
-
-
-def test_missing_public_field_defaults_to_internal(tmp_path: Path) -> None:
-    (tmp_path / "broken_v1.yaml").write_text("name: broken\n# public field forgotten\n")
-    assert ls.is_public_dataset("broken_v1", manifest_dir=tmp_path) is False
-
-
-def test_yes_and_one_also_count_as_public(tmp_path: Path) -> None:
-    (tmp_path / "a.yaml").write_text("public: yes\n")
-    (tmp_path / "b.yaml").write_text("public: 1\n")
-    assert ls.is_public_dataset("a", manifest_dir=tmp_path) is True
-    assert ls.is_public_dataset("b", manifest_dir=tmp_path) is True
-
-
-# ─── init_client_for_dataset: routing to internal vs public ──────────────────
-
-
-def test_internal_dataset_picks_internal_project_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """An internal-dataset run hits LANGSMITH_PROJECT_INTERNAL (PRD §13.2)."""
-    (tmp_path / "internal_v1.yaml").write_text("public: false\n")
-    monkeypatch.setattr(ls, "_MANIFEST_DIR", tmp_path)
+def test_eval_project_env_drives_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LANGSMITH_PROJECT_EVAL is the single source of truth for all 4 eval cells."""
     monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
-    monkeypatch.setenv("LANGSMITH_PROJECT_INTERNAL", "openbot-eval-internal")
-    monkeypatch.delenv("LANGSMITH_PROJECT_PUBLIC", raising=False)
+    monkeypatch.setenv("LANGSMITH_PROJECT_EVAL", "openbot-eval")
+    monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
 
-    with patch.object(ls, "init_client", return_value=MagicMock()) as init_spy:
-        ls.init_client_for_dataset("internal_v1")
-    init_spy.assert_called_once_with(public=False)
+    for dataset_version in (
+        "martian_2026w20",
+        "chat_swe_qa_pro_v1",
+        "fix_swe_bench_verified",
+        "test_swt_bench_verified",
+    ):
+        state = ls.configure_tracing_for_dataset(dataset_version)
+        assert state == {
+            "project": "openbot-eval",
+            "tracing": "true",
+            "source": "eval-project",
+        }
+        assert os.environ["LANGSMITH_PROJECT"] == "openbot-eval"
 
 
-def test_public_dataset_picks_public_project_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A public-dataset run hits LANGSMITH_PROJECT_PUBLIC (PRD §13.2)."""
-    (tmp_path / "martian_v1.yaml").write_text("public: true\n")
-    monkeypatch.setattr(ls, "_MANIFEST_DIR", tmp_path)
+def test_configure_tracing_overwrites_preexisting_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Doppler's default LANGSMITH_PROJECT must NOT shadow the eval routing."""
     monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
-    monkeypatch.setenv("LANGSMITH_PROJECT_PUBLIC", "openbot-eval-public")
-    monkeypatch.delenv("LANGSMITH_PROJECT_INTERNAL", raising=False)
+    monkeypatch.setenv("LANGSMITH_PROJECT", "openbot-dev")  # default value
+    monkeypatch.setenv("LANGSMITH_PROJECT_EVAL", "openbot-eval")
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
 
-    with patch.object(ls, "init_client", return_value=MagicMock()) as init_spy:
-        ls.init_client_for_dataset("martian_v1")
-    init_spy.assert_called_once_with(public=True)
+    ls.configure_tracing_for_dataset("martian_2026w20")
+
+    assert os.environ["LANGSMITH_PROJECT"] == "openbot-eval"
 
 
-def test_internal_routing_does_not_silently_fall_through_to_public(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Hard-to-spot regression: internal-only env shouldn't blow past to public.
-
-    If `is_public_dataset` ever returned True for an internal manifest, the
-    init would error on missing LANGSMITH_PROJECT_PUBLIC. This test asserts
-    the opposite path: internal dataset never tries to read the public env.
-    """
-    (tmp_path / "internal_v1.yaml").write_text("public: false\n")
-    monkeypatch.setattr(ls, "_MANIFEST_DIR", tmp_path)
+def test_configure_tracing_reports_unset_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When LANGSMITH_PROJECT_EVAL is missing, tracing still enables but project=None."""
     monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
-    monkeypatch.setenv("LANGSMITH_PROJECT_INTERNAL", "openbot-eval-internal")
-    monkeypatch.delenv("LANGSMITH_PROJECT_PUBLIC", raising=False)
+    monkeypatch.delenv("LANGSMITH_PROJECT_EVAL", raising=False)
+    monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
 
-    # No-op the lazy `from langsmith import Client` so we don't hit network.
-    fake_module = type("FakeLS", (), {"Client": lambda **kw: MagicMock()})
-    monkeypatch.setitem(__import__("sys").modules, "langsmith", fake_module)
+    state = ls.configure_tracing_for_dataset("martian_2026w20")
 
-    ls.init_client_for_dataset("internal_v1")  # must NOT raise on missing public env
+    assert state["project"] is None
+    assert state["source"] == "eval-project:unset"
+    assert state["tracing"] == "true"
+
+
+def test_configure_tracing_honors_explicit_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pre-set LANGSMITH_TRACING is left alone (allows muting noisy dev loops)."""
+    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setenv("LANGSMITH_PROJECT_EVAL", "openbot-eval")
+    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
+
+    state = ls.configure_tracing_for_dataset("martian_2026w20")
+
+    assert state["tracing"] == "false"  # untouched

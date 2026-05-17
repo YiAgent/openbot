@@ -320,18 +320,17 @@ git clone https://github.com/<you>/openbot && cd openbot
 
 **明确反对**：BLEU / ROUGE 用于评 code —— 对代码语义无效。
 
-### 8.2 Benchmark 套件（按 ROI）
+### 8.2 Benchmark 套件（v0.1 当前基线）
 
 | Benchmark | 用途 | 频率 | 单次成本 | v0.1 必跑 |
 |---|---|---|---|---|
-| **Martian Code Review Bench**（50 PR × 5 repo, 136 gold comments） | PR review 质量信号 | 每次 review prompt 改 | $5-30 | ✅ |
-| **自建 shadow PR set**（30-50 个内部 merged PR） | 与自家 codebase 对齐 | 每 release | $10-50 | ✅ |
-| **SWE-bench Lite**（Python, 300 task） | fix 周回归 | 每周 | $50-150 (Haiku 4.5) | ✅ |
-| **Aider Polyglot**（6 lang × 225 task） | 多语言鲁棒性 | 每周 | $5-30 | v0.2 起 |
-| **SWE-bench Verified**（500 task） | 对外公开数字 | 每月 / release | $300-800 (Sonnet) | v0.2 起 |
-| **SWE-bench Pro**（含 276 private） | 防训练污染信号 | 每季度 | $200-400 | v0.2 起 |
-| **GitBugs**（15k+ pre-split） | triage 分类 F1 | 每季度 | $10-30 | v0.2 起 |
-| **LIBRO** | reproduce 成功率 | 每两周 | $30-100 | v0.2 起（若 reproduce 作为卖点） |
+| **Martian Code Review Bench**（50 PR） | review `mean_f1` | regression / release | $5-30 | ✅ |
+| **SWE-bench Verified**（500 task） | fix `pass@1` 主信号 | weekly / monthly / release | $30-50（500-task run，当前 baseline） | ✅ |
+| **SWT-Bench Verified**（433 task） | fix 辅助诊断：能否写出 regression test | weekly / release | 与 SWE-bench 同级 | ✅（diagnostic） |
+| **SWE-QA-Pro-Bench**（260 QA） | chat `normalized_overall` | regression / release | $10-15 | ✅ |
+| **GitBugs / triage seed** | triage `macro_f1` | regression / weekly | 低 | 计划中 |
+| **内部 curated set** | 真实产品分布 | v0.2 解冻后 | 按业务 | v0.2 起 |
+| **SWE-bench Live** | fix 漂移信号 | monthly | 按月 | v0.3 |
 
 **Verified 的诚实声明**：Opus 类模型可能在训练集见过 Verified 的 gold patch。OpenBot 报告 Verified 是为了和竞品可比，**真信号靠 Pro + 自建 shadow set**。
 
@@ -345,7 +344,8 @@ git clone https://github.com/<you>/openbot && cd openbot
 | **Security** | SSRF / prompt injection / auth | assertion-error fake + positive case | ~3% |
 | **Eval** | LLM 行为质量 | `evals/` 独立目录，CI 外手动触发 | — |
 
-**eval 不进 CI**（太贵）。改用：每次 prompt 改 → 自动跑 Martian + shadow set；每周 cron → SWE-bench Lite；每月/release → Verified + Pro。
+**昂贵 full eval 不进同步 CI**。当前策略是：  
+prompt / workflow 改动 → 异步 regression；周跑 `fix_swe_bench_verified` + `test_swt_bench_verified`；release 跑当前 phase 的公开 suite。详细 gate / budget / online 规则见独立 [eval PRD](./openbot-eval-prd.md)。
 
 ### 8.4 CI/CD Pipeline
 
@@ -362,12 +362,13 @@ git clone https://github.com/<you>/openbot && cd openbot
 
 | Gate | 指标 | 触发 | 行为 |
 |---|---|---|---|
-| Regression（soft） | Martian F1 ↓ ≥ 5% | 每次 review/fix prompt 改 | PR 评论警告 |
-| Regression（hard） | Martian F1 ↓ ≥ 10% | 同上 | block merge |
-| Shadow hold | shadow set precision + recall ≥ baseline | 每 release | block release |
-| Lite 稳定性 | SWE-bench Lite resolved % 周环比 ≤ 3% | 每周 | 趋势告警；连续 3 周下降人工介入 |
+| Regression（soft） | review `mean_f1` ↓ ≥ 5% | 每次 review prompt 改 | PR 评论警告 |
+| Regression（hard） | review `mean_f1` ↓ ≥ 10% | 同上 | block merge |
+| Fix regression | `fix_swe_bench_verified` pass@1 ↓ ≥ 5% | 每次 fix workflow / prompt 改 | warn |
+| SWT diagnostic | `test_swt_bench_verified` 仅看 baseline drift | 每周 / release | v0.1 只报警，不 gate |
+| Chat regression | `chat_swe_qa_pro` normalized_overall ↓ ≥ 5% | 每次 chat workflow / prompt 改 | warn |
 | Review 延迟 | per-PR p95 ≤ 60 秒 | 实时 | 超 120s canary alert |
-| Review 精度 | Martian precision ≥ 70% | 持续 | 月度审计 + public dashboard |
+| Review 精度 | Martian `mean_f1` ≥ 0.55 | release | 趋势告警 + public dashboard |
 | Comment 信噪 | 仅发 severity ≥ medium | 每条 | 自动过滤 low/nit |
 | Prompt injection 防御 | 20 个 "Comment & Control" 攻击 case 全 fail-safe | 每 release | block release |
 
@@ -425,8 +426,8 @@ Plugin PR review checklist：
 | Dogfood 在自家 repo 跑天数 | ≥ 7 |
 | GitHub stars | ≥ 50 |
 | 外部 install 数 | ≥ 5 |
-| **SWE-bench Lite pass@1** (Sonnet 4.6) | **≥ 50%** |
-| **Martian Code Review F1** | **≥ 0.35** |
+| **SWE-bench Verified pass@1** | **≥ 40%** |
+| **Martian Code Review mean_f1** | **≥ 0.55** |
 | 平均 fix task 成本 | ≤ $2.00 |
 | 单 task budget 卡住率 | < 5%（不能太敏感） |
 | Bot 评论 👍 : 👎 比例 | ≥ 2 : 1 |

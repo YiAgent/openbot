@@ -1,0 +1,51 @@
+SWT-bench (vendored)
+====================
+
+This directory is a vendored copy of the SWT-bench harness from:
+
+  https://github.com/logic-star-ai/swt-bench
+
+Pinned to upstream commit:
+
+  e0a1be17f2d83a7e3d831b02593e7157f94f61c1   (2026-04-27)
+
+License: MIT (see ./LICENSE). Copyright (c) 2024 Mark Niklas Müller,
+Niels Mündler.
+
+Modifications from upstream
+---------------------------
+
+Only mechanical edits, no behavioural changes to grading or harness
+orchestration:
+
+  1. Absolute imports rewritten to relative — every ``from src.foo``
+     became ``from .foo`` because the tree is now a Python subpackage
+     under ``evals.third_party.swt_bench`` rather than upstream's
+     top-level ``src``.
+
+  2. ``__init__.py`` opens with
+       from evals.sandboxes.docker_ssh import apply_ssh_patch
+       apply_ssh_patch()
+     so the harness can reach a remote Docker daemon via
+     ``DOCKER_HOST=ssh://…`` on a macOS dev box without requiring
+     paramiko to read the Keychain. See
+     ``evals/sandboxes/docker_ssh.py`` for the full rationale.
+
+Resync procedure
+----------------
+
+To pull a newer upstream:
+
+  git clone --depth 1 https://github.com/logic-star-ai/swt-bench \\
+      /tmp/swt-bench-upstream
+  rsync -av --delete \\
+      --include='*/' --include='*.py' --include='*.txt' --include='*.md' \\
+      --exclude='*' \\
+      /tmp/swt-bench-upstream/src/ evals/third_party/swt_bench/
+  cp /tmp/swt-bench-upstream/LICENSE evals/third_party/swt_bench/
+  # Re-run the import rewrite (see git log for the helper) and re-add
+  # the apply_ssh_patch() prelude to __init__.py.
+
+Reference: ReProAgent (https://github.com/iSEngLab/ReProAgent) does the
+same vendor pattern under ``src/swtbench/`` — verified verbatim copy
+plus relative-import rewrite, no other deltas.
