@@ -42,11 +42,7 @@ _BODY_MAX_CHARS: Final = 4096
 # correctly even if the user pastes 50 MB of garbage after it. The
 # captured group is bounded; anything past 2 KB is silently dropped.
 _MENTION_RE: Final = re.compile(
-    # Lookahead requires whitespace or end-of-string immediately after
-    # `@openbot` so `@openbot-dev stop` (a *different* bot login) doesn't
-    # match. The optional non-capturing group consumes whitespace +
-    # bounded body. Anything past 2 KB is silently dropped.
-    r"^@openbot(?=\s|$)(?:\s+(.{1,2048}))?",
+    r"^@(?:openbot|yibots)(?=\s|$)(?:\s+(.{1,2048}))?",
     re.IGNORECASE | re.DOTALL,
 )
 
