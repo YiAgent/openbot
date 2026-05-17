@@ -42,9 +42,9 @@ else:
     Handler = Callable[..., Awaitable[None]]
 
 
-# `@openbot ` chat-mention prefix. Trailing space mandatory so `@openbot-dev`
-# (another bot's login) isn't accidentally matched.
-_CHAT_PREFIX: Final = "@openbot "
+# `@yibots ` chat-mention prefix. Trailing space mandatory so as not to match
+# other bot logins starting with the same prefix.
+_CHAT_PREFIX: Final = "@yibots "
 
 
 @dataclass(frozen=True, slots=True)
