@@ -429,6 +429,6 @@ async def test_demo_09_worker_restart_does_not_drop_message(
     pending = await redis.xpending("openbot:workflows", "openbot:workflows:group")
     # Different redis-py versions return either a dict or a tuple-of-4.
     pending_count = pending["pending"] if isinstance(pending, dict) else pending[0]
-    assert (
-        int(pending_count) == 0
-    ), f"expected empty PEL after reclaim+XACK, got pending={pending} (entry_id={entry_id})"
+    assert int(pending_count) == 0, (
+        f"expected empty PEL after reclaim+XACK, got pending={pending} (entry_id={entry_id})"
+    )

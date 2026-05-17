@@ -37,9 +37,9 @@ def test_metrics_endpoint_returns_prometheus_exposition() -> None:
     # If the body is empty or HTML we're not actually serving Prometheus
     # data — the instrumentator may have been mis-wired.
     body = response.text
-    assert (
-        body.startswith("# HELP") or "\n# HELP " in body
-    ), f"body does not look like Prometheus exposition: {body[:200]}"
+    assert body.startswith("# HELP") or "\n# HELP " in body, (
+        f"body does not look like Prometheus exposition: {body[:200]}"
+    )
 
 
 def test_metrics_endpoint_does_not_break_health() -> None:
