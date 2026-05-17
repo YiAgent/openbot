@@ -78,21 +78,29 @@ def test_both_empty_is_vacuously_perfect() -> None:
 
 
 def test_empty_candidate_misses_all_golden() -> None:
+    """Eval-trap fix: empty candidate must not inflate precision to 1.0.
+
+    The pre-fix scorer returned ``precision = 1.0`` whenever ``len(candidate)
+    == 0`` (formal "no false positives" reading of the formula's zero
+    denominator). That silently boosted dataset-level precision averages
+    every time the agent truncated mid-thought or otherwise emitted nothing.
+    Aligned with sklearn's ``zero_division=0`` convention so an empty
+    contribution scores 0, not 1.
+    """
     golden = [_f("a.py", 1, "g1")]
     report = compute_review_overlap(golden, [], _stub_judge(golden, [], set()))
-    # No candidate to be wrong about → precision = 1.0 (no false positives)
-    # No candidate caught any → recall = 0
-    assert report.precision == 1.0
+    assert report.precision == 0.0
     assert report.recall == 0.0
     assert report.f1 == 0.0
     assert report.unmatched_golden == [0]
 
 
 def test_empty_golden_makes_all_candidate_false_positives() -> None:
+    """Symmetric: invented findings on a clean PR must not score recall=1.0."""
     candidate = [_f("x.py", 1, "noise")]
     report = compute_review_overlap([], candidate, _stub_judge([], candidate, set()))
     assert report.precision == 0.0
-    assert report.recall == 1.0  # nothing to recall = vacuously full
+    assert report.recall == 0.0
     assert report.f1 == 0.0
     assert report.unmatched_candidate == [0]
 

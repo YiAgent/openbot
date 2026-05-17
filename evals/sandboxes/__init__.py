@@ -1,22 +1,49 @@
-"""Docker-backed sandbox layer for deepagents — completely separate from
-the Inspect AI evaluation/scoring sandboxes.
+"""Eval sandbox layer — pluggable backends behind a single factory.
 
-Two responsibilities live here:
+Eval solvers obtain a sandbox via :func:`create_sandbox_for_sample` /
+:func:`create_bare_sandbox`. Backend selection is config-driven (env var
+``OPENBOT_SANDBOX_BACKEND`` ∈ {``daytona``, ``modal``, ``docker``},
+default ``daytona``) so swapping the runtime never touches solver code.
 
-- :mod:`evals.sandboxes.docker_backend` — a deepagents ``BaseSandbox``
-  implementation that drives a local Docker container via docker-py.
-  This is where the *agent* executes (read/edit/grep/glob/run-test).
-- :mod:`evals.sandboxes.repo_setup` — SWE-bench-style ``git clone @ commit``
-  bootstrap that pre-populates ``/workspace`` inside the container before
-  the agent gets control.
+This package never invokes the official SWE-bench / SWT-bench Docker
+harnesses — solvers emit structured predictions
+(:mod:`evals.common.predictions`) that the user feeds to the upstream
+harness offline.
 
-The eval-side official Docker harness (SWE-bench / SWT-bench) is **not**
-invoked from this package. Solvers here produce structured predictions
-(see :mod:`evals.common.predictions`); the user is expected to feed those
-predictions to the upstream evaluation harness offline.
+Modules:
+
+* :mod:`evals.sandboxes.factory` — config-driven dispatch + shared
+  ``SandboxBackend`` Protocol.
+* :mod:`evals.sandboxes.docker_backend` — local Docker container backend.
+* :mod:`evals.sandboxes.modal_backend` — Modal-cloud backend.
+* :mod:`evals.sandboxes.daytona_backend` — Daytona workspace backend.
+* :mod:`evals.sandboxes.repo_setup` — ``git clone @ commit`` bootstrap shared
+  by every backend.
 """
 
 from evals.sandboxes.docker_backend import DockerSandboxBackend
+from evals.sandboxes.factory import (
+    DAYTONA,
+    DOCKER,
+    MODAL,
+    SandboxBackend,
+    SandboxKind,
+    create_bare_sandbox,
+    create_sandbox_for_sample,
+    get_default_sandbox_kind,
+)
 from evals.sandboxes.repo_setup import RepoSpec, repo_setup_script
 
-__all__ = ["DockerSandboxBackend", "RepoSpec", "repo_setup_script"]
+__all__ = [
+    "DAYTONA",
+    "DOCKER",
+    "MODAL",
+    "DockerSandboxBackend",
+    "RepoSpec",
+    "SandboxBackend",
+    "SandboxKind",
+    "create_bare_sandbox",
+    "create_sandbox_for_sample",
+    "get_default_sandbox_kind",
+    "repo_setup_script",
+]

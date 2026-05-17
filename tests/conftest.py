@@ -3,15 +3,19 @@
 Two responsibilities:
   1. `rsa_private_key_pem` — ephemeral RSA-2048 PEM for GitHub App auth tests.
   2. `_isolate_openbot_env` — AUTOUSE: strip ambient `OPENBOT_*` env vars +
-     chdir to a clean tmp before every test. Without this, tests run in a
-     worktree with a real `.env` symlink (developer's actual config) and
-     pydantic-settings happily picks up production-shaped values, causing
-     non-deterministic behavior between CI and local — and between worktrees.
+     LangSmith tracing env + chdir to a clean tmp before every test. Without
+     this, tests run in a worktree with a real `.env` symlink (developer's
+     actual config) and pydantic-settings happily picks up production-shaped
+     values, causing non-deterministic behavior between CI and local — and
+     between worktrees. The LangSmith scrub also prevents `langsmith.traceable`
+     wrappers inside eval solvers (e.g. evals/solvers/swe_qa.py) from
+     accidentally publishing unit-test traces to the real project.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -20,7 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 
 
 @pytest.fixture(autouse=True)
-def _isolate_openbot_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def _isolate_openbot_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
     """Strip every `OPENBOT_*` env var and chdir to a clean tmp directory.
 
     Runs around EVERY test. The fixture has no return — tests don't need
@@ -38,7 +42,34 @@ def _isolate_openbot_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
     for key in list(os.environ):
         if key.startswith("OPENBOT_"):
             monkeypatch.delenv(key, raising=False)
+    for key in (
+        "LANGSMITH_API_KEY",
+        "LANGCHAIN_API_KEY",
+        "LANGSMITH_TRACING",
+        "LANGCHAIN_TRACING_V2",
+        "LANGSMITH_PROJECT",
+        "LANGCHAIN_PROJECT",
+        "LANGSMITH_PROJECT_EVAL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setenv("LANGCHAIN_TRACING_V2", "false")
     monkeypatch.chdir(tmp_path)
+    # Eval settings are cached via lru_cache for production efficiency
+    # (env reads are stable for the life of an eval run). Tests mutate
+    # env via monkeypatch.setenv mid-test, so we clear before AND after
+    # to guarantee no cross-test pollution either direction. Mirrors
+    # the openbot.config.get_settings.cache_clear() pattern.
+    try:
+        from evals.common.config import get_eval_config
+
+        get_eval_config.cache_clear()
+        yield
+        get_eval_config.cache_clear()
+    except ImportError:
+        # Some unit tests (e.g. pure webapp tests) don't pull in pydantic
+        # extras the eval modules need — let them run untouched.
+        yield
 
 
 @pytest.fixture(scope="session")

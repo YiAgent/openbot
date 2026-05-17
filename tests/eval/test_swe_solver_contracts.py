@@ -1,9 +1,10 @@
 """Contract tests for coding-eval deepagents solvers.
 
-Post-refactor: each solver spins up a Modal sandbox via
-``DockerSandboxBackend.create_for_sample`` and emits a structured prediction
-on ``state.metadata['prediction']``. We monkeypatch the sandbox factory so
-the tests stay hermetic — no Modal calls, no network.
+Each solver spins up a per-sample sandbox via
+:func:`evals.sandboxes.create_sandbox_for_sample` (config-driven backend —
+docker / modal / daytona) and emits a structured prediction on
+``state.metadata['prediction']``. We monkeypatch the factory function so
+the tests stay hermetic — no real sandbox boot, no network.
 """
 
 from __future__ import annotations
@@ -14,16 +15,35 @@ from typing import Any
 
 import pytest
 
+from evals.common.termination import AgentTerminationError
 from evals.solvers import swe_fix, swe_qa, swe_test
 
 
+def _ai(content: Any, *, usage_metadata: dict[str, Any] | None = None) -> SimpleNamespace:
+    """AI-tail duck-type stub mirroring langchain ``AIMessage`` for the
+    :func:`evals.common.termination.assert_clean_termination` contract.
+
+    The contract identifies the agent's own final emission via
+    ``getattr(last, "type", None) == "ai"`` rather than ``isinstance``
+    so test fixtures don't have to pay the pydantic validation cost
+    (real ``AIMessage`` rejects partial ``usage_metadata`` dicts). The
+    duck-type discriminator matches langchain's own ``BaseMessage.type``
+    field, so any ``ToolMessage`` / ``HumanMessage`` left in the tail
+    by middleware is still correctly rejected.
+    """
+    return SimpleNamespace(type="ai", content=content, usage_metadata=usage_metadata)
+
+
 class _FakeBackend:
-    """Stand-in for :class:`DockerSandboxBackend` in unit tests."""
+    """Stand-in for the per-sample sandbox in unit tests."""
 
     def __init__(self, *, sandbox_id: str = "sb-test", diff: str = "diff --git a b\n+x") -> None:
         self.id = sandbox_id
         self._diff = diff
         self.closed = False
+        # Properties matching the SandboxBackend protocol surface.
+        self.workspace = "/workspace"
+        self.used_sha_fallback = False
 
     async def acapture_diff(self) -> str:
         return self._diff
@@ -33,14 +53,14 @@ class _FakeBackend:
 
 
 def _patch_backend(monkeypatch: pytest.MonkeyPatch, module: Any, backend: _FakeBackend) -> None:
-    """Monkeypatch ``DockerSandboxBackend.create_for_sample`` to yield ``backend``."""
+    """Monkeypatch ``create_sandbox_for_sample`` in the solver module to yield ``backend``."""
 
     async def _factory(*, repo_spec, **_kwargs):  # type: ignore[no-untyped-def]
         # Surface repo_spec on the backend for assertions.
         backend.repo_spec = repo_spec  # type: ignore[attr-defined]
         return backend
 
-    monkeypatch.setattr(module.DockerSandboxBackend, "create_for_sample", _factory)
+    monkeypatch.setattr(module, "create_sandbox_for_sample", _factory)
 
 
 class _FakeAgent:
@@ -60,9 +80,7 @@ class _FakeAgent:
         self.calls.append({"payload": payload, "config": config})
         if self.messages is not None:
             return {"messages": self.messages}
-        return {
-            "messages": [SimpleNamespace(content=self.content, usage_metadata=self.usage_metadata)]
-        }
+        return {"messages": [_ai(content=self.content, usage_metadata=self.usage_metadata)]}
 
 
 def _swe_state(*, dataset_version: str) -> SimpleNamespace:
@@ -91,11 +109,11 @@ async def test_swe_fix_solver_emits_swebench_prediction(
 
     agent = _FakeAgent(
         messages=[
-            SimpleNamespace(
+            _ai(
                 content=[{"type": "text", "text": "fixed summary"}],
                 usage_metadata={"input_tokens": 21, "output_tokens": 4, "total_cost": 0.55},
             ),
-            SimpleNamespace(
+            _ai(
                 content="Model call limits exceeded: thread limit (20/20)",
                 usage_metadata=None,
             ),
@@ -172,11 +190,11 @@ async def test_swt_solver_emits_swtbench_prediction(
     _patch_backend(monkeypatch, swe_test, backend)
     agent = _FakeAgent(
         messages=[
-            SimpleNamespace(
+            _ai(
                 content="test summary",
                 usage_metadata={"input_tokens": 11, "output_tokens": 7, "total_cost": 0.2},
             ),
-            SimpleNamespace(
+            _ai(
                 content="Tool budget exhausted, finish with what you have.",
                 usage_metadata=None,
             ),
@@ -271,17 +289,25 @@ async def test_swe_qa_agent_solver_consumes_structured_response(
 
 
 @pytest.mark.asyncio
-async def test_swe_qa_agent_solver_falls_back_to_message_text_when_unstructured(
+async def test_swe_qa_agent_solver_raises_when_structured_response_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Protocol violation fallback: no structured_response → use last AI text."""
+    """No structured_response → AgentTerminationError, never reach the judge.
+
+    The prior behaviour synthesised a SweQaProAnswer from the last AI
+    message text so the judge "could see something". That conflated
+    "agent crashed mid-flight" with "agent produced a poor answer" and
+    polluted the metric. The contract is now: structured-output tasks
+    that don't surface a parsed structured_response are errored
+    samples — Inspect excludes them from the metric and feedback.
+    """
 
     class _Agent:
         async def ainvoke(self, payload, config):  # type: ignore[no-untyped-def]
             return {
-                "messages": [
-                    SimpleNamespace(content="Routing is in flask/routing.py", usage_metadata=None)
-                ]
+                "messages": [_ai(content="Routing is in flask/routing.py")],
+                # No structured_response — simulates middleware-cut /
+                # rate-limit storm / protocol violation.
             }
 
     backend = _FakeBackend()
@@ -300,7 +326,7 @@ async def test_swe_qa_agent_solver_falls_back_to_message_text_when_unstructured(
         },
         output=SimpleNamespace(completion=None),
     )
-    out = await swe_qa.deepagents_agent_swe_qa_solver()(state, None)
-    assert out.output.completion == "Routing is in flask/routing.py"
-    # Fallback predicate emits an empty citations list.
-    assert out.metadata["prediction"]["citations"] == []
+    with pytest.raises(AgentTerminationError):
+        await swe_qa.deepagents_agent_swe_qa_solver()(state, None)
+    # Sandbox still torn down on the error path.
+    assert backend.closed is True

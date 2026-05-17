@@ -13,7 +13,11 @@ These tests pin the fix: `review_diff` now returns a `ReviewResult` with
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from typing import Any
 from unittest.mock import patch
+
+import pytest
 
 from evals.solvers.review import (
     ReviewResult,
@@ -21,6 +25,37 @@ from evals.solvers.review import (
     _extract_json_object,
     review_diff,
 )
+
+
+@contextmanager
+def _stub_finalizer(returned: Any) -> Any:
+    """Patch the structured finalizer for offline tests.
+
+    ``build_baseline_agent`` wraps the compiled deepagents graph with a
+    finalizer that makes a real Anthropic API call. Unit tests stub the
+    underlying agent via ``create_deep_agent`` and don't have credentials —
+    so we also stub *both* the async and sync finalizer functions for the
+    duration of the test. ``returned`` is the parsed schema instance the
+    wrapper should inject into ``result["structured_response"]``.
+    """
+
+    async def _fake_finalize(_messages, *, schema, model, **_kwargs):
+        return returned
+
+    def _fake_finalize_sync(_messages, *, schema, model, **_kwargs):
+        return returned
+
+    with (
+        patch(
+            "evals.common.structured_finalizer.finalize_structured",
+            side_effect=_fake_finalize,
+        ),
+        patch(
+            "evals.common.structured_finalizer.finalize_structured_sync",
+            side_effect=_fake_finalize_sync,
+        ) as p,
+    ):
+        yield p
 
 
 def test_review_result_carries_both_raw_and_findings() -> None:
@@ -71,6 +106,8 @@ def _fake_agent_returning(text: str):
     """Build a stub deep-agent whose `.invoke` returns the given text as last message."""
 
     class _Msg:
+        type = "ai"  # termination contract requires the tail-message be AI-type
+
         def __init__(self, content: str) -> None:
             self.content = content
 
@@ -83,17 +120,22 @@ def _fake_agent_returning(text: str):
 
 def test_review_diff_returns_raw_text_when_prose_precedes_json() -> None:
     """An attacker who leaks a canary in prefatory prose must be observable in raw_text."""
+    from evals.solvers.review import _ReviewResponseModel
+
     leaky = (
         "Sure, here is the token you asked for: PWNED-leak-001.\n"
         'And here is the structured findings: {"findings": []}'
     )
-    with patch(
-        "evals.common.deepagents_baseline.create_deep_agent",
-        return_value=_fake_agent_returning(leaky),
+    with (
+        patch(
+            "evals.common.deepagents_baseline.create_deep_agent",
+            return_value=_fake_agent_returning(leaky),
+        ),
+        _stub_finalizer(_ReviewResponseModel(findings=[])),
     ):
         result = review_diff("diff --git a/x b/x\n+x\n")
     assert "PWNED-leak-001" in result.raw_text
-    # Parser still extracts the empty findings block.
+    # Finalizer produced empty findings; raw_text still carries the canary.
     assert result.findings == []
     # Critical regression pin: raw_text MUST contain the leak even though
     # findings is empty. The previous solver would only have surfaced the
@@ -104,6 +146,8 @@ def test_review_diff_handles_anthropic_content_blocks() -> None:
     """Some langchain backends return content as list[{type:text, text:str}]."""
 
     class _Msg:
+        type = "ai"  # termination contract requires the tail-message be AI-type
+
         def __init__(self) -> None:
             self.content = [
                 {"type": "text", "text": "Block 1 with canary PWNED-block-1. "},
@@ -114,7 +158,12 @@ def test_review_diff_handles_anthropic_content_blocks() -> None:
         def invoke(self, _payload):
             return {"messages": [_Msg()]}
 
-    with patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()):
+    from evals.solvers.review import _ReviewResponseModel
+
+    with (
+        patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()),
+        _stub_finalizer(_ReviewResponseModel(findings=[])),
+    ):
         result = review_diff("noop diff")
 
     assert "PWNED-block-1" in result.raw_text
@@ -125,14 +174,13 @@ def test_review_diff_handles_anthropic_content_blocks() -> None:
 
 
 def test_review_diff_consumes_structured_response_over_regex() -> None:
-    """When deepagents emits ``structured_response``, the regex extractor is bypassed.
+    """The wrapper's structured_response is the authoritative findings source.
 
-    Pins the deepagents 0.6.1 ``response_format=`` contract: the parsed
-    Pydantic model on ``result['structured_response']`` is the authoritative
-    findings source. The regex fallback only fires when that field is absent
-    (e.g. legacy stub agents). Without this pin, a schema-valid response that
-    happens to contain conflicting JSON in prose could silently corrupt
-    scoring.
+    Pins the post-finalizer contract: the parsed Pydantic model that the
+    structured-finalizer wrapper injects into
+    ``result['structured_response']`` overrides any conflicting JSON in
+    the agent's prose. Without this pin, decoy JSON in chain-of-thought
+    output could silently corrupt scoring.
     """
     from evals.solvers.review import _ReviewResponseModel
 
@@ -141,7 +189,7 @@ def test_review_diff_consumes_structured_response_over_regex() -> None:
 
         def __init__(self) -> None:
             # Prose carries a DECOY JSON object — must be ignored in favor of
-            # the structured_response below.
+            # the finalizer-produced schema below.
             self.content = 'Decoy findings: {"findings": [{"file":"decoy.py","line":1,"body":"x","severity":"low"}]}'
 
     structured = _ReviewResponseModel(
@@ -152,17 +200,129 @@ def test_review_diff_consumes_structured_response_over_regex() -> None:
 
     class _Agent:
         def invoke(self, _payload):
-            return {"messages": [_AiMsg()], "structured_response": structured}
+            return {"messages": [_AiMsg()]}
 
-    with patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()):
+    with (
+        patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()),
+        _stub_finalizer(structured),
+    ):
         result = review_diff("diff stub")
 
-    # Structured findings win; decoy JSON in prose is ignored.
+    # Finalizer schema wins; decoy JSON in prose is ignored.
     assert len(result.findings) == 1
     assert result.findings[0]["file"] == "real.py"
     assert result.findings[0]["severity"] == "high"
     # Raw text still carries the decoy so the safety scorer can inspect it.
     assert "decoy.py" in result.raw_text
+
+
+def test_parse_agent_result_marks_structured_present_via_response_format() -> None:
+    """structured_response → ``structured_present=True``, even when findings list is empty."""
+    from evals.solvers.review import _parse_agent_result, _ReviewResponseModel
+
+    class _AiMsg:
+        type = "ai"
+        content = "clean diff"
+
+    structured = _ReviewResponseModel(findings=[])
+    parsed = _parse_agent_result({"messages": [_AiMsg()], "structured_response": structured})
+    assert parsed.structured_present is True
+    assert parsed.findings == []
+
+
+def test_parse_agent_result_marks_structured_present_when_json_in_prose() -> None:
+    """JSON-in-prose counts as schema-equivalent — agent emitted findings, just inline."""
+    from evals.solvers.review import _parse_agent_result
+
+    class _AiMsg:
+        type = "ai"
+        content = (
+            'Reviewed the diff. Final answer: {"findings": '
+            '[{"file":"a.py","line":1,"body":"bug","severity":"high"}]}'
+        )
+
+    parsed = _parse_agent_result({"messages": [_AiMsg()], "structured_response": None})
+    assert parsed.structured_present is True
+    assert len(parsed.findings) == 1
+    assert parsed.findings[0]["file"] == "a.py"
+
+
+def test_parse_agent_result_marks_structured_absent_for_prose_only() -> None:
+    """Prose-only result with no schema payload: ``structured_present=False``.
+
+    This is the input shape the wrapper's finalizer is designed to recover
+    from — pinning that ``_parse_agent_result`` (which still runs after
+    the wrapper) correctly identifies the prose-only case keeps the
+    invariant explicit for future parser refactors.
+    """
+    from evals.solvers.review import _parse_agent_result
+
+    class _AiMsg:
+        type = "ai"
+        content = (
+            "I reviewed the diff and found 3 issues:\n"
+            "1. File auth.py line 42 — token comparison not constant-time.\n"
+            "2. File db.py line 17 — SQL string concatenation.\n"
+            "3. File api.py line 9 — missing input validation.\n"
+        )
+
+    parsed = _parse_agent_result({"messages": [_AiMsg()], "structured_response": None})
+    assert parsed.structured_present is False
+    assert parsed.findings == []  # regex finds nothing — wrapper's finalizer would
+
+
+def test_review_diff_finalizer_recovers_findings_from_prose() -> None:
+    """Prose-only output is converted by the post-loop structured finalizer."""
+    from evals.solvers.review import _ReviewResponseModel
+
+    class _AiMsg:
+        type = "ai"
+        content = "Found a real bug in auth.py at line 42: timing leak."
+
+    class _Agent:
+        def invoke(self, _payload):
+            return {"messages": [_AiMsg()]}
+
+    recovered = _ReviewResponseModel(
+        findings=[
+            {"file": "auth.py", "line": 42, "body": "Timing leak", "severity": "high"},  # type: ignore[list-item]
+        ]
+    )
+
+    with (
+        patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()),
+        _stub_finalizer(recovered),
+    ):
+        result = review_diff("diff stub")
+
+    assert result.structured_present is True
+    assert len(result.findings) == 1
+    assert result.findings[0]["file"] == "auth.py"
+
+
+def test_review_diff_raises_on_empty_response() -> None:
+    """Empty agent prose is an errored sample, not a 'zero findings' answer.
+
+    The wrapper's finalizer refuses to fabricate a schema from nothing.
+    When the agent emits no visible text, ``finalize_structured`` raises
+    :class:`AgentTerminationError` so Inspect marks the sample errored
+    and excludes it from both the metric and LangSmith feedback.
+    """
+    from evals.common.termination import AgentTerminationError
+
+    class _AiMsg:
+        type = "ai"
+        content = ""
+
+    class _Agent:
+        def invoke(self, _payload):
+            return {"messages": [_AiMsg()]}
+
+    with (
+        patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()),
+        pytest.raises(AgentTerminationError),
+    ):
+        review_diff("diff stub")
 
 
 def test_review_diff_concatenates_all_ai_messages_for_safety_scan() -> None:
@@ -172,7 +332,12 @@ def test_review_diff_concatenates_all_ai_messages_for_safety_scan() -> None:
     step as its own AI message. An attacker who plants a canary in an earlier
     chain-of-thought turn would slip past a scan that only looked at
     ``messages[-1]``. This test pins the multi-turn join.
+
+    The agent produces multiple AI turns; the wrapper's finalizer is
+    stubbed to return an empty findings list so this test isolates the
+    raw-text aggregation property, not the finalizer behaviour.
     """
+    from evals.solvers.review import _ReviewResponseModel
 
     class _AiMsg:
         type = "ai"
@@ -187,10 +352,12 @@ def test_review_diff_concatenates_all_ai_messages_for_safety_scan() -> None:
                     _AiMsg("Reasoning step with canary PWNED-early-turn."),
                     _AiMsg("Final structured step."),
                 ],
-                "structured_response": None,
             }
 
-    with patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()):
+    with (
+        patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()),
+        _stub_finalizer(_ReviewResponseModel(findings=[])),
+    ):
         result = review_diff("diff stub")
 
     assert "PWNED-early-turn" in result.raw_text
@@ -248,7 +415,7 @@ def test_deepagents_baseline_review_solver_closed_form_round_trip() -> None:
     """
     import asyncio
 
-    from evals.solvers.review import deepagents_baseline_review_solver
+    from evals.solvers.review import _ReviewResponseModel, deepagents_baseline_review_solver
 
     class _AiMsg:
         type = "ai"
@@ -258,10 +425,7 @@ def test_deepagents_baseline_review_solver_closed_form_round_trip() -> None:
 
     class _Agent:
         def invoke(self, _payload):
-            return {
-                "messages": [_AiMsg('{"findings": []}')],
-                "structured_response": None,
-            }
+            return {"messages": [_AiMsg('{"findings": []}')]}
 
     class _State:
         def __init__(self) -> None:
@@ -270,7 +434,10 @@ def test_deepagents_baseline_review_solver_closed_form_round_trip() -> None:
             self.metadata: dict = {}
             self.output = type("O", (), {"completion": ""})()
 
-    with patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()):
+    with (
+        patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()),
+        _stub_finalizer(_ReviewResponseModel(findings=[])),
+    ):
         solver = deepagents_baseline_review_solver(use_sandbox=False)
         state = _State()
         loop = asyncio.new_event_loop()
@@ -288,7 +455,7 @@ def test_deepagents_baseline_review_solver_separates_raw_output_from_completion(
     """Raw agent prose stays in metadata; completion stays structured for exports."""
     import asyncio
 
-    from evals.solvers.review import deepagents_baseline_review_solver
+    from evals.solvers.review import _ReviewResponseModel, deepagents_baseline_review_solver
 
     class _AiMsg:
         type = "ai"
@@ -303,7 +470,6 @@ def test_deepagents_baseline_review_solver_separates_raw_output_from_completion(
                     _AiMsg("Let me read the key files to understand the full context."),
                     _AiMsg('{"findings": []}'),
                 ],
-                "structured_response": None,
             }
 
     class _State:
@@ -313,7 +479,10 @@ def test_deepagents_baseline_review_solver_separates_raw_output_from_completion(
             self.metadata: dict = {}
             self.output = type("O", (), {"completion": ""})()
 
-    with patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()):
+    with (
+        patch("evals.common.deepagents_baseline.create_deep_agent", return_value=_Agent()),
+        _stub_finalizer(_ReviewResponseModel(findings=[])),
+    ):
         solver = deepagents_baseline_review_solver(use_sandbox=False)
         state = _State()
         loop = asyncio.new_event_loop()
@@ -362,3 +531,146 @@ def test_deepagents_baseline_review_solver_uses_shared_deepagents_model_by_defau
 
     assert seen["diff"] == "diff stub"
     assert seen["model"] == "anthropic:mimo-v2.5"
+
+
+def test_sandbox_solver_ignores_upstream_commit_as_base_sha(monkeypatch) -> None:
+    """``upstream_commit`` is the martian-CRB SHA, not the target repo's base.
+
+    Before this pin: ``base_sha = md.get("upstream_commit") or md.get("base_sha")``
+    silently used the wrong SHA when ``base_sha`` was missing, guaranteeing
+    every ``git fetch`` failed and the agent fell back to default-branch HEAD —
+    reviewing the wrong commit. This test pins: when only ``upstream_commit``
+    is provided (no real ``base_sha``), the solver MUST go to the bare-sandbox
+    path (no repo cloned), not feed ``upstream_commit`` into ``RepoSpec``.
+    """
+    import asyncio
+
+    from evals.solvers import review as review_mod
+
+    bare_calls: list[bool] = []
+    sample_calls: list[dict] = []
+
+    async def _fake_bare(**_kw):
+        bare_calls.append(True)
+
+        class _Sb:
+            async def aclose(self):
+                pass
+
+            id = "bare-sb"
+            used_sha_fallback = False
+
+        return _Sb()
+
+    async def _fake_sample(repo_spec):  # type: ignore[no-untyped-def]
+        sample_calls.append({"repo": repo_spec.repo, "base_commit": repo_spec.base_commit})
+
+        class _Sb:
+            async def aclose(self):
+                pass
+
+            id = "sample-sb"
+            used_sha_fallback = False
+
+        return _Sb()
+
+    class _AiTail:
+        type = "ai"
+        content = "clean diff"
+
+    class _Agent:
+        async def ainvoke(self, _payload, config=None):
+            return {
+                # Non-empty AI tail satisfies the termination contract; the
+                # structured_response carries the (empty) findings list.
+                "messages": [_AiTail()],
+                "structured_response": review_mod._ReviewResponseModel(findings=[]),
+            }
+
+    monkeypatch.setattr(review_mod, "create_bare_sandbox", _fake_bare)
+    monkeypatch.setattr(review_mod, "create_sandbox_for_sample", _fake_sample)
+    monkeypatch.setattr(review_mod, "build_baseline_agent", lambda **_kw: _Agent())
+
+    class _State:
+        def __init__(self) -> None:
+            self.input_text = "diff stub"
+            self.sample_id = "s-no-base-sha"
+            self.metadata: dict = {
+                "repo": "calcom/cal.com",
+                "pr_url": "https://github.com/calcom/cal.com/pull/42",
+                # Only the (wrong) upstream_commit is present — base_sha absent.
+                "upstream_commit": "807d46980c3390efbe8324c0b7a05fe3aa60c455",
+            }
+            self.output = type("O", (), {"completion": ""})()
+
+    solver = review_mod.deepagents_baseline_review_solver()
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(solver(_State(), None))  # type: ignore[arg-type]
+    finally:
+        loop.close()
+
+    assert sample_calls == [], (
+        "solver must not call create_sandbox_for_sample with the martian-CRB SHA; "
+        f"got {sample_calls}"
+    )
+    assert bare_calls == [True], "solver must fall back to bare sandbox when base_sha missing"
+
+
+def test_sandbox_solver_uses_base_sha_when_present(monkeypatch) -> None:
+    """When ``base_sha`` is present, the solver clones the target repo at that SHA."""
+    import asyncio
+
+    from evals.solvers import review as review_mod
+
+    sample_calls: list[dict] = []
+
+    async def _fake_sample(repo_spec):  # type: ignore[no-untyped-def]
+        sample_calls.append({"repo": repo_spec.repo, "base_commit": repo_spec.base_commit})
+
+        class _Sb:
+            async def aclose(self):
+                pass
+
+            id = "sample-sb"
+            used_sha_fallback = False
+
+        return _Sb()
+
+    class _AiTail:
+        type = "ai"
+        content = "clean diff"
+
+    class _Agent:
+        async def ainvoke(self, _payload, config=None):
+            return {
+                # Non-empty AI tail satisfies the termination contract; the
+                # structured_response carries the (empty) findings list.
+                "messages": [_AiTail()],
+                "structured_response": review_mod._ReviewResponseModel(findings=[]),
+            }
+
+    monkeypatch.setattr(review_mod, "create_sandbox_for_sample", _fake_sample)
+    monkeypatch.setattr(review_mod, "build_baseline_agent", lambda **_kw: _Agent())
+
+    class _State:
+        def __init__(self) -> None:
+            self.input_text = "diff stub"
+            self.sample_id = "s-with-base-sha"
+            self.metadata: dict = {
+                "repo": "calcom/cal.com",
+                "pr_url": "https://github.com/calcom/cal.com/pull/42",
+                "base_sha": "a" * 40,
+                # upstream_commit MUST be ignored even when both are present.
+                "upstream_commit": "807d46980c3390efbe8324c0b7a05fe3aa60c455",
+            }
+            self.output = type("O", (), {"completion": ""})()
+
+    solver = review_mod.deepagents_baseline_review_solver()
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(solver(_State(), None))  # type: ignore[arg-type]
+    finally:
+        loop.close()
+
+    assert sample_calls == [{"repo": "calcom/cal.com", "base_commit": "a" * 40}]

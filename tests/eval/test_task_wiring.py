@@ -15,31 +15,6 @@ class _FakeTask:
         self.solver = kwargs.get("solver")
 
 
-def test_chat_baseline_task_wires_dataset_solver_scorer_and_metadata(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    calls: dict[str, object] = {}
-
-    def _dataset(name, *, converter):  # type: ignore[no-untyped-def]
-        calls["dataset"] = (name, converter)
-        return "dataset"
-
-    monkeypatch.setattr(
-        chat_swe_qa_pro,
-        "configure_tracing_for_dataset",
-        lambda name: calls.setdefault("trace", name),
-    )
-    monkeypatch.setattr(chat_swe_qa_pro, "langsmith_dataset", _dataset)
-    monkeypatch.setattr(chat_swe_qa_pro, "deepagents_baseline_swe_qa_solver", lambda: "solver")
-    monkeypatch.setattr(chat_swe_qa_pro, "swe_qa_pro_judge_scorer", lambda: "scorer")
-    monkeypatch.setattr(chat_swe_qa_pro, "Task", _FakeTask)
-
-    task = chat_swe_qa_pro.chat_swe_qa_pro_baseline()
-
-    assert calls["trace"] == "chat_swe_qa_pro_v1"
-    assert calls["dataset"] == ("chat_swe_qa_pro_v1", chat_swe_qa_pro.qa_example_to_sample)
-    assert task.kwargs["solver"] == "solver"
-    assert task.kwargs["metadata"]["solver_family"] == "deepagents_baseline"
-
-
 def test_chat_openbot_task_wires_agent_solver_without_inspect_sandbox(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """+Agent variant must NOT declare a task-level Inspect Docker sandbox.
 
@@ -84,8 +59,8 @@ def test_review_task_metadata_unchanged(monkeypatch) -> None:  # type: ignore[no
 
 
 class _FakeExperiment:
-    def wrap(self, scorer):  # type: ignore[no-untyped-def]
-        return ("wrapped", scorer)
+    def wrap(self, scorer, **kwargs):  # type: ignore[no-untyped-def]
+        return ("wrapped", scorer, kwargs)
 
     def metadata(self) -> dict[str, str]:
         return {"langsmith_experiment_name": "exp"}

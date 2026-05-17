@@ -49,7 +49,22 @@ dependencies = [
     # harnesses (SWE-bench / SWT-bench) are run offline against the
     # exported predictions.jsonl, kept fully separate from the agent
     # sandbox so cost stays bounded.
-    "docker>=7",
+    # [ssh] extra pulls in paramiko so docker.from_env() can speak
+    # DOCKER_HOST=ssh://… — needed for running the vendored SWT-bench
+    # harness (Path A, see CLAUDE.md) against a remote Linux daemon
+    # without a docker engine on the dev Mac.
+    "docker[ssh]>=7",
+    # Transitive deps of the vendored SWT-bench harness
+    # (evals/third_party/swt_bench/, see its NOTICE). Upstream's
+    # pyproject lists these — we mirror the subset not already pulled
+    # in elsewhere: `fire` for some CLI subcommands, `editdistance`
+    # for patch-similarity heuristics inside extract_patches.py.
+    "fire>=0.5",
+    "editdistance>=0.6",
+    # Daytona-managed sandboxes (the default agent runtime, see
+    # OPENBOT_SANDBOX_BACKEND). Modal is an optional sibling backend; install
+    # `modal` separately when you want OPENBOT_SANDBOX_BACKEND=modal.
+    "daytona>=0.176.0",
     # SWE-bench / SWT-Bench dataset loaders pull straight from HuggingFace
     # (LangSmith only mirrors curated, lower-volume datasets such as
     # martian_2026w20 and chat_swe_qa_pro_v1).
@@ -87,6 +102,11 @@ extend-exclude = [
     "build",
     "dist",
     "docs/research",
+    # Vendored third-party code — kept verbatim from upstream (see
+    # evals/third_party/swt_bench/NOTICE). Our project lint rules
+    # shouldn't gate verbatim copies; the small set of permitted
+    # "Vendor patch:" edits is reviewed manually.
+    "evals/third_party",
 ]
 
 [tool.ruff.lint]

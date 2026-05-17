@@ -136,7 +136,6 @@ def test_post_run_emits_run_and_feedback_when_example_exists(
     assert calls["runs"][0]["prompt_token_details"] == {"cache_read": 2}
     assert calls["runs"][0]["completion_token_details"] == {"reasoning": 1}
     assert calls["runs"][0]["outputs"] == {
-        "score": 0.75,
         "model_patch": "diff",
         "completion": {
             "findings": [{"file": "a.py", "line": 1, "body": "bug", "severity": "high"}]
@@ -226,14 +225,113 @@ def test_post_run_skips_when_example_is_missing(monkeypatch: pytest.MonkeyPatch)
         _initialized=True,
     )
 
+    # Non-empty completion so we exercise the "no matching example" branch
+    # rather than the new empty-completion guard.
     exp._post_run(
         instance_id="missing",
         score=Score(value=0.0),
         sample_input="issue",
-        candidate_completion=None,
+        candidate_completion='{"findings":[]}',
         sample_metadata=None,
         scorer_name="swe_bench_scorer",
+        feedback_key=None,
     )
+
+
+def test_post_run_skips_when_completion_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Errored / truncated samples must NOT push feedback to LangSmith.
+
+    Inspect's ``--score-on-error`` forces the scorer to run with
+    ``Score(value=0)`` even when the solver never produced output. Pushing
+    that to LangSmith generates pure noise — empty-completion Feedback rows
+    that bury the real signal in the dashboard. The eval-trap guard in
+    ``_post_run`` short-circuits before the Client is instantiated.
+    """
+    monkeypatch.setitem(
+        sys.modules,
+        "langsmith",
+        SimpleNamespace(
+            Client=lambda: (_ for _ in ()).throw(
+                AssertionError("must not instantiate Client for empty-completion samples")
+            )
+        ),
+    )
+    exp = LangSmithExperiment(
+        dataset_name="fix",
+        experiment_name="exp",
+        solver_family="baseline",
+        model=None,
+        instance_id_field="instance_id",
+        enabled=True,
+        project_id="project-id",
+        dataset_id="dataset-id",
+        instance_to_example={"errored-1": "example-1"},
+        _initialized=True,
+    )
+
+    # Both shapes a failed sample can take:
+    for empty in (None, "", "   \n\t"):
+        exp._post_run(
+            instance_id="errored-1",
+            score=Score(value=0.0),
+            sample_input="issue body",
+            candidate_completion=empty,
+            sample_metadata={"provider_usage": {"output_tokens": 0}},
+            scorer_name="review_overlap_f1",
+            feedback_key="review_overlap_f1",
+        )
+
+
+def test_post_run_falls_back_to_prediction_surface_for_model_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, list[dict[str, object]]] = {"runs": []}
+
+    class _Client:
+        def create_run(self, **kwargs):  # type: ignore[no-untyped-def]
+            calls["runs"].append(kwargs)
+
+        def create_feedback(self, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("feedback should not be emitted in this test")
+
+    monkeypatch.setitem(sys.modules, "langsmith", SimpleNamespace(Client=lambda: _Client()))
+    exp = LangSmithExperiment(
+        dataset_name="fix",
+        experiment_name="exp",
+        solver_family="baseline",
+        model=None,
+        instance_id_field="instance_id",
+        enabled=True,
+        project_id="project-id",
+        dataset_id="dataset-id",
+        instance_to_example={"i-1": "ex-1"},
+        _initialized=True,
+    )
+
+    exp._post_run(
+        instance_id="i-1",
+        score=Score(value=1.0, explanation="validated", metadata={}),
+        sample_input="issue",
+        candidate_completion='{"instance_id":"i-1","model_name_or_path":"anthropic:mimo-v2.5","model_patch":"diff --git a/x b/x\\n+x"}',
+        sample_metadata={
+            "prediction": {
+                "instance_id": "i-1",
+                "model_name_or_path": "anthropic:mimo-v2.5",
+                "model_patch": "diff --git a/x b/x\n+x",
+            }
+        },
+        scorer_name="swe_bench_scorer",
+        feedback_key=None,
+    )
+
+    assert calls["runs"][0]["outputs"] == {
+        "model_patch": "diff --git a/x b/x\n+x",
+        "completion": {
+            "instance_id": "i-1",
+            "model_name_or_path": "anthropic:mimo-v2.5",
+            "model_patch": "diff --git a/x b/x\n+x",
+        },
+    }
 
 
 @pytest.mark.asyncio

@@ -130,7 +130,16 @@ def fix_swe_bench_verified_deepagents() -> Task:
     return Task(
         dataset=_load_dataset(),
         solver=deepagents_baseline_swe_solver(),
-        scorer=experiment.wrap(exporter),
+        scorer=experiment.wrap(
+            exporter,
+            # IMPORTANT: this is NOT official pass@1. The scorer is a
+            # JSONL exporter; value=1 means "non-empty prediction appended",
+            # value=0 means "no prediction / empty patch / schema invalid".
+            # Real grading is offline via `python -m swebench.harness.run_evaluation`.
+            scorer_name="swe_export_ok",
+            feedback_key="swe_export_ok",
+            feedback_config={"type": "continuous", "min": 0.0, "max": 1.0},
+        ),
         metadata={
             "dataset_version": _DATASET_VERSION,
             "dataset_source": _DATASET_SOURCE,

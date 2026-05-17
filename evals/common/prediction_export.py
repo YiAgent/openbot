@@ -41,19 +41,19 @@ from inspect_ai.scorer import Score, Scorer, Target, mean, scorer
 from inspect_ai.solver import TaskState
 from pydantic import BaseModel, ValidationError
 
-logger = logging.getLogger(__name__)
+from evals.common.config import get_eval_config
 
-_DEFAULT_OUTPUT_ROOT = Path("evals/outputs")
+logger = logging.getLogger(__name__)
 
 
 def _output_root() -> Path:
     """Resolve the directory where prediction JSONL files are written.
 
-    Defaults to ``evals/outputs`` under the working directory; overridable
-    via the ``OPENBOT_PREDICTIONS_DIR`` env var for CI / experiment runs.
+    Reads :class:`~evals.common.config.PredictionsSettings.output_dir`
+    via :func:`~evals.common.config.get_eval_config` — pydantic-settings
+    binds ``OPENBOT_PREDICTIONS_DIR`` and validates the path.
     """
-    override = os.environ.get("OPENBOT_PREDICTIONS_DIR")
-    return Path(override) if override else _DEFAULT_OUTPUT_ROOT
+    return get_eval_config().predictions.output_dir
 
 
 def _now_slug() -> str:
@@ -132,7 +132,7 @@ def prediction_exporter(
         run_label=effective_label,
     )
 
-    @scorer(metrics=[mean()])
+    @scorer(metrics=[mean()], name="swe_export_ok")
     def _scorer() -> Scorer:
         async def _score(state: TaskState, _target: Target) -> Score:
             raw = (state.metadata or {}).get(metadata_key)
@@ -153,15 +153,44 @@ def prediction_exporter(
                     metadata={"export_path": str(out_path)},
                 )
 
+            # Empty / whitespace-only patch == agent produced no edits. The
+            # SWE-bench / SWT-Bench grader rejects empty patches, so an
+            # export-sentinel of 1 here would be actively misleading on the
+            # LangSmith dashboard (it'd look like pass@1, which it isn't —
+            # real grading happens offline). Score it 0 with an explicit
+            # explanation so the no-edits case is visible.
+            patch = getattr(row, "model_patch", "") or ""
+            if not patch.strip():
+                return Score(
+                    value=0,
+                    answer=row.model_dump_json(),
+                    explanation=(
+                        "prediction has empty model_patch (agent produced no "
+                        "edits — likely hit a model/tool/recursion budget "
+                        "before reaching a fix); skipping append to keep "
+                        "predictions.jsonl free of empty rows"
+                    ),
+                    metadata={"export_path": str(out_path), "empty_patch": True},
+                )
+
             # File IO on a worker thread so we don't block the inspect
             # event loop on disk fsync.
             await asyncio.to_thread(_AppendWriter.append, out_path, row.model_dump())
 
+            # value=1 is a *sentinel* meaning "prediction shape valid and
+            # exported to JSONL" — NOT a pass@1 result. The real pass@1
+            # comes from running the upstream Docker harness offline against
+            # the exported JSONL (see this module's docstring). The feedback
+            # key wired in `LangSmithExperiment.wrap()` is renamed to
+            # ``swe_export_ok`` accordingly to prevent dashboard misreads.
             return Score(
                 value=1,
                 answer=row.model_dump_json(),
-                explanation="prediction validated and appended to JSONL",
-                metadata={"export_path": str(out_path)},
+                explanation=(
+                    "non-empty prediction validated and appended to JSONL "
+                    "(export sentinel; run upstream harness for real pass@1)"
+                ),
+                metadata={"export_path": str(out_path), "empty_patch": False},
             )
 
         return _score

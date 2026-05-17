@@ -126,6 +126,40 @@ async def test_prediction_exporter_reports_missing_prediction(
 
 
 @pytest.mark.asyncio
+async def test_prediction_exporter_scores_empty_patch_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: empty `model_patch` must not be exported nor scored 1.
+
+    Schema-valid-but-empty rows used to silently score 1, making the
+    LangSmith dashboard look like pass@1=1.0 even when the agent
+    produced no edits (e.g. ran out of budget mid-investigation). The
+    export sentinel must instead be 0 + an explanation, and the empty
+    row must NOT be appended to the JSONL (running the upstream harness
+    on empty rows just wastes time).
+    """
+    monkeypatch.setenv("OPENBOT_PREDICTIONS_DIR", str(tmp_path))
+    scorer = prediction_exporter(
+        dataset_version="fix_swe_bench_verified",
+        schema=SweBenchPrediction,
+        run_label="run-empty",
+    )
+    pred = SweBenchPrediction(
+        instance_id="x", model_name_or_path="m", model_patch="   \n  "
+    ).model_dump()
+    state = SimpleNamespace(metadata={"prediction": pred})
+
+    score = await scorer(state, None)  # type: ignore[misc]
+    assert score.value == 0
+    assert score.metadata["empty_patch"] is True
+    assert "empty model_patch" in score.explanation
+
+    out_file = tmp_path / "fix_swe_bench_verified" / "run-empty.predictions.jsonl"
+    assert not out_file.exists()
+
+
+@pytest.mark.asyncio
 async def test_prediction_exporter_rejects_bad_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

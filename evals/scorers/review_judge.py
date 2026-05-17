@@ -9,9 +9,14 @@ open-swe's reviewer baseline.
 Locked surface (do not edit without bumping `MARTIAN_JUDGE_VERSION` and
 recording a `docs/eval/judge-version-log.md` entry):
 
-  - Temperature:  0.0
-  - max_tokens:   4096
-  - Prompt:       official MARTIAN_JUDGE_PROMPT as a single user message
+  - Temperature:    0.0
+  - max_tokens:     4096 (Anthropic requires a cap; upstream OpenAI call
+                    leaves max_tokens unset — the verdict JSON is tiny)
+  - System message: ``MARTIAN_JUDGE_SYSTEM_PROMPT``, sent as its own
+                    ``{"role": "system"}`` message (matches upstream)
+  - User message:   ``MARTIAN_JUDGE_PROMPT`` with raw ``golden_comment``
+                    and ``candidate`` substitutions — no extra
+                    ``Severity:`` / ``Location:`` headers
 
 Model id (formerly hardcoded to ``claude-opus-4-5``) is now resolved via
 :func:`evals.common.judge_client.resolve_judge_model`, which reads
@@ -36,27 +41,45 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from evals.common import config
+from evals.common.config import get_eval_config
 from evals.common.judge_client import get_judge_client, resolve_judge_model
 
 logger = logging.getLogger(__name__)
 
-# v3: model id moved from a hardcoded ``claude-opus-4-5`` constant to the
-# shared :func:`evals.common.judge_client.resolve_judge_model` resolver, so
-# every judge in the repo follows ``OPENBOT_JUDGE_MODEL_ID`` (with per-judge
-# override via ``OPENBOT_REVIEW_JUDGE_MODEL_ID``). v2 had switched from
-# regex JSON extraction to langchain ``with_structured_output``; the bump
-# to v3 is purely the model-id source-of-truth change. Prompt body,
-# temperature, max_tokens, and system message remain byte-identical to
-# martian's locked surface.
-MARTIAN_JUDGE_VERSION: int = 3
+# v4: realigned the prompt surface byte-for-byte with upstream martian-CRB
+# ``step3_judge_comments.py``:
+#   * system / user messages are now sent as two separate messages (upstream
+#     uses ``{"role": "system", ...}`` + ``{"role": "user", ...}``); v3 was
+#     concatenating them into a single user message, which subtly shifted
+#     role framing for the model.
+#   * golden / candidate placeholders now receive the raw comment string
+#     (matching upstream ``JUDGE_PROMPT.format(golden_comment=gc["comment"],
+#     candidate=candidate)``); v3 wrapped them in open-swe-style
+#     ``Severity:`` / ``Location:`` / ``Comment:`` headers, which is a
+#     different prompt and produced different match decisions.
+# v3 had moved the model id to :func:`resolve_judge_model`; that resolution
+# is unchanged. Temperature and max_tokens are also unchanged.
+MARTIAN_JUDGE_VERSION: int = 4
 MARTIAN_JUDGE_MODEL_ID: str = resolve_judge_model(
-    per_judge_env="OPENBOT_REVIEW_JUDGE_MODEL_ID",
+    per_judge_env=config.REVIEW_JUDGE_MODEL_ENV,
 )
-MARTIAN_JUDGE_TEMPERATURE: float = 0.0
-MARTIAN_JUDGE_MAX_TOKENS: int = 4096
+# Temperature + max_tokens are part of v4's locked surface (martian-CRB
+# contract). They happen to match the shared judge defaults in
+# :mod:`evals.common.config`; if those defaults ever drift, this constant
+# must stay pinned to 0.0 / 4096 until ``MARTIAN_JUDGE_VERSION`` is bumped.
+# Upstream OpenAI call does not set ``max_tokens``; ``ChatAnthropic``
+# requires one, and 4096 is well above the short JSON verdict.
+MARTIAN_JUDGE_TEMPERATURE: float = get_eval_config().judge.temperature
+MARTIAN_JUDGE_MAX_TOKENS: int = get_eval_config().judge.max_tokens
 
-MARTIAN_JUDGE_PROMPT: str = """You are a precise code review evaluator. Always respond with valid JSON.
-You are evaluating AI code review tools.
+# Byte-identical to upstream ``step3_judge_comments.py`` constants. Do not
+# edit either without bumping ``MARTIAN_JUDGE_VERSION`` and logging a
+# ``docs/eval/judge-version-log.md`` entry.
+MARTIAN_JUDGE_SYSTEM_PROMPT: str = (
+    "You are a precise code review evaluator. Always respond with valid JSON."
+)
+MARTIAN_JUDGE_PROMPT: str = """You are evaluating AI code review tools.
 Determine if the candidate issue matches the golden (expected) comment.
 
 Golden Comment (the issue we're looking for):
@@ -98,33 +121,26 @@ def _get_client():  # type: ignore[no-untyped-def]
 
 
 def format_golden(golden: dict[str, Any]) -> str:
-    """Render a golden finding for the judge prompt.
+    """Render a golden finding as the raw ``{golden_comment}`` substitution.
 
-    Mirrors open-swe `evals/reviewer/judge.py::_format_golden` so candidate /
-    golden framing is identical across both projects.
+    Upstream ``step3_judge_comments.py`` substitutes ``gc["comment"]``
+    directly into the prompt — no ``Severity:`` / ``Comment:`` headers.
+    The earlier open-swe-style wrapping subtly biased the judge, so v4
+    drops it. ``body`` is preferred over ``comment`` for forward-compat
+    with payloads that use ``body`` (e.g. GitHub review-comment dicts).
     """
-    parts: list[str] = []
-    if golden.get("severity"):
-        parts.append(f"Severity: {golden['severity']}")
-    parts.append(f"Comment: {golden.get('body') or golden.get('comment', '')}")
-    return "\n".join(parts)
+    return str(golden.get("body") or golden.get("comment") or "")
 
 
 def format_candidate(candidate: dict[str, Any]) -> str:
-    """Render a candidate finding for the judge prompt.
+    """Render a candidate finding as the raw ``{candidate}`` substitution.
 
-    Mirrors open-swe `evals/reviewer/judge.py::_format_candidate`.
+    Upstream feeds the candidate's text directly (one of the strings
+    returned by ``get_candidates``). We accept dicts here for backward
+    compatibility with OpenBot's review-overlap pipeline, but emit only
+    the comment body — no ``Location:`` / ``Severity:`` prefix.
     """
-    parts: list[str] = []
-    if candidate.get("file"):
-        loc = candidate["file"]
-        if candidate.get("line") is not None:
-            loc += f":{candidate['line']}"
-        parts.append(f"Location: {loc}")
-    if candidate.get("severity"):
-        parts.append(f"Severity: {candidate['severity']}")
-    parts.append(f"Comment: {candidate.get('body') or candidate.get('comment') or ''}")
-    return "\n".join(parts)
+    return str(candidate.get("body") or candidate.get("comment") or "")
 
 
 def judge_pair(golden: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
@@ -142,10 +158,14 @@ def judge_pair(golden: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
         candidate=format_candidate(candidate),
     )
     messages = [
+        {"role": "system", "content": MARTIAN_JUDGE_SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
     ]
     verdict = (
-        _get_client().with_structured_output(MartianVerdict, method="json_schema").invoke(messages)
+        _get_client()
+        .with_structured_output(MartianVerdict, method="json_schema")
+        .with_config({"run_name": "martian_review_judge"})
+        .invoke(messages)
     )
     return {
         "reasoning": verdict.reasoning,

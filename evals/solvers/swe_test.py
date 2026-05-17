@@ -29,51 +29,69 @@ from evals.common.deepagents_baseline import (
     resolve_model,
 )
 from evals.common.predictions import SwtBenchPrediction, empty_swt_prediction
+from evals.common.termination import assert_clean_termination
 from evals.common.usage import aggregate_provider_usage
-from evals.sandboxes import DockerSandboxBackend, RepoSpec
+from evals.sandboxes import RepoSpec, create_sandbox_for_sample
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = textwrap.dedent(
     """\
-    You are an expert software engineer writing a regression test for a
-    single GitHub issue in a checked-out repository inside a Linux sandbox.
-    The repo is at /workspace (HEAD detached at the issue's base commit;
-    you are on a clean branch ``openbot-agent``).
+    ROLE: You are a senior software engineer writing a regression test
+    for one GitHub issue.
 
-    Your goal:
-      - Write ONE pytest test (or a small new ``test_*.py`` file) that
-        **FAILS** on the current buggy code and would **PASS** once the
-        issue is fixed.
-      - Do NOT modify production code. The test must be the only thing
-        that changes. Edits to anything outside the project's test
-        directory are rejected by the grader.
-      - Land the test in the project's existing test layout. Use ``glob``
-        and ``ls`` to find where similar tests already live; mirror that
-        location and import style.
+    GOAL: Add ONE pytest test (or a small new ``test_*.py`` file) that
+    FAILS on the current buggy code and would PASS once the issue is
+    fixed. This is the inverse of the fix task: production code stays
+    untouched; the diff must be test-only.
 
-    Tools (sandbox-aware, all single round-trip):
-      - ls / read_file / glob / grep — read
-      - write_file (new file) / edit_file (in-place exact-string replace,
-        replace_all=True for multiple occurrences) — write
-      - execute — `bash -lc` escape hatch for running pytest while you
-        iterate. Do not git commit, switch branches, or install new deps.
+    SUCCESS CRITERIA:
+      - Exactly one new failing test, in the project's existing test
+        layout (use ``glob`` / ``ls`` to find where similar tests live;
+        mirror that location and import style).
+      - No edits to production code. Any non-test file modification will
+        be rejected by the grader.
+      - The test fails for the right reason — i.e., it triggers the
+        actual buggy behaviour described in the issue, not an unrelated
+        ImportError or fixture problem.
+      - No git commit, push, branch switch. Grader captures via
+        ``git diff``.
 
-    Loop:
-      1. Read the issue carefully and identify the buggy behaviour the
-         test must trigger.
-      2. Use grep / glob to locate the relevant code and the matching
-         test file (search ``tests/`` / ``test_*.py``).
-      3. Use read_file to understand the existing test layout (fixtures,
-         imports, conventions).
-      4. Use write_file (for a new test) or edit_file (to extend an
-         existing test module) to add a single targeted test.
-      5. Optionally run the new test via execute to confirm it fails
-         for the right reason on the current code.
-      6. Stop and reply with a one-paragraph summary.
+    ENVIRONMENT:
+      - /workspace: repo at the issue's base commit. No network, no new
+        deps — work with whatever's already installable.
+      - Tools (sandbox-aware, single round-trip each):
+        · ls / read_file / glob / grep — read
+        · write_file (new test file) / edit_file (extend existing test
+          module — exact-string replace, replace_all=True for repeats)
+        · execute — ``bash -lc`` for ``pytest -k …`` iteration only.
+      - Use the plan tool (write_todos) to track: locate the bug, find
+        the test home, draft the test, verify it fails for the right
+        reason.
 
-    Run independent tool calls in parallel. The grader captures your
-    changes via ``git diff`` when you finish.
+    WORKFLOW:
+      1. Read the issue. Identify the exact buggy behaviour to trigger
+         (input → wrong output, exception path, etc.).
+      2. Locate the production code that owns this behaviour via
+         grep / glob.
+      3. Locate the existing test file for that production code (search
+         ``tests/`` or ``test_*.py`` near the production module).
+      4. Read enough of the existing tests to copy conventions
+         (fixtures, imports, helpers).
+      5. Write the new test with write_file or extend the existing
+         module with edit_file. ONE test, minimal asserts.
+      6. Optionally run ``pytest -k <new_test_name>`` via execute to
+         confirm it fails — but a confident write without verification
+         is OK if execute is slow.
+      7. Stop. Reply with a one-paragraph summary.
+
+    DISCIPLINE:
+      - Run independent tool calls in parallel (3 reads = 1 round-trip).
+      - Cap at ~10 tool calls before you must commit the test. Most
+        regression tests need ≤5 reads + 1 write.
+      - Do NOT modify production code "just to see what happens" — the
+        grader rejects any production-code change in the diff.
+      - Do NOT write multiple tests. ONE focused failure is the contract.
     """
 )
 
@@ -124,7 +142,7 @@ def deepagents_baseline_swt_solver(*, model: str | None = None) -> Solver:
                 )
                 return state
 
-            backend = await DockerSandboxBackend.create_for_sample(
+            backend = await create_sandbox_for_sample(
                 repo_spec=RepoSpec(repo=repo, base_commit=base_commit),
             )
             try:
@@ -158,6 +176,11 @@ def deepagents_baseline_swt_solver(*, model: str | None = None) -> Solver:
                     config=ls_config,
                 )
 
+                # Same termination contract as swe_fix: refuse to capture
+                # a diff (and write a prediction row) from a run the agent
+                # never finished cleanly. Raising marks the sample errored
+                # so it skips both the metric and the predictions JSONL.
+                assert_clean_termination(result, requires_structured_response=False)
                 patch = await backend.acapture_diff()
                 prediction = SwtBenchPrediction(
                     instance_id=instance_id,

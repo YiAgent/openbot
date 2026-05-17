@@ -14,6 +14,14 @@ class _StructuredJudge:
         self.response = response
         self.error = error
         self.messages: list[object] | None = None
+        self.configs: list[dict[str, object]] = []
+
+    def with_config(self, config):  # type: ignore[no-untyped-def]
+        # LangChain's `Runnable.with_config({"run_name": ...})` is chainable and
+        # returns the same logical runnable — mock that shape so tests can also
+        # assert the trace name the scorer requests in LangSmith.
+        self.configs.append(dict(config))
+        return self
 
     def invoke(self, messages):  # type: ignore[no-untyped-def]
         self.messages = messages
@@ -62,6 +70,10 @@ def test_judge_prompt_is_single_official_user_message(monkeypatch: pytest.Monkey
     }
     assert client.schemas == [swe_qa_judge.SWEQAScorecard]
     assert client.structured_kwargs == [{"method": "json_schema"}]
+    # LangSmith trace name must be set explicitly — otherwise the judge run
+    # shows up as a generic "Runnable" and is indistinguishable from other
+    # langchain invocations in the same project.
+    assert structured.configs == [{"run_name": "swe_qa_pro_judge"}]
     assert structured.messages == [
         {
             "role": "user",

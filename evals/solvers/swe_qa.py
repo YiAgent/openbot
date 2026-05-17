@@ -27,11 +27,9 @@ from evals.common.deepagents_baseline import (
     resolve_model,
 )
 from evals.common.predictions import SweQaProAnswer
+from evals.common.termination import assert_clean_termination
 from evals.common.usage import aggregate_provider_usage
-from evals.sandboxes import DockerSandboxBackend, RepoSpec
-
-_DEFAULT_FALLBACK = "anthropic:claude-sonnet-4-6"
-
+from evals.sandboxes import RepoSpec, create_sandbox_for_sample
 
 # ─── Verbatim Appendix D — "Prompt Template for Generating Answer" ─────────
 # Source: arXiv 2603.16124v1 Appendix D ("Model: All Evaluated Model").
@@ -123,18 +121,23 @@ async def _invoke_agent_with_modal(
     """Run the +Agent flow: spin up the sandbox, drive deepagents, return the
     structured answer.
 
-    The agent is built with ``response_format=SweQaProAnswer`` so LangChain
-    binds a structured-output strategy on the terminal step. The compiled
-    graph then surfaces a parsed :class:`SweQaProAnswer` on
-    ``result["structured_response"]`` — no more regex extraction of a
-    ``<finish>`` block. If for any reason the model fails to produce a
-    parseable structured response (older provider, network glitch), we
-    fall back to the final AI message text so the judge still sees
-    *something* and can score a protocol violation.
+    The agent is built with ``response_format=SweQaProAnswer``. The
+    baseline wraps the compiled graph with
+    :func:`~evals.common.structured_finalizer.wrap_agent_with_finalizer`,
+    so structured output is enforced by a dedicated post-loop LLM call
+    rather than by binding ``tool_choice=forced`` into the agent loop
+    (which conflicts with Anthropic's extended-thinking and is silently
+    dropped to optional). The wrapper populates
+    ``result["structured_response"]`` with a validated
+    :class:`SweQaProAnswer` whenever the agent produced *any* prose;
+    transport failure or an empty trace still raises
+    :class:`~evals.common.termination.AgentTerminationError` so Inspect
+    treats the sample as errored under ``--retry-on-error`` /
+    ``--fail-on-error``.
     """
     from langsmith.run_helpers import get_current_run_tree
 
-    backend = await DockerSandboxBackend.create_for_sample(
+    backend = await create_sandbox_for_sample(
         repo_spec=RepoSpec(repo=repo, base_commit=commit_id, workspace=repo_path),
     )
     try:
@@ -153,34 +156,17 @@ async def _invoke_agent_with_modal(
             config=ls_config,
         )
 
-        structured_raw = result.get("structured_response")
+        assert_clean_termination(
+            result,
+            requires_structured_response=True,
+            structured_response_type=SweQaProAnswer,
+        )
+        structured_raw = result["structured_response"]
         if isinstance(structured_raw, SweQaProAnswer):
             structured = structured_raw
-        elif isinstance(structured_raw, dict):
+        else:
             # langchain provider strategies sometimes leave us a dict.
             structured = SweQaProAnswer.model_validate(structured_raw)
-        else:
-            # Fallback: no structured response (protocol violation). Pass
-            # the last AI message text through so the judge can score it
-            # and the failure is visible on the dashboard.
-            messages = list(result.get("messages") or [])
-            tail_text = ""
-            for message in reversed(messages):
-                content = getattr(message, "content", None)
-                if isinstance(content, str) and content.strip():
-                    tail_text = content
-                    break
-                if isinstance(content, list):
-                    parts = [
-                        block.get("text", "")
-                        for block in content
-                        if isinstance(block, dict) and block.get("text")
-                    ]
-                    joined = "\n".join(parts).strip()
-                    if joined:
-                        tail_text = joined
-                        break
-            structured = SweQaProAnswer(answer=tail_text, citations=[])
 
         messages = list(result.get("messages") or [])
         usage = aggregate_provider_usage(messages)
@@ -210,10 +196,7 @@ def deepagents_agent_swe_qa_solver(*, model: str | None = None):  # type: ignore
     from inspect_ai.solver import Generate, Solver, TaskState, solver
     from langsmith import traceable
 
-    resolved_model = resolve_model(
-        override=model,
-        fallback=_DEFAULT_FALLBACK,
-    )
+    resolved_model = resolve_model(override=model)
 
     @solver
     def _solver() -> Solver:

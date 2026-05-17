@@ -29,7 +29,7 @@ make hooks   # install git pre-commit / pre-push hooks
 
 ## Locked boundaries (do not substitute)
 
-- **Sandbox = Modal**, reused per thread. Daytona / local are stub interfaces only — do not implement by default.
+- **Sandbox = pluggable via `evals.sandboxes.factory`** (`OPENBOT_SANDBOX_BACKEND` ∈ `daytona` | `modal` | `docker`, default `daytona`). All three are real implementations behind the same `SandboxBackend` protocol; solvers depend on the protocol, never on a concrete class.
 - **Observability = LangSmith**. Langfuse is a fallback, do not mix them.
 - **Eval runner = Inspect AI**. LangSmith handles only tracing / dataset / experiment / online eval / annotation.
 - v0.1 channel is GitHub only — do not write Slack / Discord / Linear adapter code.

@@ -70,10 +70,20 @@ def compute_review_overlap(
       2. First True verdict consumes that golden + candidate pair.
       3. Remaining candidates are false positives; remaining golden are misses.
 
-    Edge cases:
-      - Empty golden: precision = (1.0 if candidate is empty else 0.0), recall = 1.0.
-      - Empty candidate: precision = 1.0, recall = (1.0 if golden empty else 0.0).
-      - Both empty: precision = recall = f1 = 1.0 (vacuously perfect).
+    Edge cases (sklearn's ``zero_division=0`` convention, with one carve-out):
+      - Both empty (golden ∅, candidate ∅): precision = recall = f1 = 1.0.
+        Vacuous perfect — the model correctly predicted "no findings" on a PR
+        that genuinely has none. Punishing this case with 0 would tank
+        aggregate scores on clean-PR-heavy datasets where the right answer is
+        "nothing to flag", which is the common case in review eval.
+      - Empty candidate, non-empty golden (TP=FP=0): precision = 0, recall = 0,
+        f1 = 0. The model contributed no signal, so the metric should reflect
+        that — not the legacy ``precision = 1.0`` which silently inflated
+        dataset-level averages whenever the agent truncated mid-thought and
+        emitted nothing. This is the bug the eval-trap fix is here for.
+      - Non-empty candidate, empty golden (TP=FN=0): precision = 0, recall = 0,
+        f1 = 0. The model invented findings on a clean PR; same rationale —
+        ``recall = 1.0`` vacuous would reward over-flagging behaviour.
     """
     if not golden and not candidate:
         return OverlapReport(precision=1.0, recall=1.0, f1=1.0)
@@ -94,8 +104,10 @@ def compute_review_overlap(
                 break
 
     tp = len(matched_pairs)
-    precision = tp / len(candidate) if candidate else 1.0
-    recall = tp / len(golden) if golden else 1.0
+    # zero_division=0: precision/recall are 0 (not 1) when the denominator is
+    # 0. The both-empty short-circuit above is the only vacuous-perfect case.
+    precision = (tp / len(candidate)) if candidate else 0.0
+    recall = (tp / len(golden)) if golden else 0.0
 
     return OverlapReport(
         precision=precision,

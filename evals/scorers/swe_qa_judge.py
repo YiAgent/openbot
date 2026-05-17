@@ -38,6 +38,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from evals.common import config
+from evals.common.config import get_eval_config
 from evals.common.judge_client import get_judge_client, resolve_judge_model
 
 # Paper Appendix D, in order.
@@ -62,12 +64,14 @@ SWE_QA_PAPER_JUDGE_MODEL: str = "openai/gpt-5"
 # scorer intentionally stays on the OpenBot-canonical Anthropic gateway —
 # recorded in JUDGE_DEVIATIONS below.
 SWE_QA_JUDGE_MODEL_ID: str = resolve_judge_model(
-    per_judge_env="OPENBOT_SWE_QA_JUDGE_MODEL",
+    per_judge_env=config.SWE_QA_JUDGE_MODEL_ENV,
 )
-# Paper does not specify temperature / max_tokens. Use deterministic defaults
-# (matches every other LLM-judge in this repo).
-SWE_QA_JUDGE_TEMPERATURE: float = 0.0
-SWE_QA_JUDGE_MAX_TOKENS: int = 4096
+# Paper does not specify temperature / max_tokens. Use the deterministic
+# shared defaults from :mod:`evals.common.config` (matches every other
+# LLM-judge in this repo). Pinned via ``SWE_QA_JUDGE_VERSION`` — see the
+# locked-surface note in the module docstring.
+SWE_QA_JUDGE_TEMPERATURE: float = get_eval_config().judge.temperature
+SWE_QA_JUDGE_MAX_TOKENS: int = get_eval_config().judge.max_tokens
 
 # Known deviations from paper Appendix D — surfaced as a constant so audits
 # stay loud. Add to (don't remove from) this tuple when introducing new
@@ -201,6 +205,7 @@ def judge_answer(
             SWEQAScorecard,
             method="json_schema",
         )
+        .with_config({"run_name": "swe_qa_pro_judge"})
         .invoke(
             [
                 {"role": "user", "content": prompt},

@@ -6,11 +6,11 @@ It documents the code that exists today, not the full target-state described in 
 At a high level:
 
 - **Inspect AI** is the offline runner: it owns `Task`, `Solver`, `Scorer`, sample execution, and `.inspect/logs/...`.
-- **DeepAgents** is the current baseline agent framework used by every implemented OpenBot-side solver.
+- **DeepAgents** is the current agent framework used by every implemented OpenBot-side solver.
 - **LangSmith** has two roles:
   - source-of-truth dataset storage for the `review` and `chat` evals;
   - tracing / experiment projection for all evals where wired.
-- **Inspect's Docker sandbox** is used only by the code-editing evals (`fix` / `test`), with a small bridge that lets DeepAgents use the same per-sample sandbox.
+- **Local Docker** is the primary sandbox backend for agent-based evals (`fix`, `test`, `chat`). Each sample spins up its own container, clones the repo, and is torn down after the run.
 
 ## Current architecture
 
@@ -38,28 +38,26 @@ flowchart LR
 
     subgraph Inspect["Inspect AI offline runner"]
         ReviewTask["review_martian_baseline_crb"]
-        ChatTask["chat_swe_qa_pro_baseline"]
+        ChatTask["chat_swe_qa_pro_openbot"]
         FixTask["fix_swe_bench_verified_deepagents"]
-        TestTaskA["test_swt_bench_verified"]
-        TestTaskB["test_swt_bench_verified_deepagents"]
+        TestTask["test_swt_bench_verified_deepagents"]
     end
 
     subgraph Solvers["Implemented solvers"]
         ReviewSolver["deepagents review\nclosed-form"]
-        ChatSolver["deepagents chat\nclosed-form"]
-        FixSolver["deepagents fix\nInspectSandboxBackend"]
-        TestSolverA["inspect_evals default\nreact agent"]
-        TestSolverB["deepagents test\nInspectSandboxBackend"]
+        ChatSolver["deepagents chat agent\n(+Agent variant)"]
+        FixSolver["deepagents fix\nDockerSandboxBackend"]
+        TestSolver["deepagents test\nDockerSandboxBackend"]
     end
 
     subgraph Sandbox["Per-sample execution"]
-        Docker["Inspect Docker sandbox\nEpoch SWE-bench images"]
+        Docker["Local Docker sandbox\nper sample"]
     end
 
     subgraph Scorers["Scoring"]
         ReviewScore["review overlap\nLLM judge -> P/R/F1"]
         ChatScore["SWE-QA-Pro 5-dim judge"]
-        FixScore["inspect_evals\nswe_bench_scorer"]
+        FixScore["prediction_exporter\n(offline grading)"]
         TestScore["custom swt_bench_scorer"]
     end
 
@@ -72,40 +70,30 @@ flowchart LR
     LSDatasets --> ChatTask
 
     SWEBench --> FixTask
-    SWTBench --> TestTaskA
-    SWTBench --> TestTaskB
+    SWTBench --> TestTask
 
     ReviewTask --> ReviewSolver --> ReviewScore
-    ChatTask --> ChatSolver --> ChatScore
+    ChatTask --> ChatSolver --> Docker --> ChatScore
     FixTask --> FixSolver --> Docker --> FixScore
-    TestTaskA --> TestSolverA --> Docker --> TestScore
-    TestTaskB --> TestSolverB --> Docker --> TestScore
+    TestTask --> TestSolver --> Docker --> TestScore
 
     ReviewSolver --> LSTraces
     ChatSolver --> LSTraces
     ChatScore --> LSTraces
     FixSolver --> LSTraces
-    TestSolverB --> LSTraces
+    TestSolver --> LSTraces
     FixScore --> LSExperiments
     TestScore --> LSExperiments
 ```
-
-The important split is:
-
-- `review_martian` and `chat_swe_qa_pro` **load their runtime samples from LangSmith** through `evals.common.datasets.langsmith_dataset(...)`.
-- `fix_swe_bench_verified` and `test_swt_bench_verified` **load their runtime samples from upstream benchmark datasets** through `inspect_evals.swe_bench.swe_bench(...)`; their LangSmith datasets are mirrors used so per-sample results can appear in the LangSmith Experiments view.
 
 ## What is implemented today
 
 | Surface | Task entry | Runtime dataset source | Solver | Sandbox | Scorer | Status |
 |---|---|---|---|---|---|---|
 | Review | `review_martian_baseline_crb` | LangSmith `martian_2026w20` | DeepAgents baseline review solver | none | Martian-compatible overlap scorer (`precision / recall / F1`) | implemented |
-| Review | `review_martian_openbot` | same intended surface | future `openbot_prod` | n/a | same intended scorer | reserved; raises `NotImplementedError` |
-| Fix | `fix_swe_bench_verified_deepagents` | HF `princeton-nlp/SWE-bench_Verified` via `inspect_evals.swe_bench` | DeepAgents baseline fix solver | Inspect Docker | upstream `swe_bench_scorer` | implemented |
-| Test generation | `test_swt_bench_verified` | HF `eth-sri/SWT-bench_Verified_bm25_27k_zsb` via `inspect_evals.swe_bench` | upstream `inspect_evals` react agent | Inspect Docker | custom `swt_bench_scorer` | implemented |
-| Test generation | `test_swt_bench_verified_deepagents` | same SWT-Bench dataset | DeepAgents baseline test solver | Inspect Docker | custom `swt_bench_scorer` | implemented |
-| Chat / repo QA | `chat_swe_qa_pro_baseline` | LangSmith `chat_swe_qa_pro_v1` | DeepAgents direct-answer baseline | none | SWE-QA-Pro 5-dim judge | implemented |
-| Chat / repo QA | `chat_swe_qa_pro_openbot` | same intended surface | future `openbot_prod` | n/a | same intended scorer | reserved; raises `NotImplementedError` |
+| Fix | `fix_swe_bench_verified_deepagents` | HF `princeton-nlp/SWE-bench_Verified` | DeepAgents baseline fix solver | Local Docker | `prediction_exporter` (offline grading) | implemented |
+| Test generation | `test_swt_bench_verified_deepagents` | HF `eth-sri/SWT-bench_Verified_bm25_27k_zsb` | DeepAgents baseline test solver | Local Docker | custom `swt_bench_scorer` | implemented |
+| Chat / repo QA | `chat_swe_qa_pro_openbot` | LangSmith `chat_swe_qa_pro_v1` | DeepAgents Agent (+Agent) | Local Docker | SWE-QA-Pro 5-dim judge | implemented |
 
 ## How each flow works
 
@@ -121,57 +109,39 @@ There is **no sandbox** in this flow because the model only reads a diff and emi
 
 ### 2. Fix: `fix_swe_bench_verified_deepagents`
 
-1. `inspect_evals.swe_bench.swe_bench(...)` provides the SWE-bench dataset shape, Docker sandbox spec, and upstream scoring contract.
-2. The task swaps in `deepagents_baseline_swe_solver()` after constructing the upstream task.
-3. `InspectSandboxBackend` adapts Inspect's per-sample Docker sandbox to the DeepAgents backend protocol, giving the agent `ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, and `execute`.
-4. The agent edits the checked-out repo inside the sandbox.
-5. Upstream `swe_bench_scorer()` recovers the patch via `git diff`, runs benchmark validation, and emits pass/fail.
-6. `LangSmithExperiment.wrap(...)` replays the same per-sample score into a LangSmith Experiment project linked to the mirrored LangSmith dataset.
+1. The task loads the SWE-bench dataset from HuggingFace.
+2. `DockerSandboxBackend` (local Docker) clones the repo at the base commit into `/workspace`.
+3. DeepAgents baseline fix solver edits the code using its native tools.
+4. `prediction_exporter` captures the `git diff` and appends it to `evals/outputs/.../*.predictions.jsonl`.
+5. **Real grading is offline** via the official SWE-bench Docker harness.
 
-Here, **Inspect owns the sandbox and the benchmark harness**; DeepAgents is only the solver driving the coding behavior inside that sandbox.
+### 3. Test generation: `test_swt_bench_verified_deepagents`
 
-### 3. Test generation: `test_swt_bench_verified*`
+1. The task loads the SWT-Bench Verified dataset.
+2. Similar to Fix, it uses `DockerSandboxBackend` to host the agent.
+3. The custom `swt_bench_scorer()` runs inside the same sandbox to validate the regression test.
 
-1. The task reuses `inspect_evals.swe_bench.swe_bench(...)` with the SWT-Bench Verified HF dataset because the rows preserve the SWE-bench schema and instance ids.
-2. The default task keeps the upstream react-style solver; the DeepAgents variant swaps in `deepagents_baseline_swt_solver()`.
-3. Both variants run inside the same Inspect Docker sandbox family as SWE-bench.
-4. The custom `swt_bench_scorer()`:
-   - rejects any model patch that touches non-test files;
-   - runs the generated test against buggy code and expects `FAIL / ERROR`;
-   - applies the gold code patch;
-   - reruns F2P plus a bounded P2P sample and expects `PASS`;
-   - returns `1.0` only when the full pre-gold / post-gold transition holds.
-5. The wrapped scorer also projects results into LangSmith Experiments.
-
-This means SWT-Bench is **not scored by the generic SWE-bench scorer** in this repo.  
-It reuses the SWE-bench task/sandbox infrastructure but has its **own grader**.
-
-### 4. Chat / repo QA: `chat_swe_qa_pro_baseline`
+### 4. Chat / repo QA: `chat_swe_qa_pro_openbot`
 
 1. `build_chat_swe_qa_pro_dataset.py` mirrors SWE-QA-Pro-Bench into LangSmith.
-2. The task loads it from LangSmith into an Inspect `MemoryDataset`.
-3. The current solver is a DeepAgents direct-answer baseline with no tools and no sandbox.
-4. `swe_qa_pro_judge_scorer()` calls the development 5-dimension judge: it uses the official Appendix D prompt text, but intentionally keeps the Anthropic single-call dev deviations explicit in metadata; then it normalizes `overall / 50` into `[0, 1]` and stores the raw 5-dim scores in metadata.
-5. The scorer best-effort attaches per-dimension feedback to the sample's LangSmith trace.
+2. The task loads it from LangSmith.
+3. The solver is `deepagents_agent_swe_qa_solver` (+Agent variant).
+4. Each sample spins up a `DockerSandboxBackend` where the repo is cloned.
+5. The agent uses `ls`, `grep`, `read_file` to browse the code before answering.
+6. `swe_qa_pro_judge_scorer()` calls the 5-dimension judge for scoring.
 
 ## Sandbox boundary
 
-The repo currently uses **one real eval sandbox path**:
+The repo currently uses **Local Docker** for all agent-based evals:
 
 ```text
 DeepAgents solver
-  -> InspectSandboxBackend
-  -> inspect_ai.util.sandbox()
-  -> per-sample Inspect Docker container
+  -> DockerSandboxBackend
+  -> Local Docker container
 ```
 
-`InspectSandboxBackend` is a bridge, not a second sandbox provider. It lets a DeepAgents agent use its richer file-aware tool surface while still executing inside the Docker container that Inspect created for the benchmark sample.
-
-So, for the implemented coding evals:
-
-- **Inspect AI owns the container lifecycle**.
-- **DeepAgents owns the agent loop and tool choice**.
-- **The scorer owns the benchmark-specific pass/fail rule**.
+Inspect AI owns the Task orchestration, but **DeepAgents owns the sandbox lifecycle** for these tasks.
+The sandbox is created by the solver at the start of each sample and destroyed at the end.
 
 ## LangSmith behavior
 
@@ -208,8 +178,10 @@ evals/
 │   ├── review.py                    # review baseline
 │   ├── swe_fix.py                   # SWE-bench fixing baseline
 │   ├── swe_test.py                  # SWT-Bench test-writing baseline
-│   ├── swe_qa.py                    # SWE-QA-Pro direct-answer baseline
-│   └── inspect_sandbox_backend.py   # DeepAgents -> Inspect sandbox bridge
+│   └── swe_qa.py                    # SWE-QA-Pro agent-based solver
+├── sandboxes/
+│   ├── docker_backend.py            # Local Docker sandbox implementation
+│   └── repo_setup.py                # Clone / Checkout logic
 ├── scripts/
 │   ├── build_review_martian_dataset.py
 │   ├── build_chat_swe_qa_pro_dataset.py
@@ -284,9 +256,79 @@ make -C evals view-open VIEW_LOG_DIR=evals/logs VIEW_OUTPUT_DIR=evals/logs-www
 make -C evals view-open VIEW_PORT=8124
 ```
 
+## Reliability: timeouts, retries, and resume
+
+Evals talk to flaky model endpoints — a half-closed TCP socket from a
+provider mid-completion would previously hang a sample indefinitely. Two
+layers of defense, each independently tunable, plus a checkpoint-style
+resume.
+
+### Layer 1 — HTTP-client timeout + retries (per request)
+
+Every `deepagents` LLM call is constructed through `build_chat_model(...)`
+in [`evals/common/deepagents_baseline.py`](common/deepagents_baseline.py),
+which sets explicit `timeout` and `max_retries` on the provider httpx
+client. Defaults: **90 s timeout, 3 retries** on retryable HTTP errors
+(429 / 5xx / connection drops).
+
+```bash
+# per-request HTTP timeout — applies to every model call
+OPENBOT_DEEPAGENTS_MODEL_TIMEOUT_S=60 make -C evals smoke-review
+
+# HTTP-layer retry count for transient errors (429 / 5xx / network)
+OPENBOT_DEEPAGENTS_MODEL_MAX_RETRIES=5 make -C evals smoke-review
+```
+
+### Layer 2 — Inspect per-sample resilience
+
+`INSPECT_FLAGS` includes `--no-fail-on-error --score-on-error
+--retry-on-error=2 --attempt-timeout 180 --max-samples 4` by default,
+so:
+
+- A poisoned sample doesn't kill 49 healthy ones (`--no-fail-on-error`).
+- Errored samples score 0 in the aggregate rather than disappearing
+  (`--score-on-error`).
+- Each sample gets up to 2 sample-level retries after the HTTP layer
+  gives up (`--retry-on-error=2`).
+- A single model attempt that takes longer than 180 s is abandoned and
+  retried (`--attempt-timeout 180`).
+- At most 4 samples run concurrently — avoids stampeding a rate-limited
+  endpoint (`--max-samples 4`).
+
+Override at the Make command line:
+
+```bash
+# tighter sample-level retry, smaller concurrency for a flaky endpoint
+make -C evals smoke-review RETRY_ON_ERROR=4 MAX_SAMPLES=2 ATTEMPT_TIMEOUT=90
+
+# disable the resilience floor (strict mode — fail fast on first error)
+make -C evals smoke-review RESILIENCE_FLAGS="--max-samples 4"
+```
+
+The two layers are independent on purpose: HTTP retries keep the agent
+loop alive through transient provider blips without losing context;
+sample retries rerun the whole agent from scratch when an error escapes
+that layer.
+
+### Resume a partial / errored run
+
+`inspect eval-retry` reads a `.eval` log, identifies samples that
+errored or never completed, and re-runs **just those**. Cleanly-scored
+samples are skipped — so a 50-sample run that was killed at sample 23
+resumes at 24, and a run where 7 samples errored gets exactly 7 reruns.
+
+```bash
+# resume the most recent partial run under evals/logs/
+make -C evals resume
+
+# resume an explicit log
+make -C evals resume LOG=evals/logs/20260516-165534-review-full/-I*.eval
+```
+
+Resume inherits the same resilience flags as the original run.
+
 ## Current limits
 
 - No production `openbot_prod` solver is implemented yet for review or chat; those task entries are deliberate placeholders.
-- The implemented fix task currently exposes only the DeepAgents variant, even though the module docstring still mentions an upstream react baseline sibling.
-- `review` and `chat` currently use no sandbox; they are closed-form baselines.
-- The SWT-Bench integration is local to this repo: it reuses Inspect's SWE-bench task/sandbox plumbing, but the scorer is custom.
+- `review` uses no sandbox; it is a closed-form baseline.
+- The SWT-Bench integration is local to this repo: it reuses Inspect's task/plumbing but the scorer is custom.

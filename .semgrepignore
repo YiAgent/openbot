@@ -1,0 +1,10 @@
+# Vendored third-party code — kept verbatim from upstream so we can
+# rsync newer versions without merge friction. Our project-wide lint /
+# style rules don't apply (e.g. our pyproject pins Python >=3.11 so
+# semgrep's "Popen encoding is 3.6+" rule is noise here). See
+# evals/third_party/swt_bench/NOTICE for the upstream pin + the small
+# set of explicit "Vendor patch:" edits we permit.
+evals/third_party/
+
+# uv / venv noise — we already gitignore these but be explicit
+.venv/

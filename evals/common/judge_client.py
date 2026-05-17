@@ -29,30 +29,26 @@ from functools import lru_cache
 
 from langchain_anthropic import ChatAnthropic
 
+from evals.common import config
+
 # ─── Shared judge model resolution ────────────────────────────────────────
 #
 # Every LLM-as-judge scorer in this repo (martian-CRB review_judge,
-# SWE-QA-Pro swe_qa_judge, future judges) routes through the *same* Anthropic-
-# compatible gateway configured by ``ANTHROPIC_BASE_URL``. Hardcoding a
-# per-judge model id (e.g. "claude-opus-4-5") makes the judge break the
-# moment the gateway doesn't ship that exact model — and proxies routinely
-# expose a curated subset (xiaomi's gateway only ships ``mimo-v2.5``).
+# SWE-QA-Pro swe_qa_judge, future judges) routes through the *same*
+# Anthropic-compatible gateway configured by ``ANTHROPIC_BASE_URL``.
+# Hardcoding a per-judge model id (e.g. "claude-opus-4-5") makes the
+# judge break the moment the gateway doesn't ship that exact model — and
+# proxies routinely expose a curated subset.
 #
 # Resolution order (first non-empty wins):
 #   1. The judge module's own override env var (e.g.
-#      ``OPENBOT_REVIEW_JUDGE_MODEL_ID`` / ``OPENBOT_SWE_QA_JUDGE_MODEL``) —
-#      useful for A/B experiments where one judge runs on a different model
-#      than the rest.
-#   2. ``OPENBOT_JUDGE_MODEL_ID`` — the shared cross-judge default.
-#   3. ``_DEFAULT_JUDGE_MODEL_ID`` — last-resort hardcoded fallback so the
-#      module imports cleanly in environments with no Doppler / no env
-#      (CI lint, unit tests, IDE).
-#
-# Set ``OPENBOT_JUDGE_MODEL_ID`` in Doppler ``openbot/dev`` once and every
-# judge follows it. Production gates can still override per-judge by
-# setting the more specific env var.
-
-_DEFAULT_JUDGE_MODEL_ID: str = "anthropic:claude-opus-4-7"
+#      :data:`config.REVIEW_JUDGE_MODEL_ENV` /
+#      :data:`config.SWE_QA_JUDGE_MODEL_ENV`) — useful for A/B experiments
+#      where one judge runs on a different model than the rest.
+#   2. :data:`config.JUDGE_MODEL_ENV` — the shared cross-judge default.
+#   3. :data:`config.JUDGE_MODEL_DEFAULT` — last-resort hardcoded
+#      fallback so the module imports cleanly in environments with no
+#      Doppler / no env (CI lint, unit tests, IDE).
 
 
 def resolve_judge_model(*, per_judge_env: str | None = None) -> str:
@@ -60,8 +56,9 @@ def resolve_judge_model(*, per_judge_env: str | None = None) -> str:
 
     Args:
         per_judge_env: Optional name of a judge-specific override env var
-            (e.g. ``"OPENBOT_SWE_QA_JUDGE_MODEL"``). When set and non-empty,
-            it wins over the shared ``OPENBOT_JUDGE_MODEL_ID`` default.
+            (e.g. :data:`config.SWE_QA_JUDGE_MODEL_ENV`). When set and
+            non-empty, it wins over the shared
+            :data:`config.JUDGE_MODEL_ENV` default.
 
     Returns:
         ``provider:model`` (or bare model) id ready to feed into
@@ -72,10 +69,10 @@ def resolve_judge_model(*, per_judge_env: str | None = None) -> str:
         override = os.environ.get(per_judge_env)
         if override:
             return override
-    shared = os.environ.get("OPENBOT_JUDGE_MODEL_ID")
+    shared = os.environ.get(config.JUDGE_MODEL_ENV)
     if shared:
         return shared
-    return _DEFAULT_JUDGE_MODEL_ID
+    return config.JUDGE_MODEL_DEFAULT
 
 
 def _strip_anthropic_prefix(model_id: str) -> str:

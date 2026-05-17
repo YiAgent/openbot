@@ -1,20 +1,12 @@
-"""Unit tests for allowlist-based trace routing in evals.common.langsmith."""
+"""Unit tests for single-project trace routing in evals.common.langsmith."""
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
 from evals.common import langsmith as ls
-
-
-def test_known_public_dataset_returns_true() -> None:
-    assert ls.is_public_dataset("martian_2026w20") is True
-
-
-def test_unknown_dataset_fails_safe_to_internal() -> None:
-    """Anything not in the allowlist must default to internal — never accidentally public."""
-    assert ls.is_public_dataset("nonexistent_v1") is False
-    assert ls.is_public_dataset("internal_prs_v1") is False
 
 
 def test_configure_tracing_skips_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -24,58 +16,62 @@ def test_configure_tracing_skips_without_api_key(monkeypatch: pytest.MonkeyPatch
     assert state["project"] is None
 
 
-def test_public_dataset_routes_to_public_project(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_eval_project_env_drives_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LANGSMITH_PROJECT_EVAL is the single source of truth for all 4 eval cells."""
     monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
-    monkeypatch.setenv("LANGSMITH_PROJECT_PUBLIC", "openbot-eval-public")
-    monkeypatch.setenv("LANGSMITH_PROJECT_INTERNAL", "openbot-eval-internal")
+    monkeypatch.setenv("LANGSMITH_PROJECT_EVAL", "openbot-eval")
+    monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
+
+    for dataset_version in (
+        "martian_2026w20",
+        "chat_swe_qa_pro_v1",
+        "fix_swe_bench_verified",
+        "test_swt_bench_verified",
+    ):
+        state = ls.configure_tracing_for_dataset(dataset_version)
+        assert state == {
+            "project": "openbot-eval",
+            "tracing": "true",
+            "source": "eval-project",
+        }
+        assert os.environ["LANGSMITH_PROJECT"] == "openbot-eval"
+
+
+def test_configure_tracing_overwrites_preexisting_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Doppler's default LANGSMITH_PROJECT must NOT shadow the eval routing."""
+    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    monkeypatch.setenv("LANGSMITH_PROJECT", "openbot-dev")  # default value
+    monkeypatch.setenv("LANGSMITH_PROJECT_EVAL", "openbot-eval")
+    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
+    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
+
+    ls.configure_tracing_for_dataset("martian_2026w20")
+
+    assert os.environ["LANGSMITH_PROJECT"] == "openbot-eval"
+
+
+def test_configure_tracing_reports_unset_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When LANGSMITH_PROJECT_EVAL is missing, tracing still enables but project=None."""
+    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
+    monkeypatch.delenv("LANGSMITH_PROJECT_EVAL", raising=False)
     monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
     monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
     monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
 
     state = ls.configure_tracing_for_dataset("martian_2026w20")
 
-    assert state == {
-        "project": "openbot-eval-public",
-        "tracing": "true",
-        "source": "allowlist-public",
-    }
-
-
-def test_unknown_dataset_routes_to_internal_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
-    monkeypatch.setenv("LANGSMITH_PROJECT_PUBLIC", "openbot-eval-public")
-    monkeypatch.setenv("LANGSMITH_PROJECT_INTERNAL", "openbot-eval-internal")
-    monkeypatch.delenv("LANGSMITH_PROJECT", raising=False)
-    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
-    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
-
-    state = ls.configure_tracing_for_dataset("unknown_v1")
-
-    assert state["project"] == "openbot-eval-internal"
-    assert state["source"] == "allowlist-internal"
-
-
-def test_configure_tracing_overwrites_preexisting_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Doppler's default LANGSMITH_PROJECT must NOT shadow allowlist routing."""
-    monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
-    monkeypatch.setenv("LANGSMITH_PROJECT", "openbot-dev")  # default value
-    monkeypatch.setenv("LANGSMITH_PROJECT_PUBLIC", "openbot-eval-public")
-    monkeypatch.delenv("LANGSMITH_PROJECT_INTERNAL", raising=False)
-    monkeypatch.delenv("LANGSMITH_TRACING", raising=False)
-    monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
-
-    ls.configure_tracing_for_dataset("martian_2026w20")
-
-    import os
-
-    assert os.environ["LANGSMITH_PROJECT"] == "openbot-eval-public"
+    assert state["project"] is None
+    assert state["source"] == "eval-project:unset"
+    assert state["tracing"] == "true"
 
 
 def test_configure_tracing_honors_explicit_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pre-set LANGSMITH_TRACING is left alone (allows muting noisy dev loops)."""
     monkeypatch.setenv("LANGSMITH_API_KEY", "ls-test")
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
-    monkeypatch.setenv("LANGSMITH_PROJECT_PUBLIC", "openbot-eval-public")
+    monkeypatch.setenv("LANGSMITH_PROJECT_EVAL", "openbot-eval")
     monkeypatch.delenv("LANGCHAIN_TRACING_V2", raising=False)
 
     state = ls.configure_tracing_for_dataset("martian_2026w20")

@@ -120,6 +120,7 @@ class _FakeImageStore:
     def __init__(self, *, missing: bool = False) -> None:
         self._missing = missing
         self.pull_calls: list[str] = []
+        self.remove_calls: list[tuple[str, bool]] = []
 
     def get(self, name: str) -> object:
         if self._missing:
@@ -131,6 +132,9 @@ class _FakeImageStore:
     def pull(self, name: str) -> object:
         self.pull_calls.append(name)
         return object()
+
+    def remove(self, name: str, *, force: bool = False, noprune: bool = False) -> None:
+        self.remove_calls.append((name, force))
 
 
 class _FakeContainerStore:
@@ -159,7 +163,11 @@ def _fake_docker(
     class _ModuleNS:
         @staticmethod
         def from_env() -> _FakeClient:
-            holder["client"] = _FakeClient(image_missing=image_missing, scripted=scripted)
+            # Cache the client so pull / remove calls made from different
+            # code paths (start_container, aclose's _maybe_remove_image)
+            # all see the same state.
+            if holder["client"] is None:
+                holder["client"] = _FakeClient(image_missing=image_missing, scripted=scripted)
             return holder["client"]
 
         class errors:
@@ -268,3 +276,115 @@ async def test_aexecute_after_close_raises(
     await backend.aclose()
     with pytest.raises(RuntimeError, match="already closed"):
         await backend.aexecute("echo hi")
+
+
+# ─── image cleanup on close ─────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _reset_pulled_images() -> Any:
+    """Isolate ``_IMAGES_PULLED_BY_US`` between tests.
+
+    The set is module-global by design (atexit needs it to outlive any
+    individual backend instance), so without this fixture a test that
+    pulls an image bleeds eligibility into later tests.
+    """
+    docker_backend_mod._IMAGES_PULLED_BY_US.clear()
+    yield
+    docker_backend_mod._IMAGES_PULLED_BY_US.clear()
+
+
+@pytest.mark.asyncio
+async def test_aclose_leaves_default_shared_image_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default ``python:3.11-slim`` is shared across samples.
+
+    Removing it after every sample would force a re-pull on the next one —
+    the cleanup exists to reclaim per-sample-image disk waste, not to
+    thrash the shared base.
+    """
+    fake_docker, holder = _fake_docker(image_missing=True)
+    monkeypatch.setattr(docker_backend_mod, "_docker", lambda: fake_docker)
+
+    backend = await DockerSandboxBackend.create_for_sample(
+        repo_spec=RepoSpec(repo="x/y", base_commit="sha", workspace="/workspace"),
+    )
+    await backend.aclose()
+
+    client: _FakeClient = holder["client"]
+    assert client.images.pull_calls == ["python:3.11-slim"]
+    assert client.images.remove_calls == [], "default shared base must not be removed on aclose"
+
+
+@pytest.mark.asyncio
+async def test_aclose_removes_per_sample_image_we_pulled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-default image we pulled (~3 GB swe-bench eval image) is reaped.
+
+    Mirrors the production pain point: a 50-sample fix run leaves ~150 GB
+    of layer data on disk if every per-sample image lingers.
+    """
+    per_sample = "ghcr.io/epoch-research/swe-bench.eval.arm64.astropy__astropy-12907:latest"
+    fake_docker, holder = _fake_docker(image_missing=True)
+    monkeypatch.setattr(docker_backend_mod, "_docker", lambda: fake_docker)
+
+    backend = await DockerSandboxBackend.create_for_sample(
+        repo_spec=RepoSpec(repo="x/y", base_commit="sha", workspace="/workspace"),
+        image=per_sample,
+    )
+    await backend.aclose()
+
+    client: _FakeClient = holder["client"]
+    assert client.images.pull_calls == [per_sample]
+    assert client.images.remove_calls == [(per_sample, False)]
+    assert per_sample not in docker_backend_mod._IMAGES_PULLED_BY_US
+
+
+@pytest.mark.asyncio
+async def test_aclose_skips_image_we_did_not_pull(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the image was already in the local cache, leave it alone.
+
+    The user (or some other tooling) paid for the pull and may depend on
+    the image staying around. We only reap what we fetched ourselves.
+    """
+    per_sample = "ghcr.io/epoch-research/swe-bench.eval.arm64.astropy__astropy-12907:latest"
+    fake_docker, holder = _fake_docker(image_missing=False)
+    monkeypatch.setattr(docker_backend_mod, "_docker", lambda: fake_docker)
+
+    backend = await DockerSandboxBackend.create_for_sample(
+        repo_spec=RepoSpec(repo="x/y", base_commit="sha", workspace="/workspace"),
+        image=per_sample,
+    )
+    await backend.aclose()
+
+    client: _FakeClient = holder["client"]
+    assert client.images.pull_calls == []
+    assert client.images.remove_calls == []
+
+
+@pytest.mark.asyncio
+async def test_aclose_skips_image_when_cleanup_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit ``cleanup_image_on_close=False`` overrides the default."""
+    per_sample = "registry.example.com/team/sample-img:abc"
+    fake_docker, holder = _fake_docker(image_missing=True)
+    monkeypatch.setattr(docker_backend_mod, "_docker", lambda: fake_docker)
+
+    backend = await DockerSandboxBackend.create_for_sample(
+        repo_spec=RepoSpec(repo="x/y", base_commit="sha", workspace="/workspace"),
+        image=per_sample,
+        cleanup_image_on_close=False,
+    )
+    await backend.aclose()
+
+    client: _FakeClient = holder["client"]
+    assert client.images.pull_calls == [per_sample]
+    assert client.images.remove_calls == []
+    # Image stays tracked so the atexit sweep can still reap it if the
+    # process exits without anyone reusing the image.
+    assert per_sample in docker_backend_mod._IMAGES_PULLED_BY_US

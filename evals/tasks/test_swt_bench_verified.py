@@ -119,7 +119,14 @@ def test_swt_bench_verified_deepagents() -> Task:
     return Task(
         dataset=_load_dataset(),
         solver=deepagents_baseline_swt_solver(),
-        scorer=experiment.wrap(exporter),
+        scorer=experiment.wrap(
+            exporter,
+            # See fix_swe_bench_verified.py — this is an export sentinel,
+            # not pass@1. Real grading is offline via SWT-Bench's grader.
+            scorer_name="swt_export_ok",
+            feedback_key="swt_export_ok",
+            feedback_config={"type": "continuous", "min": 0.0, "max": 1.0},
+        ),
         metadata={
             "dataset_version": _DATASET_VERSION,
             "dataset_source": _DATASET_SOURCE,

@@ -37,38 +37,58 @@ from evals.common.deepagents_baseline import (
     resolve_model,
 )
 from evals.common.predictions import SweBenchPrediction, empty_swe_prediction
+from evals.common.termination import assert_clean_termination
 from evals.common.usage import aggregate_provider_usage
-from evals.sandboxes import DockerSandboxBackend, RepoSpec
+from evals.sandboxes import RepoSpec, create_sandbox_for_sample
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = textwrap.dedent(
     """\
-    You are an expert software engineer fixing a single GitHub issue in a
-    checked-out repository inside a Linux sandbox. The repo is at
-    /workspace (HEAD already detached at the issue's base commit; you are
-    on a clean branch called ``openbot-agent``).
+    ROLE: You are a senior software engineer fixing one GitHub issue in
+    an already-checked-out repository.
 
-    Tools (sandbox-aware, all single round-trip):
-      - ls / read_file / glob / grep — read
-      - write_file (new file) / edit_file (in-place exact-string replace,
-        replace_all=True for multiple occurrences) — write
-      - execute — `bash -lc` escape hatch for git, pytest, patch -p1, etc.
+    GOAL: Modify the source code in /workspace so the bug described in the
+    issue is fixed. The grader runs the project's pre-existing test suite
+    against your code (offline, after your run) — your job is to produce
+    a minimal patch that makes the failing test(s) pass without breaking
+    any passing test.
 
-    Loop:
-      1. Read the issue carefully.
-      2. Use grep / glob to locate the relevant code.
-      3. Use read_file to understand context (request only the page you
-         need via offset/limit — files are big).
-      4. Use edit_file / write_file to apply the minimal fix; prefer them
-         over execute+sed.
-      5. Optionally re-run the failing test via execute to confirm green.
-      6. Stop and reply with a one-paragraph summary.
+    SUCCESS CRITERIA:
+      - The smallest set of file edits that fixes the issue.
+      - No new tests, no refactoring beyond what the fix needs.
+      - No git commit, push, branch switch — the grader captures changes
+        via ``git diff`` against the base commit at end of run.
 
-    Run independent tool calls in parallel (e.g., reading 3 files at once
-    is one round-trip, not three). Do NOT git commit, push, or switch
-    branches — the grader captures your changes via `git diff` against
-    HEAD when you finish.
+    ENVIRONMENT:
+      - /workspace: repo at the issue's base commit (HEAD detached, branch
+        ``openbot-agent``).
+      - Tools (sandbox-aware, all single round-trip):
+        · ls / read_file / glob / grep — read
+        · write_file / edit_file (exact-string replace, replace_all=True
+          for repeated occurrences) — write
+        · execute — ``bash -lc`` escape hatch for git/pytest/patch.
+      - Use the plan tool (write_todos) to track what you're investigating
+        and what you've fixed. It's the easiest way to avoid the
+        "let me check one more thing" failure mode.
+
+    WORKFLOW:
+      1. Read the issue body and form a hypothesis: what file(s) is the
+         bug likely in, what is the expected behaviour, what changed?
+      2. Locate the buggy code via grep / glob + a targeted read_file.
+         Read only the page you need (offset/limit) — files can be huge.
+      3. Apply the minimal fix with edit_file. Prefer edit_file over
+         execute+sed (safer, structured response).
+      4. Optionally run the failing test via execute to sanity-check.
+         If the test is unknown, just trust your reasoning and stop.
+      5. Stop. Reply with a one-paragraph summary of the change.
+
+    DISCIPLINE:
+      - Run independent tool calls in parallel (3 reads = 1 round-trip).
+      - Cap at ~10 tool calls before you must commit a fix. The vast
+        majority of fixes need ≤5 reads + 1-2 edits.
+      - Do NOT say "let me explore the codebase first" without a
+         specific hypothesis — start from the issue text.
     """
 )
 
@@ -123,7 +143,7 @@ def deepagents_baseline_swe_solver(*, model: str | None = None) -> Solver:
                 )
                 return state
 
-            backend = await DockerSandboxBackend.create_for_sample(
+            backend = await create_sandbox_for_sample(
                 repo_spec=RepoSpec(repo=repo, base_commit=base_commit),
             )
             try:
@@ -155,6 +175,14 @@ def deepagents_baseline_swe_solver(*, model: str | None = None) -> Solver:
                     config=ls_config,
                 )
 
+                # Refuse to capture / score a diff from a run the agent
+                # never finished cleanly (middleware-cut, rate-limit storm,
+                # pending tool-call, empty final message). Raising here
+                # marks the sample as errored — Inspect excludes it from
+                # the metric and from the predictions JSONL, instead of
+                # shipping an empty patch that would be misread as
+                # "model failed to fix".
+                assert_clean_termination(result, requires_structured_response=False)
                 patch = await backend.acapture_diff()
                 prediction = SweBenchPrediction(
                     instance_id=instance_id,

@@ -20,9 +20,19 @@ Usage in an Inspect ``@task`` constructor::
     )
     return Task(
         ...,
-        scorer=exp.wrap(swe_bench_scorer()),  # auto-emits Experiment Runs
+        scorer=exp.wrap(
+            swe_bench_scorer(),
+            scorer_name="swe_export_ok",          # how it surfaces in Inspect logs
+            feedback_key="swe_export_ok",         # LangSmith Feedback column
+            feedback_config={"type": "continuous", "min": 0.0, "max": 1.0},
+        ),
         metadata={..., **exp.metadata()},
     )
+
+``scorer_name`` and ``feedback_key`` are intentionally required keyword args —
+a previous bug had the export-success signal silently writing into the
+``swe_bench_pass_at_1`` Feedback column, polluting the official pass@1 metric.
+Forcing every caller to name both keys prevents recurrence.
 """
 
 from __future__ import annotations
@@ -122,6 +132,31 @@ def _coerce_completion_output(candidate_completion: str | None) -> Any:
     return parsed if isinstance(parsed, dict | list) else candidate_completion
 
 
+def _extract_model_patch_output(
+    score_metadata: dict[str, Any] | None,
+    sample_metadata: dict[str, Any] | None,
+    candidate_completion: str | None,
+) -> str | None:
+    """Prefer an explicit patch field, fall back to the prediction surface."""
+    if isinstance(score_metadata, dict):
+        patch = score_metadata.get("model_patch")
+        if isinstance(patch, str):
+            return patch
+
+    prediction = (sample_metadata or {}).get("prediction")
+    if isinstance(prediction, dict):
+        patch = prediction.get("model_patch")
+        if isinstance(patch, str):
+            return patch
+
+    parsed_completion = _coerce_completion_output(candidate_completion)
+    if isinstance(parsed_completion, dict):
+        patch = parsed_completion.get("model_patch")
+        if isinstance(patch, str):
+            return patch
+    return None
+
+
 @dataclass
 class LangSmithExperiment:
     """Per-task LangSmith Experiment session + example index.
@@ -174,13 +209,22 @@ class LangSmithExperiment:
         is missing — keeps unit tests / offline dev paths working without
         a hard dep on the network.
         """
+        # Lazy import to avoid a cycle — deepagents_baseline pulls in
+        # langchain stacks we don't want loaded at module top in this file.
+        from evals.common.deepagents_baseline import display_model_name
+
         ts = dt.datetime.now(dt.UTC).strftime("%Y%m%d-%H%M%S")
         experiment_name = f"{dataset_name}-{solver_family}-{ts}"
+        # ``model`` is stored on both the experiment-level metadata and the
+        # per-sample run extras. Strip the LangChain ``provider:`` prefix at
+        # the LangSmith boundary so dashboard readers see the actual model
+        # served, not our internal routing label.
+        display_model = display_model_name(model) if model else model
         extra_metadata = {
             "dataset_name": dataset_name,
             "solver_family": solver_family,
             "experiment_name": experiment_name,
-            "model": model,
+            "model": display_model,
             "git_sha": git_sha,
         }
 
@@ -196,7 +240,7 @@ class LangSmithExperiment:
             dataset_name=dataset_name,
             experiment_name=experiment_name,
             solver_family=solver_family,
-            model=model,
+            model=display_model,
             instance_id_field=instance_id_field,
             enabled=enabled,
             extra_metadata=extra_metadata,
@@ -295,9 +339,27 @@ class LangSmithExperiment:
         candidate_completion: str | None,
         sample_metadata: dict[str, Any] | None,
         scorer_name: str,
-        feedback_key: str | None = "swe_bench_pass_at_1",
+        feedback_key: str | None,
         feedback_config: dict[str, Any] | None = None,
     ) -> None:
+        # Skip errored / no-output samples. ``--score-on-error`` (when set)
+        # forces a zero score even for samples whose solver never produced
+        # output, and pushing that to LangSmith creates pure noise: empty
+        # Feedback rows that drag the dashboard mean toward zero and bury
+        # the real signal under failed retries. The Makefile no longer
+        # passes ``--score-on-error`` in normal runs, but this guard keeps
+        # the upload clean even if a campaign re-enables it for debugging.
+        # Signal we trust: a real completion string. Solvers always set
+        # ``state.output.completion`` to their stable JSON envelope on
+        # success; on error the field is ``None`` or empty.
+        if candidate_completion is None or not candidate_completion.strip():
+            logger.debug(
+                "skipping LangSmith experiment upload for instance_id=%r — "
+                "sample produced no completion (errored or truncated)",
+                instance_id,
+            )
+            return
+
         # Lazy: first real sample triggers provisioning. Subsequent samples
         # short-circuit when provisioning previously failed (we already
         # logged the warning once, no point retrying per sample).
@@ -332,9 +394,17 @@ class LangSmithExperiment:
                 project_name=self.experiment_name,
                 run_type="llm",
                 inputs={"instance_id": instance_id, "issue": sample_input},
+                # Outputs are the agent artifacts (patch + raw completion). The
+                # scalar score lives in Feedback (feedback_key + precision /
+                # recall fans below), so we deliberately don't echo it here —
+                # doing so made the Outputs column display the F1 number for
+                # review runs instead of the actual findings JSON.
                 outputs={
-                    "score": score_value,
-                    "model_patch": (score.metadata or {}).get("model_patch"),
+                    "model_patch": _extract_model_patch_output(
+                        dict(score.metadata or {}),
+                        sample_metadata,
+                        candidate_completion,
+                    ),
                     "completion": _coerce_completion_output(candidate_completion),
                 },
                 start_time=now,
@@ -406,9 +476,9 @@ class LangSmithExperiment:
         self,
         upstream: Scorer,
         *,
+        scorer_name: str,
+        feedback_key: str | None,
         metrics: list[Metric] | None = None,
-        scorer_name: str = "swe_bench_scorer",
-        feedback_key: str | None = "swe_bench_pass_at_1",
         feedback_config: dict[str, Any] | None = None,
     ) -> Scorer:
         """Return a scorer that runs ``upstream`` then posts to the experiment.
@@ -419,13 +489,19 @@ class LangSmithExperiment:
         metric semantics.
 
         ``scorer_name`` labels the wrapped scorer in Inspect logs and
-        LangSmith feedback metadata (default keeps backward compat with the
-        SWE-bench fix/test cells; review/chat tasks pass their own).
+        LangSmith feedback metadata — **required**, no default. The previous
+        ``"swe_bench_scorer"`` default leaked the SWE-bench semantic onto
+        unrelated cells (review/chat/QA), making cross-task dashboards lie.
 
-        ``feedback_key`` is the LangSmith Feedback key used for the
-        upstream scalar score. Pass ``None`` to skip Feedback creation —
-        useful when the upstream scorer already attaches richer
-        multi-dimensional Feedback to the trace (e.g. ``swe_qa_pro_*``).
+        ``feedback_key`` is the LangSmith Feedback key used for the upstream
+        scalar score — **required**, no default. Pass ``None`` explicitly to
+        skip Feedback creation (useful when the upstream scorer already
+        attaches richer multi-dim Feedback, e.g. ``swe_qa_pro_*``). The
+        previous ``"swe_bench_pass_at_1"`` default once silently mislabeled
+        the export-success signal as official pass@1 (see commit history);
+        forcing every caller to be explicit prevents recurrence and reserves
+        ``swe_bench_pass_at_1`` / ``swt_bench_pass_at_1`` for real offline
+        grading writeback.
 
         Failures during LangSmith upload are logged but never propagated —
         the eval keeps going regardless.

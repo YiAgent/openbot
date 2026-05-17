@@ -53,6 +53,7 @@ from deepagents.backends.protocol import (
 )
 from deepagents.backends.sandbox import BaseSandbox
 
+from evals.common.config import get_eval_config
 from evals.sandboxes.repo_setup import (
     _SHA_FALLBACK_MARKER,
     DEFAULT_WORKSPACE,
@@ -66,22 +67,29 @@ if TYPE_CHECKING:  # pragma: no cover — type-only import
 
 logger = logging.getLogger(__name__)
 
-# Default image. ``python:3.11-slim`` is small (~120 MB) and we apt-install
-# ``git`` + ``ca-certificates`` on first use; alternative bases that ship git
-# pre-built (e.g. ``buildpack-deps:bookworm-scm``) are ~500 MB and not worth
-# the extra pull on a fresh machine. Pin to a digest in CI when reproducibility
-# matters.
-_DEFAULT_IMAGE = "python:3.11-slim"
+# Default image, shared across docker / modal / daytona backends — see
+# :class:`evals.common.config.SandboxSettings`. ``python:3.11-slim`` is
+# small (~120 MB) and we apt-install ``git`` + ``ca-certificates`` on
+# first use; alternative bases that ship git pre-built (e.g.
+# ``buildpack-deps:bookworm-scm``) are ~500 MB and not worth the extra
+# pull on a fresh machine. Pin to a digest in CI when reproducibility
+# matters. Read at module-import time because backends never want
+# mid-run image rotation; tests that flip backends use a fresh process.
+_DEFAULT_IMAGE = get_eval_config().sandbox.default_image
 
 # Defense-in-depth: even though ``image`` is solver-controlled (never sample-
 # controlled), validate the tag against the upstream Docker reference grammar
 # before passing it to the daemon. Catches accidental injection if a future
 # caller wires sample metadata to the image arg (semgrep CWE-250).
-# Pattern is a conservative subset of github.com/distribution/reference: only
-# lowercase tags, no ``$`` / spaces / shell metacharacters.
+#
+# Component separator follows the spec at github.com/distribution/reference:
+#   separator = ``_`` | ``.`` | ``__`` | one-or-more ``-``
+# Real SWE-bench images use ``__`` (``astropy__astropy-12907``), which the
+# previous single-char pattern silently rejected.
+_IMAGE_SEPARATOR = r"(?:[._]|__|-+)"
+_IMAGE_COMPONENT = rf"[a-z0-9]+(?:{_IMAGE_SEPARATOR}[a-z0-9]+)*"
 _IMAGE_REF_RE = re.compile(
-    r"^[a-z0-9]+(?:[._-][a-z0-9]+)*"
-    r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*"
+    rf"^{_IMAGE_COMPONENT}(?:/{_IMAGE_COMPONENT})*"
     r"(?::[a-zA-Z0-9._-]+)?"
     r"(?:@sha256:[a-f0-9]{64})?$"
 )
@@ -108,9 +116,9 @@ _INSTALL_GIT_SCRIPT = (
     "fi"
 )
 
-# Per-command timeout. Mirrors the previous Modal default + matches Inspect's
-# bash-session minimum.
-_DEFAULT_RUN_TIMEOUT_S = 600
+# Per-command timeout, shared across sandbox backends. Mirrors the
+# previous Modal default + matches Inspect's bash-session minimum.
+_DEFAULT_RUN_TIMEOUT_S = get_eval_config().sandbox.default_run_timeout_s
 
 # Identifying label applied to every container we create. Used by:
 #  * the startup orphan sweep (kills containers left over from a previous
@@ -131,6 +139,12 @@ _SESSION_ID = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
 # Container ids alive in this process. We use a set rather than a WeakSet of
 # backends because the atexit hook needs to survive past Python object GC.
 _LIVE_CONTAINER_IDS: set[str] = set()
+
+# Image refs this process pulled (i.e. weren't in the local docker image cache
+# at the time we asked for them). Only these are eligible for cleanup-on-close
+# / atexit reaping — we never touch images the user had pre-cached, even if
+# we ran a container on them.
+_IMAGES_PULLED_BY_US: set[str] = set()
 
 
 def _shell_rm_container(container_id: str) -> None:
@@ -154,16 +168,46 @@ def _shell_rm_container(container_id: str) -> None:
         )
 
 
+def _shell_rmi_image(image: str) -> None:
+    """Best-effort image removal via the docker CLI.
+
+    Mirrors :func:`_shell_rm_container` — used from ``atexit`` where the
+    docker-py client may be unusable. ``-f`` removes the image even if a
+    stopped container still references it, but won't reach into a different
+    image's layer tree. Failures (image already gone, in use by a running
+    container we don't own, daemon down) are intentionally silent.
+    """
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(
+            ["docker", "rmi", "-f", image],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=False,
+        )
+
+
 def _atexit_sweep() -> None:
-    """Force-remove every container this process started that's still alive.
+    """Force-remove every container + pulled image left over at process exit.
 
     Runs unconditionally at interpreter shutdown — catches SIGTERM, uncaught
     exceptions, and `sys.exit()` paths that bypassed solver-level finally
     blocks. Safe to call repeatedly; ids that were already cleaned just no-op.
+
+    Images are reaped *after* containers because docker refuses to remove an
+    image while any container (even an exited one) references it. We never
+    touch the shared default image, even if we pulled it — re-pulling
+    ``python:3.11-slim`` between runs would waste ~120 MB of bandwidth on
+    every cold start.
     """
     for cid in list(_LIVE_CONTAINER_IDS):
         _shell_rm_container(cid)
     _LIVE_CONTAINER_IDS.clear()
+    for image in list(_IMAGES_PULLED_BY_US):
+        if image == _DEFAULT_IMAGE:
+            continue
+        _shell_rmi_image(image)
+    _IMAGES_PULLED_BY_US.clear()
 
 
 atexit.register(_atexit_sweep)
@@ -303,10 +347,19 @@ class DockerSandboxBackend(BaseSandbox):
         container: Any,
         workspace: str = DEFAULT_WORKSPACE,
         run_timeout: int = _DEFAULT_RUN_TIMEOUT_S,
+        image: str = _DEFAULT_IMAGE,
+        cleanup_image_on_close: bool = False,
     ) -> None:
         self._container = container
         self._workspace = workspace
         self._run_timeout = run_timeout
+        # Used by ``aclose`` to decide whether to ``docker rmi`` the image
+        # after the container is gone. Never enabled for the shared default
+        # base — that would force re-pull on every subsequent sample.
+        self._image = image
+        self._cleanup_image_on_close = (
+            cleanup_image_on_close and image != _DEFAULT_IMAGE and image in _IMAGES_PULLED_BY_US
+        )
         try:
             self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
         except RuntimeError:
@@ -339,14 +392,24 @@ class DockerSandboxBackend(BaseSandbox):
         workspace: str = DEFAULT_WORKSPACE,
         image: str = _DEFAULT_IMAGE,
         run_timeout: int = _DEFAULT_RUN_TIMEOUT_S,
+        cleanup_image_on_close: bool = True,
     ) -> DockerSandboxBackend:
         """Spin up an empty container with ``workspace`` pre-created.
 
         Used by tasks that don't need a pre-cloned repo (synthetic review
         samples, prompt-injection corpus). Caller is responsible for
         closing the backend via :meth:`aclose`.
+
+        ``cleanup_image_on_close`` defaults to ``True``: if this process
+        pulled a non-default image to start the container, the image is
+        ``docker rmi``'d on close. The shared default image is always
+        preserved (re-pulling it for every sample is wasteful).
         """
-        backend = await cls._start_container(image=image, run_timeout=run_timeout)
+        backend = await cls._start_container(
+            image=image,
+            run_timeout=run_timeout,
+            cleanup_image_on_close=cleanup_image_on_close,
+        )
         backend._workspace = workspace
         resp = await backend.aexecute(
             f"{_INSTALL_GIT_SCRIPT}; mkdir -p {shlex.quote(workspace)}",
@@ -364,6 +427,7 @@ class DockerSandboxBackend(BaseSandbox):
         repo_spec: RepoSpec,
         image: str = _DEFAULT_IMAGE,
         run_timeout: int = _DEFAULT_RUN_TIMEOUT_S,
+        cleanup_image_on_close: bool = True,
     ) -> DockerSandboxBackend:
         """Spin up a container, clone the repo at ``repo_spec.base_commit``.
 
@@ -373,13 +437,26 @@ class DockerSandboxBackend(BaseSandbox):
                 ``git`` is apt-installed on first command. Override with a
                 pre-baked image to skip the install latency.
             run_timeout: Default timeout for individual shell-run calls.
+            cleanup_image_on_close: When ``True`` (default), ``docker rmi``
+                the image on :meth:`aclose` *iff* this process pulled it
+                and it isn't the shared default base. Per-sample images
+                (e.g. ``ghcr.io/epoch-research/swe-bench.eval.…``) are
+                multi-GB; without this cleanup, a 50-sample run leaves
+                ~150 GB of unreferenced image layers on disk. The shared
+                default base is never removed — re-pulling on every
+                subsequent sample would burn more time and bandwidth than
+                the disk savings are worth.
 
         Raises:
             RuntimeError: If git install or repo clone fails. We don't fall
                 back silently — a missing base commit means the sample is
                 unrunnable and should be flagged as errored.
         """
-        backend = await cls._start_container(image=image, run_timeout=run_timeout)
+        backend = await cls._start_container(
+            image=image,
+            run_timeout=run_timeout,
+            cleanup_image_on_close=cleanup_image_on_close,
+        )
         backend._workspace = repo_spec.workspace
 
         # Install git first (image-cached on subsequent samples).
@@ -407,6 +484,7 @@ class DockerSandboxBackend(BaseSandbox):
         *,
         image: str,
         run_timeout: int,
+        cleanup_image_on_close: bool = False,
     ) -> DockerSandboxBackend:
         """Pull (if missing) + start a fresh container with PID-1 sleep."""
 
@@ -427,6 +505,10 @@ class DockerSandboxBackend(BaseSandbox):
             except docker.errors.ImageNotFound:
                 logger.info("pulling docker image %s …", validated_image)
                 client.images.pull(validated_image)
+                # Mark *this* image as ours to clean up. If the image was
+                # already locally cached, the user (or a previous tool)
+                # paid for it — leave it alone.
+                _IMAGES_PULLED_BY_US.add(validated_image)
             # ``validated_image`` is checked by ``_validate_image`` above —
             # only matches the Docker reference grammar (lowercase tag, no
             # shell metacharacters, no ``$``/quoting). Callers never pass
@@ -452,7 +534,12 @@ class DockerSandboxBackend(BaseSandbox):
             return client.containers.run(**run_kwargs)  # nosemgrep
 
         container = await asyncio.to_thread(_do_start)
-        return cls(container=container, run_timeout=run_timeout)
+        return cls(
+            container=container,
+            run_timeout=run_timeout,
+            image=validated_image,
+            cleanup_image_on_close=cleanup_image_on_close,
+        )
 
     # ── identity ───────────────────────────────────────────────────────────
 
@@ -625,6 +712,34 @@ class DockerSandboxBackend(BaseSandbox):
         if self._finalizer is not None:
             self._finalizer.detach()
             self._finalizer = None
+
+        # Image cleanup runs *after* the container is gone — docker refuses
+        # to remove an image referenced by any container, even stopped ones.
+        # ``force=False`` so a sibling backend in another asyncio task that
+        # happens to share the same image (rare but legal) isn't disturbed;
+        # we'll fall through to the atexit sweep instead.
+        if self._cleanup_image_on_close:
+            await asyncio.to_thread(self._maybe_remove_image)
+
+    def _maybe_remove_image(self) -> None:
+        """Best-effort ``docker rmi`` of the image this backend used.
+
+        Called from :meth:`aclose` only when the image is eligible
+        (non-default, pulled by us). Tolerates the "image in use" case
+        without noise — the atexit sweep will retry on process exit.
+        """
+        try:
+            docker = _docker()
+            client = docker.from_env()
+            client.images.remove(self._image, force=False, noprune=False)
+            _IMAGES_PULLED_BY_US.discard(self._image)
+            logger.info("removed docker image %s after sample", self._image)
+        except Exception as exc:
+            # ImageNotFound (already gone), APIError "image is being used by
+            # stopped container <id>" (sibling sample), or daemon hiccup —
+            # log at debug; force=True via the atexit shell rmi will mop up
+            # if we're truly done with it.
+            logger.debug("skip docker rmi %s: %s", self._image, exc, exc_info=False)
 
     async def __aenter__(self) -> DockerSandboxBackend:
         return self
