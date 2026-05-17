@@ -8,9 +8,23 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _blank_to_none(value: Any) -> Any:
+    """Treat empty / whitespace-only strings as unset.
+
+    Heroku and many cloud env stores cannot distinguish "key absent" from
+    "key present but empty"; both surface as ``""``. Default pydantic
+    coercion then rejects ``""`` for ``int | None`` / ``Path | None`` fields
+    even though the documented intent is "leave it unset for receive-only".
+    """
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
 
 
 class Settings(BaseSettings):
@@ -96,6 +110,44 @@ class Settings(BaseSettings):
     )
 
     debug: bool = Field(default=False, description="Verbose logs; never enable in production.")
+
+    # ─── Observability ───
+    # Sentry is opt-in cross-cutting exception capture. Domain events
+    # (workflow STARTED / COMPLETED / SKIPPED) stay in audit_log; Sentry
+    # only sees uncaught exceptions and httpx 5xx so the on-call view
+    # isn't swamped by routine SKIPPED rows.
+    sentry_dsn: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Sentry DSN. When unset, sentry_sdk.init(dsn=None) is a "
+            "documented no-op — local dev and CI keep working unchanged."
+        ),
+    )
+    # Tags every Sentry event so prod errors don't mix with dev / preview.
+    # Heroku sets this via `heroku config:set OPENBOT_ENVIRONMENT=production`.
+    environment: str = Field(
+        default="development",
+        description="Environment tag attached to Sentry events.",
+    )
+    # 0.0 = error-only (cheapest tier). Bump to 0.05-0.2 once you have
+    # the Sentry Performance budget to spare. Keep <1.0 or you'll burn
+    # the free-tier event budget on the first traffic spike.
+    sentry_traces_sample_rate: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of transactions sent to Sentry Performance.",
+    )
+
+    # ── Coerce "" → None for optional non-string fields ──
+    # Applied at `mode='before'` so it runs ahead of int / Path validation.
+    _blank_to_none = field_validator(
+        "github_app_id",
+        "github_app_private_key_path",
+        "redis_url",
+        "postgres_url",
+        mode="before",
+    )(staticmethod(_blank_to_none))
 
 
 @lru_cache
