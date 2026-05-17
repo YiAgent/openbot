@@ -106,6 +106,9 @@ class PreflightContext:
     adapter: GitHubAdapter
     session_factory: async_sessionmaker[AsyncSession] | None
     redis: redis_async.Redis | None
+    # GitHub check_run_id — when present, the workflow handler may update
+    # it with detailed logs or status changes.
+    check_run_id: int | None = None
     # Reserved for slice B+: middlewares may stash cached lookups
     # (actor role, cancel set membership) keyed by their middleware name.
     # Frozen at construction; slice A leaves it empty.

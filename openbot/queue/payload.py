@@ -68,6 +68,9 @@ class QueuePayload:
     feature: str  # Feature.value
     task_id: str
     enqueued_at: str  # ISO 8601, UTC
+    # GitHub check_run_id — when present, the worker updates the status
+    # to 'completed' after the workflow finishes.
+    check_run_id: int | None = None
 
     @classmethod
     def from_event(
@@ -76,6 +79,7 @@ class QueuePayload:
         *,
         feature: Feature,
         task_id: str,
+        check_run_id: int | None = None,
     ) -> QueuePayload:
         return cls(
             version=PAYLOAD_VERSION,
@@ -93,6 +97,7 @@ class QueuePayload:
             feature=feature.value,
             task_id=task_id,
             enqueued_at=datetime.now(UTC).isoformat(),
+            check_run_id=check_run_id,
         )
 
     def to_event(self) -> UnifiedEvent:

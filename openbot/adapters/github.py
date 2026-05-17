@@ -241,6 +241,54 @@ class GitHubAdapter(ChannelAdapter):
         data = await self._authed_json("GET", url, event)
         return str(data.get("permission") or "none")
 
+    async def create_check_run(
+        self,
+        event: UnifiedEvent,
+        name: str,
+        head_sha: str,
+        status: str = "in_progress",
+        started_at: str | None = None,
+        output: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new check run for the PR's head SHA.
+
+        Endpoint: POST /repos/{owner}/{repo}/check-runs
+        """
+        url = f"{self._api_base}/repos/{event.repo}/check-runs"
+        body = {
+            "name": name,
+            "head_sha": head_sha,
+            "status": status,
+        }
+        if started_at:
+            body["started_at"] = started_at
+        if output:
+            body["output"] = output
+        return await self._authed_json("POST", url, event, json_body=body)
+
+    async def update_check_run(
+        self,
+        event: UnifiedEvent,
+        check_run_id: int,
+        status: str = "completed",
+        conclusion: str | None = None,
+        completed_at: str | None = None,
+        output: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing check run.
+
+        Endpoint: PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}
+        """
+        url = f"{self._api_base}/repos/{event.repo}/check-runs/{check_run_id}"
+        body: dict[str, Any] = {"status": status}
+        if conclusion:
+            body["conclusion"] = conclusion
+        if completed_at:
+            body["completed_at"] = completed_at
+        if output:
+            body["output"] = output
+        return await self._authed_json("PATCH", url, event, json_body=body)
+
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:
             await self._http.aclose()

@@ -266,6 +266,7 @@ async def _process_entry(
             dispatch=new_dispatch,
             session_factory=session_factory,
             redis=redis,
+            check_run_id=payload.check_run_id,
         )
     except Exception:
         # `run_dispatch` already swallows its own errors; this is a

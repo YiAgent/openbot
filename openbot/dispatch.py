@@ -104,6 +104,7 @@ async def run_dispatch(
     dispatch: Dispatch,
     session_factory: async_sessionmaker[AsyncSession] | None,
     redis: redis_async.Redis | None,
+    check_run_id: int | None = None,
 ) -> None:
     """Load config → pre-flight → handler.
 
@@ -117,6 +118,20 @@ async def run_dispatch(
             "preflight_config_load_failed",
             extra={"delivery_id": event.delivery_id, "repo": event.repo},
         )
+        if check_run_id:
+            try:
+                await adapter.update_check_run(
+                    event,
+                    check_run_id,
+                    status="completed",
+                    conclusion="failure",
+                    output={
+                        "title": "Config Load Failed",
+                        "summary": "Failed to load `.openbot/config.yaml`. Check repository permissions.",
+                    },
+                )
+            except Exception:
+                _logger.exception("check_run_update_failed_on_config_load")
         return
 
     ctx = PreflightContext(
@@ -126,6 +141,7 @@ async def run_dispatch(
         adapter=adapter,
         session_factory=session_factory,
         redis=redis,
+        check_run_id=check_run_id,
     )
 
     try:
@@ -135,14 +151,57 @@ async def run_dispatch(
             "preflight_runner_crashed",
             extra={"delivery_id": event.delivery_id, "repo": event.repo},
         )
+        if check_run_id:
+            try:
+                await adapter.update_check_run(
+                    event,
+                    check_run_id,
+                    status="completed",
+                    conclusion="failure",
+                    output={
+                        "title": "Pre-flight Crash",
+                        "summary": "The pre-flight middleware runner crashed unexpectedly.",
+                    },
+                )
+            except Exception:
+                _logger.exception("check_run_update_failed_on_preflight_crash")
         return
 
     if decision.result is not MiddlewareResult.PROCEED:
         # Audit + comment already handled by run_preflight.
+        if check_run_id:
+            try:
+                await adapter.update_check_run(
+                    event,
+                    check_run_id,
+                    status="completed",
+                    conclusion="skipped",
+                    output={
+                        "title": "Analysis Skipped",
+                        "summary": f"Workflow blocked by middleware: `{decision.reason or 'unknown'}`",
+                    },
+                )
+            except Exception:
+                _logger.exception("check_run_update_failed_on_blocked")
         return
 
     try:
         await dispatch.handler(ctx)
+        # Success path: update check_run if present.
+        if check_run_id:
+            try:
+                await adapter.update_check_run(
+                    event,
+                    check_run_id,
+                    status="completed",
+                    conclusion="success",
+                    output={
+                        "title": "Analysis Complete",
+                        "summary": f"Workflow `{dispatch.feature.value}` finished successfully.",
+                    },
+                )
+            except Exception:
+                _logger.exception("check_run_update_failed_on_success")
     except Exception:
         _logger.exception(
             "workflow_handler_crashed",
@@ -152,6 +211,21 @@ async def run_dispatch(
                 "feature": dispatch.feature.value,
             },
         )
+        # Failure path: mark the check as failed.
+        if check_run_id:
+            try:
+                await adapter.update_check_run(
+                    event,
+                    check_run_id,
+                    status="completed",
+                    conclusion="failure",
+                    output={
+                        "title": "Handler Crash",
+                        "summary": f"The `{dispatch.feature.value}` handler raised an unhandled exception.",
+                    },
+                )
+            except Exception:
+                _logger.exception("check_run_update_failed_on_handler_crash")
 
 
 __all__ = ["build_preflight_chain", "run_dispatch"]
