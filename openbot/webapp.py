@@ -198,7 +198,7 @@ def health() -> dict[str, str]:
 @app.post("/webhook/github", status_code=status.HTTP_202_ACCEPTED)
 async def github_webhook(
     request: Request, background: BackgroundTasks
-) -> dict[str, str | int | bool]:
+) -> dict[str, str | int | bool | None]:
     """Receive a GitHub webhook.
 
     Order matters (PRD §5.1):
@@ -299,6 +299,35 @@ async def github_webhook(
             "relevant": event.is_relevant,
         }
 
+    # Immediate feedback (GitHub Check Run) for PR events.
+    # We create the check run synchronously in the webhook handler so the
+    # check_run_id is available for the worker's updates.
+    check_run_id: int | None = None
+    if event.pr_number and request.app.state.github_auth is not None:
+        # Extract head_sha from the PR payload.
+        head_sha = (event.raw.get("pull_request") or {}).get("head", {}).get("sha")
+        if head_sha:
+            try:
+                check_run = await adapter.create_check_run(
+                    event,
+                    name="OpenBot Analysis",
+                    head_sha=head_sha,
+                    output={
+                        "title": "Starting Analysis...",
+                        "summary": (
+                            f"OpenBot has received delivery `{event.delivery_id}` and is "
+                            f"dispatching the `{dispatch.feature.value}` workflow."
+                        ),
+                    },
+                )
+                check_run_id = check_run.get("id")
+            except Exception:
+                # Failing to create a check run shouldn't stop the workflow dispatch.
+                _logger.exception(
+                    "check_run_creation_failed",
+                    extra={"delivery_id": event.delivery_id, "repo": event.repo},
+                )
+
     # Hand off to the worker queue if Redis is configured; otherwise
     # fall back to FastAPI BackgroundTasks (dev / unit tests).
     #
@@ -310,7 +339,10 @@ async def github_webhook(
     if redis_client is not None:
         try:
             payload = QueuePayload.from_event(
-                event, feature=dispatch.feature, task_id=dispatch.task_id
+                event,
+                feature=dispatch.feature,
+                task_id=dispatch.task_id,
+                check_run_id=check_run_id,
             )
             entry_id = await enqueue(redis_client, payload)
             return {
@@ -321,6 +353,7 @@ async def github_webhook(
                 "task_id": dispatch.task_id,
                 "entry_id": entry_id,
                 "relevant": event.is_relevant,
+                "check_run_id": check_run_id,
             }
         except Exception:
             # Redis enqueue failed (RDB save in progress, OOM, etc.).
@@ -337,6 +370,7 @@ async def github_webhook(
         adapter,
         event,
         dispatch,
+        check_run_id,
     )
 
     return {
@@ -346,6 +380,7 @@ async def github_webhook(
         "feature": dispatch.feature.value,
         "task_id": dispatch.task_id,
         "relevant": event.is_relevant,
+        "check_run_id": check_run_id,
     }
 
 
@@ -354,6 +389,7 @@ async def _run_dispatch(
     adapter: GitHubAdapter,
     event: UnifiedEvent,
     dispatch: Dispatch,
+    check_run_id: int | None = None,
 ) -> None:
     """In-process dispatch — used as the fallback when Redis is absent.
 
@@ -372,4 +408,5 @@ async def _run_dispatch(
         dispatch=dispatch,
         session_factory=getattr(app_instance.state, "db_session_factory", None),
         redis=getattr(app_instance.state, "redis", None),
+        check_run_id=check_run_id,
     )
