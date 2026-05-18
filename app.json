@@ -11,7 +11,13 @@
     "web": { "quantity": 1, "size": "basic" },
     "worker": { "quantity": 1, "size": "eco" }
   },
-  "addons": [],
+  "addons": [
+    "papertrail:choklad",
+    "logtail:free",
+    "rediscloud:30",
+    "sentry:free",
+    "betteruptime:test"
+  ],
   "env": {
     "OPENBOT_GITHUB_WEBHOOK_SECRET": {
       "description": "HMAC-SHA-256 secret set when creating the GitHub App. Without it /webhook/github responds 503.",

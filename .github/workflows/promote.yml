@@ -1,0 +1,28 @@
+name: CD - Auto Promote to Production
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  promote:
+    name: Promote Staging to Production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Heroku CLI
+        run: curl https://cli-assets.heroku.com/install.sh | sh
+
+      - name: Promote Slug
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: |
+          # 1. 等待 Staging 自动构建完成（Heroku 默认在 push 到 main 时会触发 Staging 自动构建）
+          # 这里简单处理：直接尝试 Promote，Heroku 如果还在构建会返回错误，我们利用 Heroku CLI 的幂等性或重试逻辑。
+          # 理想情况下，Staging 应该配置为 "Wait for CI to pass before deploy"。
+
+          echo "Promoting openbot-staging to production..."
+          heroku pipelines:promote -a openbot-staging --to openbot

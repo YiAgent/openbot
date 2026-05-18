@@ -10,10 +10,33 @@ OpenBot v0.1 在 Heroku 上的部署形状：
 外部依赖（不走 Heroku addons）：
 
 - **Postgres**：Neon（`sslmode=require`，asyncpg 驱动）
-- **Redis**：Upstash（`rediss://`）
+- **Redis**：Redis Cloud Addon（`redis://`）
 - **Sandbox**：Daytona（`OPENBOT_SANDBOX_BACKEND=daytona`）
 
 LLM provider key、LangSmith key 等通用密钥由 `scripts/doppler-bootstrap-shared.sh` 从 `infra/prd` 同步过来，已在 `openbot/prd` 里。
+
+---
+
+## 监控与日志
+
+OpenBot 预置了以下监控工具：
+
+| 工具 | 用途 | 查看方式 |
+|------|------|----------|
+| **Papertrail** | 实时日志流 & 搜索 | `heroku addons:open papertrail` |
+| **Better Stack** | Uptime 监控 | `heroku addons:open betteruptime` |
+| **Sentry** | 异常上报 | `heroku addons:open sentry` |
+
+### Papertrail 使用建议
+
+Papertrail 默认会接收所有 Heroku logs。你可以通过以下命令在 CLI 查看：
+```bash
+heroku logs --tail -a openbot
+```
+或者打开 Web UI 进行搜索和过滤：
+```bash
+heroku addons:open papertrail
+```
 
 ---
 
