@@ -150,6 +150,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011"]  # asserts are the whole point
+# Evals predate PEP 695. Migrating to `class Foo[T]:` / `def f[T](...)` is
+# tangential to the openbot/ restructure and would touch stable tracing code.
+# Re-enable per file once each eval module is intentionally modernized.
+"evals/common/structured_finalizer.py" = ["UP046", "UP047"]
 
 [tool.ruff.format]
 quote-style = "double"
