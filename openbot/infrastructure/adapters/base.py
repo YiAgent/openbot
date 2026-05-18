@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
 from openbot.domain.events import UnifiedEvent
 
@@ -43,3 +44,14 @@ class ChannelAdapter(ABC):
         return `EventKind.UNKNOWN` for shapes we don't react to yet (e.g.
         push, star) — never raise on unknown event types.
         """
+
+    @abstractmethod
+    async def reply(self, event: UnifiedEvent, message: str) -> dict[str, Any]:
+        """Post a reply comment on the originating thread."""
+
+
+if TYPE_CHECKING:
+    from openbot.application.ports.channel_adapter import ChannelAdapterPort
+
+    def _check_channel_impl(adapter: ChannelAdapter) -> ChannelAdapterPort:
+        return adapter  # structural check: ABC ⊇ Protocol

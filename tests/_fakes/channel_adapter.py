@@ -1,0 +1,34 @@
+"""FakeChannelAdapter — accepts every signature, records replies."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any
+
+from openbot.domain.events import EventKind, UnifiedEvent
+
+
+@dataclass
+class FakeChannelAdapter:
+    name: str = "fake"
+    parsed_event: UnifiedEvent | None = None
+    replies: list[tuple[str | None, str]] = field(default_factory=list)
+
+    def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
+        return  # always accept
+
+    def parse_event(self, body: bytes, headers: Mapping[str, str]) -> UnifiedEvent:
+        if self.parsed_event is None:
+            return UnifiedEvent(
+                channel=self.name,
+                delivery_id="",
+                kind=EventKind.UNKNOWN,
+                repo="",
+                actor="",
+            )
+        return self.parsed_event
+
+    async def reply(self, event: UnifiedEvent, message: str) -> dict[str, Any]:
+        self.replies.append((event.resource_key, message))
+        return {"ok": True, "id": len(self.replies)}

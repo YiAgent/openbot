@@ -10,5 +10,6 @@ Each subsequent Port task appends one re-export here.
 
 from __future__ import annotations
 
+from openbot.application.ports.channel_adapter import ChannelAdapterPort  # noqa: F401
 from openbot.application.ports.dedup import DedupPort  # noqa: F401
 from openbot.application.ports.queue import QueuePort  # noqa: F401

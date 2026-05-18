@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 
 from openbot import __version__
+from openbot.application.ports.channel_adapter import ChannelAdapterPort
 from openbot.application.ports.dedup import DedupPort
 from openbot.application.ports.queue import QueuePort
 from openbot.core.settings import Settings, get_settings
@@ -119,7 +120,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.db_session_factory = db_session_factory
 
     app.state.github_auth = auth
-    app.state.github_adapter = (
+    github_adapter: ChannelAdapterPort | None = (
         GitHubAdapter(
             webhook_secret=settings.github_webhook_secret.get_secret_value(),
             auth=auth,
@@ -127,6 +128,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if settings.github_webhook_secret is not None
         else None
     )
+    app.state.github_adapter = github_adapter
     _logger.info(
         "openbot_startup",
         extra={
