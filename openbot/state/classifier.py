@@ -80,10 +80,13 @@ def classify(event: UnifiedEvent, current_state: State) -> EventClassification:
 
     kind = event.kind
 
-    # ── open / reopen ──
-    if kind in (EventKind.ISSUE_OPENED, EventKind.ISSUE_REOPENED):
+    # ── open / edit / reopen ──
+    if kind in (EventKind.ISSUE_OPENED, EventKind.ISSUE_EDITED, EventKind.ISSUE_REOPENED):
         if current_state is State.RUNNING:
-            # Duplicate / retried "opened" while a run is in flight — drop.
+            # ISSUE_EDITED on a running triage task = SUPERSEDE (spec §5.1).
+            # OPENED / REOPENED on running = IGNORE (retries).
+            if kind is EventKind.ISSUE_EDITED:
+                return EventClassification(intent=Intent.SUPERSEDE, next_state=State.RUNNING)
             return EventClassification(
                 intent=Intent.IGNORE, next_state=State.RUNNING, reason="already_running"
             )
@@ -105,6 +108,19 @@ def classify(event: UnifiedEvent, current_state: State) -> EventClassification:
         if current_state is State.RUNNING:
             return EventClassification(intent=Intent.SUPERSEDE, next_state=State.RUNNING)
         return EventClassification(intent=Intent.START, next_state=State.RUNNING)
+
+    # ── labeling ──
+    if kind in (EventKind.ISSUE_LABELED, EventKind.PR_LABELED):
+        # We only care about the "cancel-openbot" label (PRD §4.7 / spec §6.1).
+        # v0.1: locked literal. v0.2: from config.
+        label_name = (event.raw.get("label") or {}).get("name") if event.raw else None
+        if label_name == "cancel-openbot" and current_state is State.RUNNING:
+            return EventClassification(
+                intent=Intent.CANCEL, next_state=State.CLOSED, reason="cancel_label_added"
+            )
+        return EventClassification(
+            intent=Intent.IGNORE, next_state=current_state, reason="unrelated_label"
+        )
 
     # ── close / merge ──
     if kind in (EventKind.ISSUE_CLOSED, EventKind.PR_CLOSED, EventKind.PR_MERGED):

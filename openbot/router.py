@@ -176,7 +176,7 @@ def dispatch_for(event: UnifiedEvent) -> Dispatch | None:
             return None
         return Dispatch(Feature.TRIAGE, _resolve_handler(Feature.TRIAGE), task_id)
 
-    if event.kind in (EventKind.PR_OPENED, EventKind.PR_SYNCHRONIZED):
+    if event.kind in (EventKind.PR_OPENED, EventKind.PR_SYNCHRONIZED, EventKind.PR_REOPENED):
         if event.pr_number is None or event.installation_id is None:
             return None
         return Dispatch(Feature.REVIEW, _resolve_handler(Feature.REVIEW), task_id)
@@ -209,6 +209,16 @@ def dispatch_for(event: UnifiedEvent) -> Dispatch | None:
         if event.installation_id is None:
             return None
         return Dispatch(Feature.CHAT, _resolve_handler(Feature.CHAT), task_id)
+
+    if event.kind in (EventKind.ISSUE_LABELED, EventKind.ISSUE_UNLABELED):
+        if event.issue_number is None or event.installation_id is None:
+            return None
+        return Dispatch(Feature.TRIAGE, _resolve_handler(Feature.TRIAGE), task_id)
+
+    if event.kind in (EventKind.PR_LABELED, EventKind.PR_UNLABELED):
+        if event.pr_number is None or event.installation_id is None:
+            return None
+        return Dispatch(Feature.REVIEW, _resolve_handler(Feature.REVIEW), task_id)
 
     return None
 

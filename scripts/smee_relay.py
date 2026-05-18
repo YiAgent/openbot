@@ -235,8 +235,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "channel",
         nargs="?",
-        help="smee.io channel URL (e.g. https://smee.io/abc123). "
-        "Omit to use SMEE_CHANNEL env var.",
+        help="smee.io channel URL (e.g. https://smee.io/abc123). Omit to use SMEE_CHANNEL env var.",
     )
     p.add_argument(
         "--new",
@@ -285,8 +284,7 @@ async def _main() -> None:
 
     if not channel_url:
         print(
-            "error: provide a smee channel URL as argument, "
-            "set SMEE_CHANNEL env var, or use --new",
+            "error: provide a smee channel URL as argument, set SMEE_CHANNEL env var, or use --new",
             file=sys.stderr,
         )
         sys.exit(1)
