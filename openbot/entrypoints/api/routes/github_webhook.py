@@ -11,7 +11,6 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from openbot.application.dispatcher import run_dispatch
 from openbot.application.router import Dispatch, derive_run_id, dispatch_for, upgrade_dispatch
 from openbot.application.state.cancellation import signal as cancellation_signal
-from openbot.application.state.resource_lock import resource_lock
 from openbot.application.state.runs_repo import TransitionResult
 from openbot.domain.intents import Intent
 from openbot.infrastructure.adapters.base import SignatureError
@@ -20,8 +19,7 @@ from openbot.infrastructure.persistence import DedupOutcome, WebhookDedup
 from openbot.infrastructure.queue.payload import QueuePayload
 
 if TYPE_CHECKING:
-    import redis.asyncio as redis_async
-
+    from openbot.application.ports.resource_lock import ResourceLockPort
     from openbot.application.ports.runs_repo import RunsRepoPort
     from openbot.domain.events import UnifiedEvent
 
@@ -148,7 +146,7 @@ async def github_webhook(
                 event=event,
                 dispatch=dispatch,
                 runs_repo=runs_repo,
-                redis=redis_client,
+                resource_lock=request.app.state.resource_lock,
             )
         except Exception:
             # State-machine path failed (DB unreachable, etc.). Audit
@@ -292,7 +290,7 @@ async def _classify_and_upgrade(
     event: UnifiedEvent,
     dispatch: Dispatch,
     runs_repo: RunsRepoPort,
-    redis: redis_async.Redis | None,
+    resource_lock: ResourceLockPort,
 ) -> tuple[Dispatch, TransitionResult]:
     """Run the state-machine classifier under the per-resource lock.
 
@@ -321,7 +319,7 @@ async def _classify_and_upgrade(
     serial = time.monotonic_ns()
     new_run_id = derive_run_id(event.resource_key, serial)
 
-    async with resource_lock(redis, event.resource_key) as _acquired:
+    async with resource_lock.lock(event.resource_key) as _acquired:
         result = await runs_repo.transition(event=event, new_run_id=new_run_id)
 
     upgraded = upgrade_dispatch(

@@ -13,4 +13,5 @@ from __future__ import annotations
 from openbot.application.ports.channel_adapter import ChannelAdapterPort  # noqa: F401
 from openbot.application.ports.dedup import DedupPort  # noqa: F401
 from openbot.application.ports.queue import QueuePort  # noqa: F401
+from openbot.application.ports.resource_lock import ResourceLockPort  # noqa: F401
 from openbot.application.ports.runs_repo import RunsRepoPort  # noqa: F401
