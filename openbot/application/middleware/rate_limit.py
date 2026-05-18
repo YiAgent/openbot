@@ -82,24 +82,6 @@ async def _resolve_actor_role(ctx: PreflightContext) -> str:
     return role
 
 
-async def _incr_with_ttl(redis: object, key: str, ttl_seconds: int) -> int:
-    """Atomic INCR + EXPIRE in one pipeline. Returns the new count.
-
-    Pipeline (transaction=False) is cheaper than MULTI/EXEC and
-    sufficient here — we don't need atomicity across the two ops,
-    just want to issue them in one round-trip.
-
-    Re-applies EXPIRE on every call (cheap, idempotent). Avoids the
-    pitfall where a counter is created, never expires (because EXPIRE
-    NX missed), and grows unbounded.
-    """
-    pipe = redis.pipeline(transaction=False)  # type: ignore[attr-defined]
-    pipe.incr(key)
-    pipe.expire(key, ttl_seconds)
-    results = await pipe.execute()
-    return int(results[0])
-
-
 class RateLimitMiddleware:
     """Per-user-per-day + per-repo-per-hour limits for the chat feature."""
 
@@ -111,11 +93,11 @@ class RateLimitMiddleware:
         if ctx.dispatch.feature is not Feature.CHAT:
             return MiddlewareDecision.proceed()
 
-        if ctx.redis is None:
-            # No Redis = no rate-limit (slice A's dedup falls open the
+        if ctx.rate_limiter is None:
+            # No rate limiter = no rate-limit (slice A's dedup falls open the
             # same way). Audit at INFO; production sets OPENBOT_REDIS_URL.
             _logger.info(
-                "rate_limit_skipped_no_redis",
+                "rate_limit_skipped_no_rate_limiter",
                 extra={"delivery_id": ctx.event.delivery_id, "repo": ctx.event.repo},
             )
             return MiddlewareDecision.proceed()
@@ -136,14 +118,16 @@ class RateLimitMiddleware:
             day = now.strftime("%Y-%m-%d")
             user_key = f"rl:user:{actor}:{day}"
             try:
-                count = await _incr_with_ttl(ctx.redis, user_key, 86400)
+                count_allowed = await ctx.rate_limiter.check(
+                    user_key, limit=cfg.per_user_per_day, window_seconds=86400
+                )
             except Exception:
                 _logger.exception(
-                    "rate_limit_user_incr_failed_fail_open",
+                    "rate_limit_user_check_failed_fail_open",
                     extra={"actor": actor, "repo": ctx.event.repo},
                 )
-                count = 0  # fall-open
-            if count > cfg.per_user_per_day:
+                count_allowed = True  # fall-open
+            if not count_allowed:
                 return MiddlewareDecision(
                     result=MiddlewareResult.BLOCKED,
                     reason="rate_limit_per_user_per_day",
@@ -167,14 +151,16 @@ class RateLimitMiddleware:
             hour = now.strftime("%Y-%m-%d-%H")
             repo_key = f"rl:repo:{repo}:{hour}"
             try:
-                count = await _incr_with_ttl(ctx.redis, repo_key, 3600)
+                repo_allowed = await ctx.rate_limiter.check(
+                    repo_key, limit=cfg.per_repo_per_hour, window_seconds=3600
+                )
             except Exception:
                 _logger.exception(
-                    "rate_limit_repo_incr_failed_fail_open",
+                    "rate_limit_repo_check_failed_fail_open",
                     extra={"repo": repo},
                 )
-                count = 0  # fall-open
-            if count > cfg.per_repo_per_hour:
+                repo_allowed = True  # fall-open
+            if not repo_allowed:
                 return MiddlewareDecision(
                     result=MiddlewareResult.BLOCKED,
                     reason="rate_limit_per_repo_per_hour",

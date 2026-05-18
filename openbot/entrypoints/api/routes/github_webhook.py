@@ -361,4 +361,5 @@ async def _run_dispatch(
         redis=getattr(app_instance.state, "redis", None),
         check_run_id=check_run_id,
         audit=audit,
+        rate_limiter=getattr(app_instance.state, "rate_limiter", None),
     )

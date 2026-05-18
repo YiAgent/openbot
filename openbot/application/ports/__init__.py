@@ -15,5 +15,6 @@ from openbot.application.ports.cancellation import CancellationPort  # noqa: F40
 from openbot.application.ports.channel_adapter import ChannelAdapterPort  # noqa: F401
 from openbot.application.ports.dedup import DedupPort  # noqa: F401
 from openbot.application.ports.queue import QueuePort  # noqa: F401
+from openbot.application.ports.rate_limiter import RateLimiterPort  # noqa: F401
 from openbot.application.ports.resource_lock import ResourceLockPort  # noqa: F401
 from openbot.application.ports.runs_repo import RunsRepoPort  # noqa: F401

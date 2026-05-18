@@ -41,6 +41,7 @@ from openbot.infrastructure.persistence import (
     make_session_factory,
 )
 from openbot.infrastructure.persistence.cancellation_redis import RedisCancellation
+from openbot.infrastructure.persistence.rate_limiter_redis import RedisRateLimiter
 from openbot.infrastructure.persistence.resource_lock_redis import RedisResourceLock
 from openbot.infrastructure.queue.enqueue import RedisStreamQueue
 
@@ -111,6 +112,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.dedup = dedup
     queue: QueuePort = RedisStreamQueue(redis_client)
     app.state.queue = queue
+    rate_limiter = RedisRateLimiter(redis_client)
+    app.state.rate_limiter = rate_limiter
 
     db_engine: AsyncEngine | None = None
     db_session_factory: async_sessionmaker[AsyncSession] | None = None

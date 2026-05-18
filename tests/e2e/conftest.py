@@ -45,6 +45,7 @@ from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.infrastructure.adapters.github import GitHubAdapter
 from openbot.infrastructure.config_loader import EffectiveConfig, baked_in_defaults
 from openbot.infrastructure.persistence.models import AuditLog, Base
+from openbot.infrastructure.persistence.rate_limiter_redis import RedisRateLimiter
 
 if TYPE_CHECKING:
     from openbot.application.router import Dispatch
@@ -204,6 +205,7 @@ class WebhookHarness:
             dispatch=decision,
             session_factory=self.session_factory,
             redis=self.redis,
+            rate_limiter=RedisRateLimiter(self.redis),
         )
 
     async def audit_rows(self, *, delivery_id: str | None = None) -> Sequence[AuditLog]:
