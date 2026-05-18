@@ -40,6 +40,7 @@ from openbot.infrastructure.persistence import (
     make_engine,
     make_session_factory,
 )
+from openbot.infrastructure.persistence.cancellation_redis import RedisCancellation
 from openbot.infrastructure.persistence.resource_lock_redis import RedisResourceLock
 from openbot.infrastructure.queue.enqueue import RedisStreamQueue
 
@@ -104,6 +105,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         make_client(settings.redis_url) if settings.redis_url else None
     )
     app.state.redis = redis_client
+    app.state.cancellation = RedisCancellation(redis_client)
     app.state.resource_lock = RedisResourceLock(redis_client)
     dedup: DedupPort = WebhookDedup(redis_client)
     app.state.dedup = dedup

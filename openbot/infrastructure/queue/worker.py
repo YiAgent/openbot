@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING, Final
 
 from openbot.application.dispatcher import run_dispatch
 from openbot.application.router import dispatch_for, upgrade_dispatch
+
+# TODO(phase-2c): route through CancellationPort once worker composition root lands.
 from openbot.application.state.cancellation import (
     deregister as cancellation_deregister,
 )

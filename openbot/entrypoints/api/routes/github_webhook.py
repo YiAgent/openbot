@@ -10,7 +10,6 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 
 from openbot.application.dispatcher import run_dispatch
 from openbot.application.router import Dispatch, derive_run_id, dispatch_for, upgrade_dispatch
-from openbot.application.state.cancellation import signal as cancellation_signal
 from openbot.application.state.runs_repo import TransitionResult
 from openbot.domain.intents import Intent
 from openbot.infrastructure.adapters.base import SignatureError
@@ -139,6 +138,7 @@ async def github_webhook(
     # exercise the original v1 path without crashing.
     runs_repo = getattr(request.app.state, "runs_repo", None)
     redis_client = getattr(request.app.state, "redis", None)
+    cancellation = getattr(request.app.state, "cancellation", None)
     transition_result: TransitionResult | None = None
     if runs_repo is not None and event.resource_key is not None:
         try:
@@ -182,9 +182,9 @@ async def github_webhook(
             # signal from the receive side too (in addition to the
             # worker doing it on dequeue) so even a long queue lag
             # can't delay the cancel.
-            if transition_result.prev_run_id and redis_client is not None:
+            if transition_result.prev_run_id and cancellation is not None:
                 try:
-                    await cancellation_signal(redis_client, transition_result.prev_run_id)
+                    await cancellation.signal(transition_result.prev_run_id)
                 except Exception:
                     _logger.exception(
                         "cancellation_signal_failed",

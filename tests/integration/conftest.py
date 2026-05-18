@@ -31,6 +31,7 @@ from openbot.infrastructure.persistence import (
     make_engine,
     make_session_factory,
 )
+from openbot.infrastructure.persistence.cancellation_redis import RedisCancellation
 from openbot.infrastructure.persistence.models import State, TaskRun
 from openbot.infrastructure.persistence.resource_lock_redis import RedisResourceLock
 from openbot.infrastructure.persistence.runs_repo_impl import SqlRunsRepo
@@ -96,6 +97,7 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     from openbot.entrypoints.api.app import app
 
     app.state.redis = redis_fake
+    app.state.cancellation = RedisCancellation(redis_fake)
     app.state.resource_lock = RedisResourceLock(redis_fake)
     app.state.dedup = WebhookDedup(redis_fake)
     app.state.queue = RedisStreamQueue(redis_fake)
