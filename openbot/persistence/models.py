@@ -22,11 +22,12 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     CheckConstraint,
     DateTime,
     Enum,
@@ -42,12 +43,22 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 # import via openbot.llm. The Feature StrEnum lives in openbot.llm.router.
 from openbot.llm.router import Feature
 
+# Re-export the state-machine enums so callers can write
+# ``from openbot.persistence.models import State, Intent`` and avoid the
+# import-cycle dance of pulling from ``openbot.state`` (which imports
+# models via runs_repo). The enums themselves live in
+# ``openbot.state.intents`` — this is just an alias for ergonomics.
+from openbot.state.intents import Intent, State
+
 __all__ = [
     "AuditLog",
     "Base",
     "CostMeter",
     "CostStatus",
     "Feature",
+    "Intent",
+    "State",
+    "TaskRun",
     "Workflow",
     "WorkflowPhase",
 ]
@@ -193,3 +204,85 @@ class AuditLog(Base):
         Index("ix_audit_log_repo_created_at", "repo", "created_at"),
         Index("ix_audit_log_phase_created_at", "phase", "created_at"),
     )
+
+
+class TaskRun(Base):
+    """Per-resource state row driving the input-side state machine.
+
+    One row per ``resource_key`` (e.g. ``github:owner/repo:pr:42``). The
+    classifier reads this row to decide START / SUPERSEDE / CANCEL /
+    IGNORE; the receive side CAS-writes a new version after enqueue.
+
+    ``row_version`` is the SQLAlchemy ``version_id_col`` — every UPDATE
+    increments it and refuses the write if another transaction beat us
+    between SELECT and UPDATE. Coupled with the per-resource Redis lock
+    in ``state.resource_lock`` this gives belt-and-suspenders mutual
+    exclusion: the lock prevents the contention in practice, the version
+    column catches the rare lock-miss (lock TTL expiry mid-transaction,
+    redis flap) instead of silently double-writing.
+
+    ``last_event_seq`` is the monotonic high-water mark — for GitHub we
+    use the ``updated_at`` epoch-ms of ``issue`` / ``pull_request``.
+    Events with ``event.event_seq < last_event_seq`` are out-of-order
+    arrivals; the classifier's caller drops them with
+    ``Intent.IGNORE`` + ``reason="stale_event"``.
+
+    The row is intentionally a single source of truth for the state
+    transition trace: history rows live in ``audit_log.details`` JSON
+    rather than a separate table — keeps the schema flat for v0.1.
+    """
+
+    __tablename__ = "task_runs"
+
+    # Composite resource id (channel:repo:type:n). 320 chars supports
+    # full GitHub `owner/repo` (max 140) + the longest reasonable issue
+    # number (10 digits) + namespace prefix with comfortable headroom.
+    resource_key: Mapped[str] = mapped_column(String(320), primary_key=True)
+
+    state: Mapped[State] = mapped_column(
+        Enum(State, native_enum=False, length=16, validate_strings=True),
+        default=State.IDLE,
+    )
+
+    # Active run identifier. NULL when state is IDLE/CLOSED. 64 chars to
+    # match cost_meter.task_id, since the worker still threads run_id
+    # through to cost_meter rows during the v0.1 transition.
+    current_run_id: Mapped[str | None] = mapped_column(String(64), default=None)
+
+    # Monotonic per-resource sequence — epoch-ms of the most recent
+    # event we've applied. ``BigInteger`` is required: ``Integer`` (32-bit
+    # signed) tops out in 2038 and SQLite happily silently truncates.
+    last_event_seq: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+
+    last_intent: Mapped[Intent | None] = mapped_column(
+        Enum(Intent, native_enum=False, length=16, validate_strings=True),
+        default=None,
+    )
+
+    # GitHub X-GitHub-Delivery of the most recent applied event — for
+    # debugging "which delivery moved this row".
+    last_delivery_id: Mapped[str | None] = mapped_column(String(64), default=None)
+
+    # SQLAlchemy version_id_col. Incremented atomically on every UPDATE
+    # that goes through the ORM mapper; mismatched version raises
+    # StaleDataError, which ``runs_repo.transition`` translates into a
+    # bounded CAS retry.
+    row_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    # ``__mapper_args__`` is SQLAlchemy declarative metadata, not instance
+    # state; the ClassVar annotation tells ruff (and any static reader)
+    # that the dict is intentionally shared across the class.
+    __mapper_args__: ClassVar[dict[str, Any]] = {
+        "version_id_col": row_version,
+        # We update ``row_version`` ourselves inside the transition helper
+        # rather than letting the mapper auto-increment; cleaner semantics
+        # when the helper is the only writer of this table.
+        "version_id_generator": False,
+    }
+
+    __table_args__ = (Index("ix_task_runs_state_updated_at", "state", "updated_at"),)

@@ -39,7 +39,11 @@ from openbot.persistence import (
     make_session_factory,
 )
 from openbot.queue import QueuePayload, enqueue
-from openbot.router import dispatch_for
+from openbot.router import Dispatch, derive_run_id, dispatch_for, upgrade_dispatch
+from openbot.state import Intent
+from openbot.state.cancellation import signal as cancellation_signal
+from openbot.state.resource_lock import resource_lock
+from openbot.state.runs_repo import TransitionResult, transition
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -299,6 +303,68 @@ async def github_webhook(
             "relevant": event.is_relevant,
         }
 
+    # State-machine classification: only runs when both Postgres (for
+    # ``task_runs``) and a stateful resource_key (issue/PR number, not
+    # ping/push) are present. The two-tier guard means dev mode
+    # without docker-compose and integration tests without a DB still
+    # exercise the original v1 path without crashing.
+    db_factory = getattr(request.app.state, "db_session_factory", None)
+    redis_client = getattr(request.app.state, "redis", None)
+    transition_result: TransitionResult | None = None
+    if db_factory is not None and event.resource_key is not None:
+        try:
+            dispatch, transition_result = await _classify_and_upgrade(
+                event=event,
+                dispatch=dispatch,
+                session_factory=db_factory,
+                redis=redis_client,
+            )
+        except Exception:
+            # State-machine path failed (DB unreachable, etc.). Audit
+            # and fall back to the v1 path so we never drop a webhook
+            # because of a Postgres flap.
+            _logger.exception(
+                "state_machine_transition_failed",
+                extra={"delivery_id": event.delivery_id, "repo": event.repo},
+            )
+            transition_result = None
+        else:
+            # IGNORE → no work to enqueue; the row (if any) was already
+            # written under the lock. Still return 202 to GitHub.
+            if transition_result.classification.intent is Intent.IGNORE:
+                _logger.info(
+                    "state_machine_ignored",
+                    extra={
+                        "delivery_id": event.delivery_id,
+                        "resource_key": event.resource_key,
+                        "reason": transition_result.classification.reason,
+                    },
+                )
+                return {
+                    "status": "ignored",
+                    "delivery_id": event.delivery_id,
+                    "kind": event.kind.value,
+                    "intent": transition_result.classification.intent.value,
+                    "reason": transition_result.classification.reason,
+                    "resource_key": event.resource_key,
+                }
+            # SUPERSEDE / CANCEL: signal the prior run so workers on
+            # any dyno can stop early at their next checkpoint. We
+            # signal from the receive side too (in addition to the
+            # worker doing it on dequeue) so even a long queue lag
+            # can't delay the cancel.
+            if transition_result.prev_run_id and redis_client is not None:
+                try:
+                    await cancellation_signal(redis_client, transition_result.prev_run_id)
+                except Exception:
+                    _logger.exception(
+                        "cancellation_signal_failed",
+                        extra={
+                            "delivery_id": event.delivery_id,
+                            "prev_run_id": transition_result.prev_run_id,
+                        },
+                    )
+
     # Immediate feedback (GitHub Check Run) for PR events.
     # We create the check run synchronously in the webhook handler so the
     # check_run_id is available for the worker's updates.
@@ -335,7 +401,8 @@ async def github_webhook(
     # webapp restart because the entry persists in Redis until a
     # worker XACKs it. The fallback exists so `make dev` without
     # docker-compose still gives a working bot.
-    redis_client = getattr(request.app.state, "redis", None)
+    # ``redis_client`` was already read above for the state-machine
+    # path; reuse it here so we don't double-tap ``app.state``.
     if redis_client is not None:
         try:
             payload = QueuePayload.from_event(
@@ -343,6 +410,11 @@ async def github_webhook(
                 feature=dispatch.feature,
                 task_id=dispatch.task_id,
                 check_run_id=check_run_id,
+                intent=dispatch.intent,
+                run_id=dispatch.run_id,
+                prev_run_id=dispatch.prev_run_id,
+                resource_key=dispatch.resource_key,
+                event_seq=dispatch.event_seq,
             )
             entry_id = await enqueue(redis_client, payload)
             return {
@@ -382,6 +454,63 @@ async def github_webhook(
         "relevant": event.is_relevant,
         "check_run_id": check_run_id,
     }
+
+
+async def _classify_and_upgrade(
+    *,
+    event: UnifiedEvent,
+    dispatch: Dispatch,
+    session_factory: async_sessionmaker[AsyncSession],
+    redis: redis_async.Redis | None,
+) -> tuple[Dispatch, TransitionResult]:
+    """Run the state-machine classifier under the per-resource lock.
+
+    Three concerns are bundled here so the webhook handler stays
+    flat:
+
+      1. ``resource_lock`` keeps two concurrent deliveries for the
+         same resource from racing past each other into a double-START.
+      2. ``runs_repo.transition`` does the CAS-guarded write under
+         the same transaction.
+      3. ``upgrade_dispatch`` carries the classifier's intent +
+         run identity into the Dispatch so the queue payload and the
+         eventual handler invocation see them.
+
+    The function commits the session on success — a single transaction
+    boundary covers both the read-prior-row and the write-new-row so
+    that the SQLAlchemy ``version_id_col`` CAS check sees the same
+    snapshot. Returning the ``TransitionResult`` lets the caller
+    branch on ``Intent.IGNORE`` without re-reading the row.
+    """
+    assert event.resource_key is not None  # gated by the caller
+    # ``time.monotonic_ns()`` gives a strictly monotonic per-process
+    # serial so two simultaneous classified events for the same
+    # resource end up with distinct ``run_id`` hashes even when the
+    # clock granularity is coarse.
+    import time
+
+    serial = time.monotonic_ns()
+    new_run_id = derive_run_id(event.resource_key, serial)
+
+    async with (
+        resource_lock(redis, event.resource_key) as _acquired,
+        session_factory() as session,
+    ):
+        result = await transition(session, event=event, new_run_id=new_run_id)
+        # transition() does NOT commit — keeping the boundary here
+        # means the CAS check and the row write see the same
+        # transaction snapshot.
+        await session.commit()
+
+    upgraded = upgrade_dispatch(
+        dispatch,
+        intent=result.classification.intent.value,
+        run_id=result.run_id or new_run_id,
+        prev_run_id=result.prev_run_id,
+        event_seq=event.event_seq,
+        resource_key=event.resource_key,
+    )
+    return upgraded, result
 
 
 async def _run_dispatch(
