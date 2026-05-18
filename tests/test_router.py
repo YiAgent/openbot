@@ -93,11 +93,14 @@ def test_task_id_fits_cost_meter_column() -> None:
     assert len(derive_task_id(_event())) <= 64
 
 
-# ───── ISSUE_OPENED → triage ─────
+# ───── ISSUE_OPENED / ISSUE_EDITED / ISSUE_REOPENED → triage ─────
 
 
-def test_dispatches_issue_opened_to_triage() -> None:
-    d = dispatch_for(_event(kind=EventKind.ISSUE_OPENED))
+@pytest.mark.parametrize(
+    "kind", [EventKind.ISSUE_OPENED, EventKind.ISSUE_EDITED, EventKind.ISSUE_REOPENED]
+)
+def test_dispatches_issue_events_to_triage(kind: EventKind) -> None:
+    d = dispatch_for(_event(kind=kind))
     assert d is not None
     assert d.feature is Feature.TRIAGE
     assert d.handler is maybe_run_triage
@@ -118,10 +121,12 @@ def test_skips_issue_missing_issue_number() -> None:
     assert d is None
 
 
-# ───── PR_OPENED / PR_SYNCHRONIZED → review ─────
+# ───── PR_OPENED / PR_SYNCHRONIZED / PR_REOPENED → review ─────
 
 
-@pytest.mark.parametrize("kind", [EventKind.PR_OPENED, EventKind.PR_SYNCHRONIZED])
+@pytest.mark.parametrize(
+    "kind", [EventKind.PR_OPENED, EventKind.PR_SYNCHRONIZED, EventKind.PR_REOPENED]
+)
 def test_dispatches_pr_to_review(kind: EventKind) -> None:
     d = dispatch_for(_event(kind=kind, issue_number=None, pr_number=42))
     assert d is not None
@@ -169,6 +174,36 @@ def test_skips_fix_when_assignee_field_missing() -> None:
     """Defensive: malformed payload with no `assignee` → safe no-op, not a crash."""
     d = dispatch_for(_event(kind=EventKind.ISSUE_ASSIGNED, raw={}))
     assert d is None
+
+
+# ───── labeling ─────
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [EventKind.ISSUE_LABELED, EventKind.ISSUE_UNLABELED],
+)
+def test_dispatches_issue_labeling_to_triage(kind: EventKind) -> None:
+    """Labeling events must reach the state machine so it can detect
+    'cancel-openbot' and trigger cancellation. We route to TRIAGE as
+    the base feature for issues.
+    """
+    d = dispatch_for(_event(kind=kind))
+    assert d is not None
+    assert d.feature is Feature.TRIAGE
+    assert d.handler is maybe_run_triage
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [EventKind.PR_LABELED, EventKind.PR_UNLABELED],
+)
+def test_dispatches_pr_labeling_to_review(kind: EventKind) -> None:
+    """Same as issue labeling but routed to REVIEW for PRs."""
+    d = dispatch_for(_event(kind=kind, issue_number=None, pr_number=42))
+    assert d is not None
+    assert d.feature is Feature.REVIEW
+    assert d.handler is maybe_run_review
 
 
 # ───── @openbot comment → chat ─────

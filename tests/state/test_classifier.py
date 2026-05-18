@@ -27,6 +27,7 @@ def _event(
     actor_type: str = "User",
     comment_body: str | None = None,
     assignee_type: str | None = None,
+    label_name: str | None = None,
     issue_number: int | None = 1,
     pr_number: int | None = None,
 ) -> UnifiedEvent:
@@ -38,6 +39,8 @@ def _event(
     raw: dict[str, object] = {}
     if assignee_type is not None:
         raw["assignee"] = {"type": assignee_type}
+    if label_name is not None:
+        raw["label"] = {"name": label_name}
     return UnifiedEvent(
         channel="github",
         delivery_id="d-1",
@@ -96,6 +99,23 @@ _CASES = [
         "already_running",
         id="issue_opened_while_running_ignored",
     ),
+    # ── issue.edited ──
+    pytest.param(
+        _event(EventKind.ISSUE_EDITED),
+        State.IDLE,
+        Intent.START,
+        State.RUNNING,
+        None,
+        id="issue_edited_from_idle_starts",
+    ),
+    pytest.param(
+        _event(EventKind.ISSUE_EDITED),
+        State.RUNNING,
+        Intent.SUPERSEDE,
+        State.RUNNING,
+        None,
+        id="issue_edited_while_running_supersedes",
+    ),
     # ── issue.reopened ──
     pytest.param(
         _event(EventKind.ISSUE_REOPENED),
@@ -129,6 +149,31 @@ _CASES = [
         State.IDLE,
         "non_bot_assignee",
         id="assigned_to_human_ignored",
+    ),
+    # ── labeling ──
+    pytest.param(
+        _event(EventKind.ISSUE_LABELED, label_name="cancel-openbot"),
+        State.RUNNING,
+        Intent.CANCEL,
+        State.CLOSED,
+        "cancel_label_added",
+        id="cancel_label_added_while_running_cancels",
+    ),
+    pytest.param(
+        _event(EventKind.ISSUE_LABELED, label_name="bug"),
+        State.RUNNING,
+        Intent.IGNORE,
+        State.RUNNING,
+        "unrelated_label",
+        id="unrelated_label_ignored",
+    ),
+    pytest.param(
+        _event(EventKind.ISSUE_UNLABELED, label_name="cancel-openbot"),
+        State.RUNNING,
+        Intent.IGNORE,
+        State.RUNNING,
+        "unhandled_kind",
+        id="unlabeling_ignored",
     ),
     # ── issue.closed / pr.closed / pr.merged ──
     pytest.param(
@@ -187,6 +232,14 @@ _CASES = [
         State.RUNNING,
         None,
         id="pr_reopened_from_closed_starts",
+    ),
+    pytest.param(
+        _event(EventKind.PR_LABELED, pr_number=42, issue_number=None, label_name="cancel-openbot"),
+        State.RUNNING,
+        Intent.CANCEL,
+        State.CLOSED,
+        "cancel_label_added",
+        id="pr_cancel_label_added_while_running_cancels",
     ),
     pytest.param(
         _event(EventKind.PR_SYNCHRONIZED, pr_number=42, issue_number=None),
