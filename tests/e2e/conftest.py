@@ -226,7 +226,18 @@ async def webhook_harness(
     ``harness.config`` instead of hitting api.github.com for the YAML
     file. Tests override fields via ``dataclasses.replace`` on the
     frozen ``EffectiveConfig``.
+
+    Demos 1-9 assert against the real workflow handlers
+    (``maybe_run_triage`` / ``_review`` / ``_fix`` / ``_chat``); the
+    process-wide default ``OPENBOT_DEBUG_ECHO=1`` would route them to
+    the debug-echo handler instead. Disable here so the demos see
+    the workflow callables they originally targeted.
     """
+    from openbot.config import get_settings
+
+    monkeypatch.setenv("OPENBOT_DEBUG_ECHO_ENABLED", "false")
+    get_settings.cache_clear()
+
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

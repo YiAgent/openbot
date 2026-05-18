@@ -2,12 +2,30 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 
+from openbot.config import get_settings
 from openbot.events import EventKind, UnifiedEvent
 from openbot.llm.router import Feature
 from openbot.router import _CHAT_PREFIX_DEFAULT, derive_task_id, dispatch_for
 from openbot.workflows import maybe_run_chat, maybe_run_fix, maybe_run_review, maybe_run_triage
+
+
+@pytest.fixture(autouse=True)
+def _disable_debug_echo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Opt every router test out of debug-echo so handler-identity asserts
+    see the real workflow callables. The slice-wide default is
+    ``OPENBOT_DEBUG_ECHO=1``; that's correct for production rollout but
+    would force every assert here to compare against ``debug_echo_handler``.
+    """
+    monkeypatch.setenv("OPENBOT_DEBUG_ECHO_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 def _event(
