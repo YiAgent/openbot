@@ -111,6 +111,22 @@ class Settings(BaseSettings):
 
     debug: bool = Field(default=False, description="Verbose logs; never enable in production.")
 
+    # ─── Debug echo (state-machine slice) ───
+    # Routes every classified webhook to the debug echo handler — see
+    # ``openbot.handlers.debug_echo``. Default ``True`` so the
+    # initial state-machine slice has visible end-to-end output before
+    # real workflow logic lands. Flip to ``False`` once triage/review/fix/
+    # chat handlers are wired through real LLM calls (PRD section 4.1 to 4.4).
+    debug_echo_enabled: bool = Field(
+        default=True,
+        description=(
+            "When True, all classified webhooks are routed to the "
+            "debug_echo handler instead of the real workflow stubs. "
+            "Useful for verifying the state-machine pipeline end-to-end "
+            "before agent logic lands."
+        ),
+    )
+
     # ─── Observability ───
     # Sentry is opt-in cross-cutting exception capture. Domain events
     # (workflow STARTED / COMPLETED / SKIPPED) stay in audit_log; Sentry
