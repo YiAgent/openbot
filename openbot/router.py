@@ -169,7 +169,7 @@ def dispatch_for(event: UnifiedEvent) -> Dispatch | None:
 
     task_id = derive_task_id(event)
 
-    if event.kind is EventKind.ISSUE_OPENED:
+    if event.kind in (EventKind.ISSUE_OPENED, EventKind.ISSUE_EDITED, EventKind.ISSUE_REOPENED):
         if event.issue_number is None or event.installation_id is None:
             # PRD §5.1 promises both for authentic issue events; bail
             # rather than schedule a workflow that will crash later.

@@ -46,13 +46,12 @@ async def test_opened_starts_task(sm: SMHarness) -> None:
 # ── I-05: issues.reopened → fresh or already_running ──────────────────────
 
 
-async def test_reopened_from_idle_router_gap(sm: SMHarness) -> None:
-    """I-05 (fresh, router gap): ISSUE_REOPENED is not in dispatch_for's routing table.
+async def test_reopened_from_idle_starts_triage(sm: SMHarness) -> None:
+    """I-05 (fresh): ISSUE_REOPENED from idle → triage START (same as ISSUE_OPENED).
 
-    ``dispatch_for`` handles ISSUE_OPENED → TRIAGE but has no case for
-    ISSUE_REOPENED, so the webapp returns ``status=ignored`` before the
-    state machine is ever called. Testing the actual "reopen → START" SM
-    path requires extending the router first.
+    ``dispatch_for`` routes ISSUE_OPENED, ISSUE_EDITED, and ISSUE_REOPENED
+    all to TRIAGE.  A reopened issue with no prior run lands in RUNNING state
+    via the START intent — identical to a fresh ISSUE_OPENED.
     """
     body = issue_body("reopened", number=42)
     resp = await sm.client.post(
@@ -61,11 +60,12 @@ async def test_reopened_from_idle_router_gap(sm: SMHarness) -> None:
         headers=sign(body, event="issues", delivery="d-05-fresh"),
     )
 
-    # Router returns None for ISSUE_REOPENED → webapp ignores it.
     assert resp.status_code == 202
-    assert resp.json()["status"] == "ignored"
-    assert await sm.queue_len() == 0
-    assert await sm.db_state(_ISSUE_RK) == State.IDLE
+    data = resp.json()
+    assert data["status"] == "accepted", f"expected accepted, got: {data}"
+    assert data["feature"] == "triage"
+    assert await sm.queue_len() == 1
+    assert await sm.db_state(_ISSUE_RK) == State.RUNNING
 
 
 async def test_opened_twice_second_ignored_already_running(sm: SMHarness) -> None:

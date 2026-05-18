@@ -57,6 +57,7 @@ _SIGNATURE_PREFIX: Final = "sha256="
 # apart.
 _EVENT_TABLE: Final[dict[tuple[str, str], EventKind]] = {
     ("issues", "opened"): EventKind.ISSUE_OPENED,
+    ("issues", "edited"): EventKind.ISSUE_EDITED,
     ("issues", "assigned"): EventKind.ISSUE_ASSIGNED,
     ("issues", "closed"): EventKind.ISSUE_CLOSED,
     ("issues", "reopened"): EventKind.ISSUE_REOPENED,

@@ -18,7 +18,7 @@ class EventKind(StrEnum):
     """The subset of channel events OpenBot v0.1 reacts to.
 
     PRD §4 triggers:
-      - triage  → ISSUE_OPENED, ISSUE_REOPENED
+      - triage  → ISSUE_OPENED, ISSUE_EDITED, ISSUE_REOPENED
       - review  → PR_OPENED, PR_SYNCHRONIZED, PR_REOPENED
       - fix     → ISSUE_ASSIGNED (assignee includes the bot)
       - chat    → ISSUE_COMMENT_CREATED, PR_REVIEW_COMMENT_CREATED
@@ -26,6 +26,7 @@ class EventKind(StrEnum):
     """
 
     ISSUE_OPENED = "issue.opened"
+    ISSUE_EDITED = "issue.edited"
     ISSUE_ASSIGNED = "issue.assigned"
     ISSUE_COMMENT_CREATED = "issue_comment.created"
     ISSUE_CLOSED = "issue.closed"
