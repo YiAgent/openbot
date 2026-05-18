@@ -12,7 +12,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from openbot.config import Settings, get_settings
+from openbot.core.settings import Settings, get_settings
 
 
 @pytest.fixture(autouse=True)

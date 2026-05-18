@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     import redis.asyncio as redis_async
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-_logger = logging.getLogger("openbot.webapp")
+_logger = logging.getLogger("openbot.entrypoints.api.app")
 
 
 def _build_auth(settings: Settings) -> GitHubAppAuth | None:

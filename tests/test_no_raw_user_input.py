@@ -11,15 +11,15 @@ A developer writing one of these into a workflow / LLM module:
 
 Each of the above feeds raw user-controlled text directly into a
 prompt context, bypassing the HTML-escape + tagged-block wrapping
-provided by ``openbot.llm.sanitize.wrap_user_input``. The wrapper
+provided by ``openbot.infrastructure.llm.sanitize.wrap_user_input``. The wrapper
 exists so the model treats user content as data, not as instructions.
 
 Heuristic
 =========
 
 For every ``event.{comment_body|title|body}`` attribute access or
-``event.raw[...]`` subscript inside files under ``openbot/workflows/``
-or ``openbot/llm/``, we flag if it appears inside one of three
+``event.raw[...]`` subscript inside files under ``openbot/application/workflows/``
+or ``openbot/infrastructure/llm/``, we flag if it appears inside one of three
 "prompt-construction shapes":
 
   1. an f-string (``ast.JoinedStr``),

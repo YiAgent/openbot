@@ -507,7 +507,7 @@ async def _main() -> None:
             _logger.error("server not reachable at %s: %s", args.server_url, exc)
             _logger.error(
                 "start server: OPENBOT_GITHUB_WEBHOOK_SECRET=<secret> "
-                "uv run uvicorn openbot.webapp:app --port 8000"
+                "uv run uvicorn openbot.entrypoints.api.app:app --port 8000"
             )
             sys.exit(1)
 

@@ -2,9 +2,9 @@
 
 Shared by:
 
-  - ``openbot.webapp``           in-process fallback when Redis is absent
+  - ``openbot.entrypoints.api.app``           in-process fallback when Redis is absent
                                  (dev / unit tests via FastAPI BackgroundTask).
-  - ``openbot.queue.worker``     Redis Stream consumer, after deserialization.
+  - ``openbot.infrastructure.queue.worker``     Redis Stream consumer, after deserialization.
 
 Both paths arrive at this module with the same five inputs:
 adapter, event, dispatch decision, session-factory handle, Redis handle.
@@ -39,15 +39,15 @@ from openbot.application.middleware import (
     SanitizeInputsMiddleware,
     run_preflight,
 )
-from openbot.config_repo import load_for_repo
+from openbot.infrastructure.config_loader import load_for_repo
 
 if TYPE_CHECKING:
     import redis.asyncio as redis_async
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from openbot.adapters.github import GitHubAdapter
     from openbot.application.router import Dispatch
-    from openbot.events import UnifiedEvent
+    from openbot.domain.events import UnifiedEvent
+    from openbot.infrastructure.adapters.github import GitHubAdapter
 
 _logger = logging.getLogger(__name__)
 
@@ -113,11 +113,11 @@ async def run_dispatch(
     and the worker has already (or will) XACK.
     """
     try:
-        # Respect monkeypatching of ``openbot.dispatch.load_for_repo``
+        # Respect monkeypatching of ``openbot.application.dispatcher.load_for_repo``
         # (the pre-move canonical path used by test fixtures).  At call
         # time all modules are fully loaded, so the sys.modules lookup is
-        # safe even though openbot.dispatch imports this module.
-        _dispatch_shim = _sys.modules.get("openbot.dispatch")
+        # safe even though openbot.application.dispatcher imports this module.
+        _dispatch_shim = _sys.modules.get("openbot.application.dispatcher")
         _loader = (
             getattr(_dispatch_shim, "load_for_repo", None) if _dispatch_shim is not None else None
         ) or load_for_repo
@@ -154,8 +154,8 @@ async def run_dispatch(
     )
 
     try:
-        # Respect monkeypatching of ``openbot.dispatch.run_preflight``.
-        _dispatch_shim2 = _sys.modules.get("openbot.dispatch")
+        # Respect monkeypatching of ``openbot.application.dispatcher.run_preflight``.
+        _dispatch_shim2 = _sys.modules.get("openbot.application.dispatcher")
         _preflight_fn = (
             getattr(_dispatch_shim2, "run_preflight", None) if _dispatch_shim2 is not None else None
         ) or run_preflight

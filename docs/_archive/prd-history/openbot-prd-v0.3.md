@@ -190,7 +190,7 @@ chat:
 **实现：agent middleware 模式**
 
 ```python
-# openbot/middleware/cancellation.py
+# openbot.application.middleware/cancellation.py
 async def check_cancellation_before_step(state, runtime):
     if os.environ.get("OPENBOT_KILL_SWITCH") == "true":
         return STOP_WITH_MESSAGE("Global kill switch engaged")
@@ -782,7 +782,7 @@ git clone https://github.com/yiwang/openbot && cd openbot
 | Day | Task | Owner |
 |---|---|---|
 | Day 1 | 创建 `openbot` repo，拷贝 Open SWE 骨架，重命名 module | Yi |
-| Day 1-2 | LiteLLM 接入，写 `openbot/llm/router.py` | Yi |
+| Day 1-2 | LiteLLM 接入，写 `openbot.infrastructure.llm.model_router.py` | Yi |
 | Day 2-3 | Postgres schema migration（cost_meter / audit_log / thread_metadata / rate_limit_counter） | Yi |
 | Day 3-4 | ChannelAdapter ABC + GitHubAdapter 最小实现（verify + parse + reply） | Yi |
 | Day 4-5 | GitHub App `setup.sh` interactive wizard | Yi |

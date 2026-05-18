@@ -6,11 +6,16 @@ from collections.abc import Iterator
 
 import pytest
 
-from openbot.config import get_settings
-from openbot.events import EventKind, UnifiedEvent
-from openbot.llm.router import Feature
-from openbot.router import _CHAT_PREFIX_DEFAULT, derive_task_id, dispatch_for
-from openbot.workflows import maybe_run_chat, maybe_run_fix, maybe_run_review, maybe_run_triage
+from openbot.application.router import _CHAT_PREFIX_DEFAULT, derive_task_id, dispatch_for
+from openbot.application.workflows import (
+    maybe_run_chat,
+    maybe_run_fix,
+    maybe_run_review,
+    maybe_run_triage,
+)
+from openbot.core.settings import get_settings
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.llm.model_router import Feature
 
 
 @pytest.fixture(autouse=True)

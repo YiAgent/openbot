@@ -31,8 +31,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from openbot.events import UnifiedEvent
-from openbot.persistence.models import WorkflowPhase
+from openbot.domain.events import UnifiedEvent
+from openbot.infrastructure.persistence.models import WorkflowPhase
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -40,9 +40,9 @@ if TYPE_CHECKING:
     import redis.asyncio as redis_async
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from openbot.adapters.github import GitHubAdapter
-    from openbot.config_repo import EffectiveConfig
-    from openbot.router import Dispatch
+    from openbot.application.router import Dispatch
+    from openbot.infrastructure.adapters.github import GitHubAdapter
+    from openbot.infrastructure.config_loader import EffectiveConfig
 
 _logger = logging.getLogger(__name__)
 
@@ -216,7 +216,7 @@ async def _write_block_audit(
         return
     # Local import: keeps the module importable in unit tests that
     # don't pull in SQLAlchemy.
-    from openbot.persistence.repository import AuditLogRepo
+    from openbot.infrastructure.persistence.repository import AuditLogRepo
 
     workflow_value = ctx.dispatch.feature.value
     details = {

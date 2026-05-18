@@ -39,16 +39,16 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-# Re-export Feature so models can reference the enum without a circular
-# import via openbot.llm. The Feature StrEnum lives in openbot.llm.router.
-from openbot.llm.router import Feature
-
 # Re-export the state-machine enums so callers can write
-# ``from openbot.persistence.models import State, Intent`` and avoid the
-# import-cycle dance of pulling from ``openbot.state`` (which imports
+# ``from openbot.infrastructure.persistence.models import State, Intent`` and avoid the
+# import-cycle dance of pulling from ``openbot.application.state`` (which imports
 # models via runs_repo). The enums themselves live in
-# ``openbot.state.intents`` — this is just an alias for ergonomics.
-from openbot.state.intents import Intent, State
+# ``openbot.domain.intents`` — this is just an alias for ergonomics.
+from openbot.domain.intents import Intent, State
+
+# Re-export Feature so models can reference the enum without a circular
+# import via openbot.infrastructure.llm. The Feature StrEnum lives in openbot.infrastructure.llm.model_router.
+from openbot.infrastructure.llm.model_router import Feature
 
 __all__ = [
     "AuditLog",
@@ -125,7 +125,7 @@ class CostMeter(Base):
       - `openbot audit` CLI (v0.2) — usage reports
 
     Written by:
-      - `openbot.llm.complete()` after every successful LLM call
+      - `openbot.infrastructure.llm.complete()` after every successful LLM call
 
     `cost_status` tells the reader why `cost_usd` might be 0:
     a real cheap call (`RECORDED`) vs pricing-data-missing (`PRICED_ZERO`)

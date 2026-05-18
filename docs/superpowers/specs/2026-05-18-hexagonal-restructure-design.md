@@ -16,7 +16,7 @@ Today the `openbot/` package mixes seven top-level modules (`webapp.py`, `router
 
 ## 2. Constraints (locked)
 
-- **Two process entrypoints stay**: `web: uvicorn openbot.webapp:app` and `worker: python -m openbot.queue.runner` (per `Procfile`). One CLI entrypoint (`setup_wizard`) joins them.
+- **Two process entrypoints stay**: `web: uvicorn openbot.entrypoints.api.app:app` and `worker: python -m openbot.infrastructure.queue.runner` (per `Procfile`). One CLI entrypoint (`setup_wizard`) joins them.
 - **PRD §3 sandbox boundary is locked**: `evals.sandboxes.factory` stays under `evals/`, not under `openbot/`. This restructure does not touch evals.
 - **Harness spec §3 M3 invariant**: web and worker MUST share the same middleware chain via a single module. The new `application/dispatcher.py` keeps this contract.
 - **PRD §4 terminology**: docs use "triage workflow", "review workflow", etc. The package keeps `workflows/` (not `use_cases/`) to preserve doc references.
@@ -157,8 +157,8 @@ openbot/
 ### Procfile change
 
 ```diff
-- web: uvicorn openbot.webapp:app --host 0.0.0.0 --port $PORT ...
-- worker: python -m openbot.queue.runner
+- web: uvicorn openbot.entrypoints.api.app:app --host 0.0.0.0 --port $PORT ...
+- worker: python -m openbot.infrastructure.queue.runner
 + web: uvicorn openbot.entrypoints.api.app:app --host 0.0.0.0 --port $PORT ...
 + worker: python -m openbot.entrypoints.worker
 ```
@@ -166,7 +166,7 @@ openbot/
 ### Makefile change
 
 ```diff
-- APP ?= openbot.webapp:app
+- APP ?= openbot.entrypoints.api.app:app
 + APP ?= openbot.entrypoints.api.app:app
 ```
 
@@ -239,7 +239,7 @@ async def main() -> None:
 Tests today mirror `openbot/` sub-packages — `tests/middleware/`, `tests/state/`, etc. The migration:
 
 1. **Mirror the new tree**: `tests/domain/`, `tests/application/middleware/`, `tests/infrastructure/persistence/`, etc.
-2. **Mechanical sed pass**: `from openbot.middleware.X` → `from openbot.application.middleware.X`. Run once across all test files.
+2. **Mechanical sed pass**: `from openbot.application.middleware.X` → `from openbot.application.middleware.X`. Run once across all test files.
 3. **Add port-based test doubles**: For each Port, provide a `FakeDedup`, `FakeAudit`, etc. in `tests/_fakes/`. Existing tests that monkey-patch concrete classes get the option to switch to fakes — but the migration does NOT force this rewrite; we accept mixed style for v0.1 and tighten in v0.2.
 4. **Entrypoint smoke tests**: Add `tests/entrypoints/api/test_app_boot.py` and `tests/entrypoints/worker/test_main_boot.py` that verify each process imports cleanly with all DI wiring resolved.
 

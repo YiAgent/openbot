@@ -2,7 +2,7 @@
 
 Replaces FastAPI ``BackgroundTasks`` with a persistent queue so workflows
 survive a worker restart. The webhook handler enqueues; one or more
-worker processes (``python -m openbot.queue.runner``) consume.
+worker processes (``python -m openbot.entrypoints.worker``) consume.
 
 Slice D delivers the **single-process** variant per spec §9.3:
 ``asyncio.gather`` over N consumers in one process, default N=4

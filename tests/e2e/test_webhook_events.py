@@ -31,11 +31,11 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from openbot.config import get_settings
-from openbot.events import UnifiedEvent
-from openbot.llm.router import Feature
-from openbot.router import derive_task_id
-from openbot.webapp import app
+from openbot.application.router import derive_task_id
+from openbot.core.settings import get_settings
+from openbot.domain.events import UnifiedEvent
+from openbot.entrypoints.api.app import app
+from openbot.infrastructure.llm.model_router import Feature
 from tests.e2e._github_payloads import (
     WEBHOOK_SECRET,
     issue_assigned_to_bot,

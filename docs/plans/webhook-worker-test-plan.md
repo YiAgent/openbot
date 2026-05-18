@@ -2,7 +2,7 @@
 
 > **状态**: Draft — v0.1 设计阶段  
 > **范围**: `openbot/` webhook 入口 → Redis dispatch → worker workflow  
-> **依赖文档**: `docs/prd/openbot-prd.md` §3, §4, §8; `openbot/dispatch.py` middleware chain
+> **依赖文档**: `docs/prd/openbot-prd.md` §3, §4, §8; `openbot.application.dispatcher.py` middleware chain
 
 ---
 

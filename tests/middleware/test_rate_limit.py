@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock
 import fakeredis.aioredis
 import pytest
 
-from openbot.events import EventKind
-from openbot.llm.router import Feature
-from openbot.middleware import MiddlewareResult
-from openbot.middleware.rate_limit import RateLimitMiddleware
+from openbot.application.middleware import MiddlewareResult
+from openbot.application.middleware.rate_limit import RateLimitMiddleware
+from openbot.domain.events import EventKind
+from openbot.infrastructure.llm.model_router import Feature
 from tests.middleware.conftest import make_ctx, make_event
 
 

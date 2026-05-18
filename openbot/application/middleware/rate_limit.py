@@ -42,8 +42,8 @@ from openbot.application.middleware.preflight import (
     MiddlewareResult,
     PreflightContext,
 )
-from openbot.llm.router import Feature
-from openbot.persistence.models import WorkflowPhase
+from openbot.infrastructure.llm.model_router import Feature
+from openbot.infrastructure.persistence.models import WorkflowPhase
 
 _logger = logging.getLogger(__name__)
 

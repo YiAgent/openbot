@@ -1,6 +1,6 @@
 """Single source of truth for OpenBot eval tunables.
 
-Mirrors :mod:`openbot.config`'s ``pydantic-settings`` style so the eval
+Mirrors :mod:`openbot.core.settings`'s ``pydantic-settings`` style so the eval
 side never re-invents env parsing. Modules import :func:`get_eval_config`
 (or use the re-exported env-name constants where they need a literal
 ``os.environ.get(...)`` call site, e.g. for chain-resolution semantics
@@ -110,7 +110,7 @@ _NormalizedSandboxKind = Annotated[SandboxKind, BeforeValidator(_normalize_kind)
 # Each section is its own ``BaseSettings`` so per-field ``validation_alias``
 # binds straight to the OPENBOT_* env name (no need for a class-wide prefix
 # that would force renaming). All sections are frozen, ignore extras, and
-# accept ``.env`` overrides — same shape as :class:`openbot.config.Settings`.
+# accept ``.env`` overrides — same shape as :class:`openbot.core.settings.Settings`.
 
 _SETTINGS_CONFIG = SettingsConfigDict(
     env_file=".env",

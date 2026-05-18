@@ -185,7 +185,7 @@ async def check_schema(postgres_url: str) -> bool:
 
     # Importing the ORM models registers them on `Base.metadata`. Doctor
     # is a CLI script — circular-import risk is zero here.
-    from openbot.persistence.models import AuditLog, CostMeter
+    from openbot.infrastructure.persistence.models import AuditLog, CostMeter
 
     required_tables = (AuditLog.__tablename__, CostMeter.__tablename__)
 

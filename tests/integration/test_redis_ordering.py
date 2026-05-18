@@ -29,7 +29,7 @@ receive side.
 
 from __future__ import annotations
 
-from openbot.queue import STREAM_NAME, deserialize_payload
+from openbot.infrastructure.queue import STREAM_NAME, deserialize_payload
 from tests.state_machine._payloads import _REPO, issue_body, pr_body, sign
 
 from .conftest import SMHarness

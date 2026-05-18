@@ -19,7 +19,7 @@ toggle gate, and the chain-end audit-start:
 
 Slice D replaced FastAPI BackgroundTasks with a Redis Stream worker.
 
-The actual chain order lives in `openbot.dispatch.build_preflight_chain`
+The actual chain order lives in `openbot.application.dispatcher.build_preflight_chain`
 so a single PR can change it without touching the middleware modules.
 """
 

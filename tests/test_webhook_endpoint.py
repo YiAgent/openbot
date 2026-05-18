@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from openbot.config import get_settings
-from openbot.webapp import app
+from openbot.core.settings import get_settings
+from openbot.entrypoints.api.app import app
 
 _SECRET = "test-secret"
 
@@ -137,10 +137,11 @@ def test_webhook_dedup_fallback_open_when_redis_unset(
 async def test_webhook_enqueues_when_redis_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With Redis wired, the webhook XADDs to openbot:workflows instead of
+    """With Redis wired, the webhook XADDs to openbot.application.workflows instead of
     invoking the in-process BackgroundTask path. Slice D behavior."""
     import fakeredis.aioredis  # local import: dev-only dep
-    from openbot.queue.payload import STREAM_NAME, deserialize_payload
+
+    from openbot.infrastructure.queue.payload import STREAM_NAME, deserialize_payload
 
     monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SECRET)
     get_settings.cache_clear()

@@ -26,8 +26,8 @@ The existing test suite has full L1 coverage (classifier, cancellation, runs_rep
 The app creates its backends in `lifespan`. We patch before lifespan runs:
 
 ```python
-monkeypatch.setattr("openbot.webapp.make_client", lambda _url: fake_redis)
-monkeypatch.setattr("openbot.webapp.make_engine", lambda _url, **kw: aiosqlite_engine)
+monkeypatch.setattr("openbot.entrypoints.api.app.make_client", lambda _url: fake_redis)
+monkeypatch.setattr("openbot.entrypoints.api.app.make_engine", lambda _url, **kw: aiosqlite_engine)
 ```
 
 Both patches are set via `monkeypatch` so they are automatically reverted after each test. `get_settings.cache_clear()` is called before and after to prevent settings bleed between tests.
@@ -61,7 +61,7 @@ class SMHarness:
     session_factory: async_sessionmaker[AsyncSession]
 
     # Assertion helpers
-    async def queue_len(self) -> int          # XLEN openbot:workflows
+    async def queue_len(self) -> int          # XLEN openbot.application.workflows
     async def db_state(self, rk: str) -> State
     async def db_run_id(self, rk: str) -> str | None
     async def cancel_flag(self, run_id: str) -> bool

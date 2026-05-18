@@ -7,7 +7,7 @@ once the middleware chain returns PROCEED.
 This package currently exposes only ``debug_echo`` — the placeholder
 handler used while the state-machine slice is being verified end-to-end
 on the live worker. The real workflow handlers continue to live under
-``openbot.workflows.{triage,review,fix,chat}`` and become reachable
+``openbot.application.workflows.{triage,review,fix,chat}`` and become reachable
 again when ``OPENBOT_DEBUG_ECHO=0``.
 """
 

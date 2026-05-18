@@ -195,7 +195,7 @@ Redis 计数器：`rl:user:{user_id}:{YYYY-MM-DD}` 与 `rl:repo:{repo_id}:{YYYY-
 | **Env kill** | `OPENBOT_KILL_SWITCH=true` | 紧急停整个实例 | 立即（worker 下一 step 退出） |
 
 ```python
-# openbot/middleware/cancellation.py（核心逻辑）
+# openbot.application.middleware/cancellation.py（核心逻辑）
 async def check_cancellation_before_step(state, runtime):
     if os.environ.get("OPENBOT_KILL_SWITCH") == "true":
         return STOP_WITH_MESSAGE("Global kill switch engaged")

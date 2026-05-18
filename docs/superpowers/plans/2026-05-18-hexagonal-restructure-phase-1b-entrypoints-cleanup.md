@@ -21,9 +21,9 @@ The 541-line `webapp.py` decomposes into:
 - Create: `openbot/entrypoints/api/deps.py`
 - Create: `openbot/entrypoints/api/routes/health.py`
 - Create: `openbot/entrypoints/api/routes/github_webhook.py`
-- Replace: `openbot/webapp.py` with a shim that re-exports `app`
+- Replace: `openbot.entrypoints.api.app.py` with a shim that re-exports `app`
 
-- [ ] **Step 1: Read `openbot/webapp.py` fully**
+- [ ] **Step 1: Read `openbot.entrypoints.api.app.py` fully**
 
 Identify these regions:
 - **Section A**: imports + `_build_auth` helper
@@ -138,7 +138,7 @@ from openbot.entrypoints.api.app import app  # noqa: F401
 - [ ] **Step 7: Verify FastAPI app boots with both routes**
 
 ```bash
-uv run python -c "from openbot.webapp import app; print('routes:', sorted(r.path for r in app.routes))"
+uv run python -c "from openbot.entrypoints.api.app import app; print('routes:', sorted(r.path for r in app.routes))"
 ```
 Expected: output includes `/health` and `/webhook/github`.
 
@@ -161,27 +161,27 @@ git commit -m "refactor(entrypoints): split webapp.py into entrypoints/api/{app,
 ## Task 1.8: Move worker runner to `entrypoints/worker/`
 
 **Files:**
-- Move: `openbot/infrastructure/queue/runner.py` → `openbot/entrypoints/worker/__main__.py`
+- Move: `openbot.entrypoints.worker.__main__.py` → `openbot/entrypoints/worker/__main__.py`
 - Keep `openbot.infrastructure.queue.worker` (the loop body) in place
 
 - [ ] **Step 1: Move**
 
 ```bash
-git mv openbot/infrastructure/queue/runner.py openbot/entrypoints/worker/__main__.py
+git mv openbot.entrypoints.worker.__main__.py openbot/entrypoints/worker/__main__.py
 ```
 
 - [ ] **Step 2: Back-compat shim at the old infra path**
 
-The Procfile still references `openbot.queue.runner` (flip is in Phase 4 Task 4.1). Leave a shim:
+The Procfile still references `openbot.infrastructure.queue.runner` (flip is in Phase 4 Task 4.1). Leave a shim:
 
-Create `openbot/infrastructure/queue/runner.py`:
+Create `openbot.entrypoints.worker.__main__.py`:
 
 ```python
 """Phase-1 shim — kept until Procfile flips in Phase 4."""
 from openbot.entrypoints.worker.__main__ import *  # noqa: F401,F403
 ```
 
-The Task 1.4 shim at `openbot/queue/__init__.py` re-exports `runner`, so `python -m openbot.queue.runner` still resolves through both layers.
+The Task 1.4 shim at `openbot.infrastructure.queue/__init__.py` re-exports `runner`, so `python -m openbot.infrastructure.queue.runner` still resolves through both layers.
 
 - [ ] **Step 3: Dry-run boot the worker**
 
@@ -209,18 +209,18 @@ git commit -m "refactor(entrypoints): move worker runner to entrypoints/worker/_
 ## Task 1.9: Move setup wizard to `entrypoints/cli/`
 
 **Files:**
-- Move: `openbot/setup_wizard.py` → `openbot/entrypoints/cli/setup_wizard.py`
+- Move: `openbot.entrypoints.cli.setup_wizard.py` → `openbot.entrypoints.cli.setup_wizard.py`
 - Add shim
 
 - [ ] **Step 1: Move**
 
 ```bash
-git mv openbot/setup_wizard.py openbot/entrypoints/cli/setup_wizard.py
+git mv openbot.entrypoints.cli.setup_wizard.py openbot.entrypoints.cli.setup_wizard.py
 ```
 
 - [ ] **Step 2: Shim**
 
-Create `openbot/setup_wizard.py`:
+Create `openbot.entrypoints.cli.setup_wizard.py`:
 
 ```python
 """Phase-1 shim — re-export from entrypoints.cli.setup_wizard."""
@@ -342,9 +342,9 @@ git commit -m "ci: add import-linter contract for hexagonal layers"
 All callers should now resolve directly to the new paths. We delete the shims to prevent silent regressions.
 
 **Files:**
-- Delete: `openbot/events.py`, `openbot/config.py`, `openbot/router.py`, `openbot/dispatch.py`, `openbot/obs.py`, `openbot/config_repo.py`, `openbot/setup_wizard.py`, `openbot/webapp.py`
-- Delete: `openbot/adapters/`, `openbot/persistence/`, `openbot/queue/`, `openbot/llm/`, `openbot/middleware/`, `openbot/state/`, `openbot/handlers/`, `openbot/workflows/` (shim dirs only)
-- Delete: `openbot/infrastructure/queue/runner.py` (last remaining infra-level shim)
+- Delete: `openbot.domain.events.py`, `openbot.core.settings.py`, `openbot.application.router.py`, `openbot.application.dispatcher.py`, `openbot.infrastructure.observability.py`, `openbot.infrastructure.config_loader.py`, `openbot.entrypoints.cli.setup_wizard.py`, `openbot.entrypoints.api.app.py`
+- Delete: `openbot.infrastructure.adapters/`, `openbot.infrastructure.persistence/`, `openbot.infrastructure.queue/`, `openbot.infrastructure.llm/`, `openbot.application.middleware/`, `openbot.application.state/`, `openbot.application.handlers/`, `openbot.application.workflows/` (shim dirs only)
+- Delete: `openbot.entrypoints.worker.__main__.py` (last remaining infra-level shim)
 - Modify: every consumer across `openbot/` and `tests/` to use new paths
 
 - [ ] **Step 1: Save the rewrite script**
@@ -360,26 +360,26 @@ set -euo pipefail
 
 mapping=(
   "openbot.entrypoints.cli.setup_wizard|openbot.entrypoints.cli.setup_wizard"
-  "openbot.infrastructure.queue.runner|openbot.entrypoints.worker.__main__"
-  "openbot.application.state.intents|openbot.domain.intents"
-  "openbot.state.intents|openbot.domain.intents"
-  "openbot.state|openbot.application.state"
-  "openbot.handlers|openbot.application.handlers"
-  "openbot.workflows|openbot.application.workflows"
-  "openbot.middleware|openbot.application.middleware"
-  "openbot.adapters|openbot.infrastructure.adapters"
-  "openbot.persistence|openbot.infrastructure.persistence"
-  "openbot.queue|openbot.infrastructure.queue"
-  "openbot.llm.router|openbot.infrastructure.llm.model_router"
-  "openbot.llm|openbot.infrastructure.llm"
-  "openbot.obs|openbot.infrastructure.observability"
-  "openbot.config_repo|openbot.infrastructure.config_loader"
-  "openbot.config|openbot.core.settings"
-  "openbot.events|openbot.domain.events"
-  "openbot.dispatch|openbot.application.dispatcher"
-  "openbot.router|openbot.application.router"
-  "openbot.webapp|openbot.entrypoints.api.app"
-  "openbot.setup_wizard|openbot.entrypoints.cli.setup_wizard"
+  "openbot.entrypoints.worker.__main__|openbot.entrypoints.worker.__main__"
+  "openbot.domain.intents|openbot.domain.intents"
+  "openbot.domain.intents|openbot.domain.intents"
+  "openbot.application.state|openbot.application.state"
+  "openbot.application.handlers|openbot.application.handlers"
+  "openbot.application.workflows|openbot.application.workflows"
+  "openbot.application.middleware|openbot.application.middleware"
+  "openbot.infrastructure.adapters|openbot.infrastructure.adapters"
+  "openbot.infrastructure.persistence|openbot.infrastructure.persistence"
+  "openbot.infrastructure.queue|openbot.infrastructure.queue"
+  "openbot.infrastructure.llm.model_router|openbot.infrastructure.llm.model_router"
+  "openbot.infrastructure.llm|openbot.infrastructure.llm"
+  "openbot.infrastructure.observability|openbot.infrastructure.observability"
+  "openbot.infrastructure.config_loader|openbot.infrastructure.config_loader"
+  "openbot.core.settings|openbot.core.settings"
+  "openbot.domain.events|openbot.domain.events"
+  "openbot.application.dispatcher|openbot.application.dispatcher"
+  "openbot.application.router|openbot.application.router"
+  "openbot.entrypoints.api.app|openbot.entrypoints.api.app"
+  "openbot.entrypoints.cli.setup_wizard|openbot.entrypoints.cli.setup_wizard"
 )
 
 files=$(git ls-files '*.py' '*.toml' '*.md' Procfile Makefile)
@@ -410,23 +410,23 @@ The script rewrites shim files too — fine because we're about to delete them.
 - [ ] **Step 3: Delete every shim**
 
 ```bash
-rm -f openbot/events.py \
-      openbot/config.py \
-      openbot/router.py \
-      openbot/dispatch.py \
-      openbot/obs.py \
-      openbot/config_repo.py \
-      openbot/setup_wizard.py \
-      openbot/webapp.py
-rm -rf openbot/adapters \
-       openbot/persistence \
-       openbot/queue \
-       openbot/llm \
-       openbot/middleware \
-       openbot/state \
-       openbot/handlers \
-       openbot/workflows
-rm -f openbot/infrastructure/queue/runner.py
+rm -f openbot.domain.events.py \
+      openbot.core.settings.py \
+      openbot.application.router.py \
+      openbot.application.dispatcher.py \
+      openbot.infrastructure.observability.py \
+      openbot.infrastructure.config_loader.py \
+      openbot.entrypoints.cli.setup_wizard.py \
+      openbot.entrypoints.api.app.py
+rm -rf openbot.infrastructure.adapters \
+       openbot.infrastructure.persistence \
+       openbot.infrastructure.queue \
+       openbot.infrastructure.llm \
+       openbot.application.middleware \
+       openbot.application.state \
+       openbot.application.handlers \
+       openbot.application.workflows
+rm -f openbot.entrypoints.worker.__main__.py
 rm -f scripts/rewrite_imports.sh
 ```
 

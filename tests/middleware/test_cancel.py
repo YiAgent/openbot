@@ -7,15 +7,15 @@ from unittest.mock import AsyncMock
 import fakeredis.aioredis
 import pytest
 
-from openbot.events import EventKind
-from openbot.llm.router import Feature
-from openbot.middleware import MiddlewareResult
-from openbot.middleware.cancel import (
+from openbot.application.middleware import MiddlewareResult
+from openbot.application.middleware.cancel import (
     CancelCommentMiddleware,
     CancelLabelMiddleware,
     KillSwitchMiddleware,
 )
-from openbot.persistence.models import WorkflowPhase
+from openbot.domain.events import EventKind
+from openbot.infrastructure.llm.model_router import Feature
+from openbot.infrastructure.persistence.models import WorkflowPhase
 from tests.middleware.conftest import make_ctx, make_event
 
 # ───── KillSwitchMiddleware ─────

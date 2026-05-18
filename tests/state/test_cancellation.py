@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator
 import fakeredis.aioredis
 import pytest
 
-from openbot.state.cancellation import (
+from openbot.application.state.cancellation import (
     RunCancelledError,
     checkpoint,
     clear_for_tests,

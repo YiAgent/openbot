@@ -10,9 +10,9 @@
 
 ## Task 4.1: Flip `Procfile` and `Makefile` to new entry points
 
-The web/worker process strings still point at `openbot.webapp:app` and `openbot.queue.runner`. Phase 1b's Task 1.8 left a back-compat shim at `openbot/infrastructure/queue/runner.py` until this PR — Task 4.1 deletes it after the flip.
+The web/worker process strings still point at `openbot.entrypoints.api.app:app` and `openbot.infrastructure.queue.runner`. Phase 1b's Task 1.8 left a back-compat shim at `openbot.entrypoints.worker.__main__.py` until this PR — Task 4.1 deletes it after the flip.
 
-Wait — Phase 1b Task 1.11 already deleted `openbot/infrastructure/queue/runner.py`. So the `Procfile` has been broken since Phase 1 if it still says `python -m openbot.queue.runner`. Verify before assuming.
+Wait — Phase 1b Task 1.11 already deleted `openbot.entrypoints.worker.__main__.py`. So the `Procfile` has been broken since Phase 1 if it still says `python -m openbot.infrastructure.queue.runner`. Verify before assuming.
 
 **Files:**
 - Modify: `Procfile`
@@ -27,17 +27,17 @@ cat Procfile
 You should see something like:
 
 ```
-web: uvicorn openbot.webapp:app --host 0.0.0.0 --port $PORT ...
-worker: python -m openbot.queue.runner
+web: uvicorn openbot.entrypoints.api.app:app --host 0.0.0.0 --port $PORT ...
+worker: python -m openbot.infrastructure.queue.runner
 ```
 
-If either line still resolves locally (`uv run python -c "import openbot.webapp"`), the Phase 1b shim cleanup left an unrelated cache or path — investigate before flipping.
+If either line still resolves locally (`uv run python -c "import openbot.entrypoints.api.app"`), the Phase 1b shim cleanup left an unrelated cache or path — investigate before flipping.
 
 - [ ] **Step 2: Update `Procfile`**
 
 ```diff
-- web: uvicorn openbot.webapp:app --host 0.0.0.0 --port $PORT --log-level info
-- worker: python -m openbot.queue.runner
+- web: uvicorn openbot.entrypoints.api.app:app --host 0.0.0.0 --port $PORT --log-level info
+- worker: python -m openbot.infrastructure.queue.runner
 + web: uvicorn openbot.entrypoints.api.app:app --host 0.0.0.0 --port $PORT --log-level info
 + worker: python -m openbot.entrypoints.worker
 ```
@@ -53,7 +53,7 @@ grep -n "openbot\." Makefile
 Look for:
 
 ```makefile
-APP ?= openbot.webapp:app
+APP ?= openbot.entrypoints.api.app:app
 ```
 
 Or `dev:` / `run-api:` targets that hard-code the import string.
@@ -61,7 +61,7 @@ Or `dev:` / `run-api:` targets that hard-code the import string.
 - [ ] **Step 4: Update `Makefile`**
 
 ```diff
-- APP ?= openbot.webapp:app
+- APP ?= openbot.entrypoints.api.app:app
 + APP ?= openbot.entrypoints.api.app:app
 ```
 
@@ -69,7 +69,7 @@ If `make dev` has its own string, update there too:
 
 ```diff
   dev:
-- 	uv run uvicorn openbot.webapp:app --reload --port 8000
+- 	uv run uvicorn openbot.entrypoints.api.app:app --reload --port 8000
 + 	uv run uvicorn openbot.entrypoints.api.app:app --reload --port 8000
 ```
 
@@ -77,7 +77,7 @@ If a `worker` target exists, mirror it:
 
 ```diff
   worker:
-- 	uv run python -m openbot.queue.runner
+- 	uv run python -m openbot.infrastructure.queue.runner
 + 	uv run python -m openbot.entrypoints.worker
 ```
 
@@ -136,24 +136,24 @@ Mapping (longest-prefix first; same as `scripts/rewrite_imports.sh`):
 
 | Old | New |
 |-----|-----|
-| `openbot.webapp` | `openbot.entrypoints.api.app` |
-| `openbot.queue.runner` | `openbot.entrypoints.worker` |
-| `openbot.setup_wizard` | `openbot.entrypoints.cli.setup_wizard` |
-| `openbot.events` | `openbot.domain.events` |
-| `openbot.config` | `openbot.core.settings` |
-| `openbot.config_repo` | `openbot.infrastructure.config_loader` |
-| `openbot.obs` | `openbot.infrastructure.observability` |
-| `openbot.router` | `openbot.application.router` |
-| `openbot.dispatch` | `openbot.application.dispatcher` |
-| `openbot.adapters` | `openbot.infrastructure.adapters` |
-| `openbot.persistence` | `openbot.infrastructure.persistence` |
-| `openbot.queue` | `openbot.infrastructure.queue` |
-| `openbot.llm` | `openbot.infrastructure.llm` |
-| `openbot.middleware` | `openbot.application.middleware` |
-| `openbot.state.intents` | `openbot.domain.intents` |
-| `openbot.state` | `openbot.application.state` |
-| `openbot.handlers` | `openbot.application.handlers` |
-| `openbot.workflows` | `openbot.application.workflows` |
+| `openbot.entrypoints.api.app` | `openbot.entrypoints.api.app` |
+| `openbot.infrastructure.queue.runner` | `openbot.entrypoints.worker` |
+| `openbot.entrypoints.cli.setup_wizard` | `openbot.entrypoints.cli.setup_wizard` |
+| `openbot.domain.events` | `openbot.domain.events` |
+| `openbot.core.settings` | `openbot.core.settings` |
+| `openbot.infrastructure.config_loader` | `openbot.infrastructure.config_loader` |
+| `openbot.infrastructure.observability` | `openbot.infrastructure.observability` |
+| `openbot.application.router` | `openbot.application.router` |
+| `openbot.application.dispatcher` | `openbot.application.dispatcher` |
+| `openbot.infrastructure.adapters` | `openbot.infrastructure.adapters` |
+| `openbot.infrastructure.persistence` | `openbot.infrastructure.persistence` |
+| `openbot.infrastructure.queue` | `openbot.infrastructure.queue` |
+| `openbot.infrastructure.llm` | `openbot.infrastructure.llm` |
+| `openbot.application.middleware` | `openbot.application.middleware` |
+| `openbot.domain.intents` | `openbot.domain.intents` |
+| `openbot.application.state` | `openbot.application.state` |
+| `openbot.application.handlers` | `openbot.application.handlers` |
+| `openbot.application.workflows` | `openbot.application.workflows` |
 
 Apply by hand to each grep hit (these are docs — manual review preserves prose flow). Don't run the import-rewrite script on Markdown: it would corrupt prose that quotes the old paths intentionally (e.g. a "Why we renamed X" callout).
 
@@ -162,7 +162,7 @@ Apply by hand to each grep hit (these are docs — manual review preserves prose
 `docs/prd/openbot-prd.md` §3 names every module by path. Open it, find §3, and rewrite each row. Example:
 
 ```diff
-- | Webhook ingestion | `openbot/webapp.py` POST /webhook/github |
+- | Webhook ingestion | `openbot.entrypoints.api.app.py` POST /webhook/github |
 + | Webhook ingestion | `openbot/entrypoints/api/routes/github_webhook.py` POST /webhook/github |
 ```
 
@@ -173,7 +173,7 @@ The PRD is the source of truth for "where things live" — every other doc that 
 `CLAUDE.md` has a "Locked boundaries" section. Reaffirm it but update paths:
 
 ```diff
-- - v0.1 channel is GitHub only — do not write Slack / Discord / Linear adapter code in `openbot/adapters/`.
+- - v0.1 channel is GitHub only — do not write Slack / Discord / Linear adapter code in `openbot.infrastructure.adapters/`.
 + - v0.1 channel is GitHub only — do not write Slack / Discord / Linear adapter code in `openbot/infrastructure/adapters/`.
 ```
 

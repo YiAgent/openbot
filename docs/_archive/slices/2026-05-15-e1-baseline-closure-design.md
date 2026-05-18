@@ -15,7 +15,7 @@ Turn the current E1 review eval from a successful prototype into a truthful, dur
 
 ## 2. Non-goals
 
-- Do **not** wait for or implement the future `openbot.workflows.review.run(...)` production agent.
+- Do **not** wait for or implement the future `openbot.application.workflows.review.run(...)` production agent.
 - Do **not** expand into E2 suites, GitHub Actions scheduling, or weekly/release orchestration.
 - Do **not** replace the synthetic smoke dataset with the real upstream Martian dataset in this change; that remains E2-T01.
 

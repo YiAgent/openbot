@@ -9,7 +9,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from openbot.persistence import (
+from openbot.infrastructure.persistence import (
     AuditLogRepo,
     CostMeterRepo,
     create_schema,
@@ -83,7 +83,7 @@ async def test_sum_for_repo_since_filters_by_time(
 ) -> None:
     # Insert two records, then query a window that excludes the older one
     # by patching `created_at` directly.
-    from openbot.persistence import CostMeter
+    from openbot.infrastructure.persistence import CostMeter
 
     long_ago = datetime.now(UTC) - timedelta(days=60)
     recent = datetime.now(UTC) - timedelta(days=1)

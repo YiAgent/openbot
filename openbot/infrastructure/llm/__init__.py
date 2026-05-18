@@ -1,6 +1,6 @@
 """LLM routing and completion helpers.
 
-Imports are kept thin so `from openbot.llm import Feature` doesn't drag the
+Imports are kept thin so `from openbot.infrastructure.llm import Feature` doesn't drag the
 heavy LiteLLM module unless `complete()` is actually used.
 """
 

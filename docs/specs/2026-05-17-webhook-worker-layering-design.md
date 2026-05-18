@@ -13,7 +13,7 @@
 2. **Webhook 异步段（同进程 BackgroundTask 或独立 dispatcher service，逻辑上属于 webhook 层）**：跑「决策 + 规格化」——加载 config、跑所有不会随时间漂移的 gate、可选轻量 LLM 分类器、构建完整 **TaskSpec**。终点要么直接 GitHub 回写后 drop，要么把 TaskSpec 投进 worker queue。
 3. **Worker 层**：拿到 TaskSpec 就执行 deep agent。只重检两类会"在 queue lag 中漂移"的状态——cancel 信号 + 累积成本——其余全部信任 webhook 的决策。
 
-> 与现状关系：`openbot/webapp.py` + `state-machine classifier` 已经实现了同步段的一半；`openbot/dispatch.py` 把 10 格 preflight chain 放在了 worker dequeue 之后——本 spec 主张把其中**不会漂移的 7 格**前移到 webhook 异步段，把**会漂移的 3 格**留在 worker。
+> 与现状关系：`openbot.entrypoints.api.app.py` + `state-machine classifier` 已经实现了同步段的一半；`openbot.application.dispatcher.py` 把 10 格 preflight chain 放在了 worker dequeue 之后——本 spec 主张把其中**不会漂移的 7 格**前移到 webhook 异步段，把**会漂移的 3 格**留在 worker。
 
 ---
 
@@ -56,7 +56,7 @@ GitHub
    │  (webhook delivery)
    ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ Webhook · 同步段  (openbot/webapp.py @app.post 内联)              │
+│ Webhook · 同步段  (openbot.entrypoints.api.app.py @app.post 内联)              │
 │ 目标：< 1s 返回 202                                                │
 │   1. read raw body                                                │
 │   2. verify HMAC                                                   │
@@ -91,7 +91,7 @@ GitHub
                                  │ TaskSpec
                                  ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│ Worker · 执行段  (openbot/queue/worker.py + workflows/*)          │
+│ Worker · 执行段  (openbot.infrastructure.queue/worker.py + workflows/*)          │
 │ 目标：按 spec 执行 deep agent，期间只做"漂移重检"                  │
 │   W1. dequeue & validate(TaskSpec)                                │
 │   W2. mid-execution middleware（每 5 step 一次）：                 │
@@ -554,7 +554,7 @@ worker_pools:
   chat:      { concurrency: 8, max_wallclock_s: 180  }
 ```
 
-实现：stream 仍叫 `openbot:workflows`，但 consumer group 分 4 个：`openbot:workflows:group:{scenario}`。enqueue 时 `xadd` 后立刻 `XCLAIM` 不通；改用 4 个独立 stream `openbot:workflows:{scenario}` 更干净。
+实现：stream 仍叫 `openbot.application.workflows`，但 consumer group 分 4 个：`openbot.application.workflows:group:{scenario}`。enqueue 时 `xadd` 后立刻 `XCLAIM` 不通；改用 4 个独立 stream `openbot.application.workflows:{scenario}` 更干净。
 
 webhook 异步段把 spec 投到对应的 stream——这个映射是 spec.scenario → stream_name 的纯函数。
 
@@ -677,7 +677,7 @@ Slice E 在补 chain 的内容（`SanitizeInputs`、`AuditStart`、`FeatureToggl
 |---|---|---|---|
 | 1 | preflight chain 切分 | 7 格在 webhook 异步、3 格在 worker polling | 时间漂移分析（§1.2 表） |
 | 2 | TaskSpec 版本 | v3 | v2 不带 `stages_to_run` / `context_bundle` / `constraints` |
-| 3 | dispatcher 实现形式（v0.1） | webhook 进程内 BackgroundTask（或独立 stream `openbot:dispatch`） | 不引入新服务以保持 docker-compose 简单 |
+| 3 | dispatcher 实现形式（v0.1） | webhook 进程内 BackgroundTask（或独立 stream `openbot.application.dispatcher`） | 不引入新服务以保持 docker-compose 简单 |
 | 4 | dispatcher LLM 模型 | claude-sonnet-4-6 | PRD §13 #2 |
 | 5 | dispatcher LLM 月预算 | $30 / instance（可配） | $1 / 天，覆盖 ~600 次分类 |
 | 6 | classifier 失败降级 | fail-open，全套 stages | 贵但正确 > 便宜但跑错 |
@@ -709,11 +709,11 @@ Slice E 在补 chain 的内容（`SanitizeInputs`、`AuditStart`、`FeatureToggl
 - 并行 plan：[`../../plans/2026-05-17-input-side-completeness.md`](../../plans/2026-05-17-input-side-completeness.md)（Slice E）
 - 并行 plan：[`../../plans/webhook-worker-test-plan.md`](../../plans/webhook-worker-test-plan.md)（测试矩阵）
 - 现有代码：
-  - `openbot/webapp.py`（同步段）
-  - `openbot/router.py`（dispatch_for / derive_task_id / derive_run_id）
-  - `openbot/state/classifier.py`（state machine）
-  - `openbot/state/runs_repo.py`（CAS / 锁）
-  - `openbot/state/cancellation.py`（跨 dyno signal）
-  - `openbot/dispatch.py`（**待改造**：chain 前移）
-  - `openbot/queue/{payload,worker}.py`（**待改造**：spec v3）
-  - `openbot/middleware/*.py`（**待复用**：从 worker 搬到 dispatcher）
+  - `openbot.entrypoints.api.app.py`（同步段）
+  - `openbot.application.router.py`（dispatch_for / derive_task_id / derive_run_id）
+  - `openbot.application.state/classifier.py`（state machine）
+  - `openbot.application.state/runs_repo.py`（CAS / 锁）
+  - `openbot.application.state/cancellation.py`（跨 dyno signal）
+  - `openbot.application.dispatcher.py`（**待改造**：chain 前移）
+  - `openbot.infrastructure.queue/{payload,worker}.py`（**待改造**：spec v3）
+  - `openbot.application.middleware/*.py`（**待复用**：从 worker 搬到 dispatcher）

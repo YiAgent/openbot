@@ -19,15 +19,15 @@ from collections.abc import AsyncIterator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from openbot.events import EventKind, UnifiedEvent
-from openbot.persistence import (
+from openbot.application.state.runs_repo import get_state, transition
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.domain.intents import Intent, State
+from openbot.infrastructure.persistence import (
     TaskRun,
     create_schema,
     make_engine,
     make_session_factory,
 )
-from openbot.state.intents import Intent, State
-from openbot.state.runs_repo import get_state, transition
 
 
 @pytest.fixture

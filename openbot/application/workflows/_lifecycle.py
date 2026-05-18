@@ -26,12 +26,12 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from openbot.persistence.models import Workflow, WorkflowPhase
+from openbot.infrastructure.persistence.models import Workflow, WorkflowPhase
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    from openbot.middleware.preflight import PreflightContext
+    from openbot.application.middleware.preflight import PreflightContext
 
 _logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ async def _write_phase(
 ) -> None:
     if ctx.session_factory is None:
         return
-    from openbot.persistence.repository import AuditLogRepo
+    from openbot.infrastructure.persistence.repository import AuditLogRepo
 
     try:
         async with ctx.session_factory() as session:
@@ -98,11 +98,11 @@ async def audit_lifecycle(
     even runs; the in-context fallback here exists for tests + dev
     modes that bypass the chain.
     """
-    # Import locally to avoid an import cycle: openbot.middleware.audit
+    # Import locally to avoid an import cycle: openbot.application.middleware.audit
     # already imports from preflight, which imports models — a top-level
     # import here would pull middleware into workflows. The cache key
     # is a single constant string so the cost is trivial.
-    from openbot.middleware.audit import AUDIT_STARTED_CACHE_KEY
+    from openbot.application.middleware.audit import AUDIT_STARTED_CACHE_KEY
 
     handle = _AuditHandle()
     if not ctx.cache.get(AUDIT_STARTED_CACHE_KEY):

@@ -33,7 +33,17 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Final
 
-from openbot.dispatch import run_dispatch
+from openbot.application.dispatcher import run_dispatch
+from openbot.application.router import dispatch_for, upgrade_dispatch
+from openbot.application.state.cancellation import (
+    deregister as cancellation_deregister,
+)
+from openbot.application.state.cancellation import (
+    register as cancellation_register,
+)
+from openbot.application.state.cancellation import (
+    signal as cancellation_signal,
+)
 from openbot.infrastructure.queue.payload import (
     DEAD_STREAM,
     GROUP_NAME,
@@ -42,22 +52,12 @@ from openbot.infrastructure.queue.payload import (
     QueuePayload,
     deserialize_payload,
 )
-from openbot.router import dispatch_for, upgrade_dispatch
-from openbot.state.cancellation import (
-    deregister as cancellation_deregister,
-)
-from openbot.state.cancellation import (
-    register as cancellation_register,
-)
-from openbot.state.cancellation import (
-    signal as cancellation_signal,
-)
 
 if TYPE_CHECKING:
     import redis.asyncio as redis_async
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from openbot.adapters.github import GitHubAdapter
+    from openbot.infrastructure.adapters.github import GitHubAdapter
 
 _logger = logging.getLogger(__name__)
 

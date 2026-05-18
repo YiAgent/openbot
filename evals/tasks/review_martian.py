@@ -164,12 +164,12 @@ def review_martian_baseline_crb() -> Task:
 def review_martian_openbot() -> Task:
     """Future production OpenBot provider on the same dataset / judge.
 
-    Reserved for when ``openbot.workflows.review.run(...)`` ships; today
+    Reserved for when ``openbot.application.workflows.review.run(...)`` ships; today
     invoking this task raises immediately. The entry exists so the eval
     surface is wired and only a solver swap is needed once the workflow
     lands (mirrors :func:`evals.tasks.chat_swe_qa_pro.chat_swe_qa_pro_openbot`).
     """
     raise NotImplementedError(
         "Review solver provider 'openbot_prod' is reserved until "
-        "openbot.workflows.review.run(...) ships."
+        "openbot.application.workflows.review.run(...) ships."
     )

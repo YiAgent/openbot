@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from openbot.events import EventKind, UnifiedEvent
-from openbot.llm.router import Feature
-from openbot.queue import QueuePayload, deserialize_payload
-from openbot.queue.payload import PAYLOAD_VERSION
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.llm.model_router import Feature
+from openbot.infrastructure.queue import QueuePayload, deserialize_payload
+from openbot.infrastructure.queue.payload import PAYLOAD_VERSION
 
 
 def _event() -> UnifiedEvent:

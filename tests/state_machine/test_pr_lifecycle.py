@@ -9,7 +9,7 @@ Testing P-04 (cancel on close) requires extending the router. Deferred.
 
 from __future__ import annotations
 
-from openbot.persistence.models import State
+from openbot.infrastructure.persistence.models import State
 from tests.state_machine._payloads import _REPO, pr_body, sign
 from tests.state_machine.conftest import SMHarness
 

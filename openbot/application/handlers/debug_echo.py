@@ -35,12 +35,12 @@ import os
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from openbot.persistence.models import Workflow, WorkflowPhase
-from openbot.persistence.repository import AuditLogRepo
-from openbot.state.cancellation import RunCancelledError, checkpoint
+from openbot.application.state.cancellation import RunCancelledError, checkpoint
+from openbot.infrastructure.persistence.models import Workflow, WorkflowPhase
+from openbot.infrastructure.persistence.repository import AuditLogRepo
 
 if TYPE_CHECKING:
-    from openbot.middleware.preflight import PreflightContext
+    from openbot.application.middleware.preflight import PreflightContext
 
 _logger = logging.getLogger(__name__)
 

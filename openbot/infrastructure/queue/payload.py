@@ -1,7 +1,7 @@
 """Queue payload schema — JSON-serializable shape of one enqueued workflow.
 
 The webhook handler builds a ``QueuePayload`` from the UnifiedEvent +
-Dispatch and ``enqueue()`` writes it to ``openbot:workflows``. The worker
+Dispatch and ``enqueue()`` writes it to the ``openbot:workflows`` Redis stream. The worker
 reads + deserializes back into the same dataclass and then reconstructs
 the in-memory ``UnifiedEvent`` / ``Dispatch`` for dispatch.
 
@@ -51,8 +51,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from openbot.events import EventKind, UnifiedEvent
-from openbot.llm.router import Feature
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.llm.model_router import Feature
 
 _logger = logging.getLogger(__name__)
 

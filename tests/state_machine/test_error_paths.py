@@ -5,7 +5,7 @@ Plan IDs reference ``docs/plans/webhook-worker-test-plan.md``.
 I-32 note: when ``enqueue`` raises, the webapp falls through to
 ``BackgroundTasks.add_task(_run_dispatch, ...)``. With ``ASGITransport``,
 background tasks ARE executed (Starlette runs them as part of the response
-lifecycle). We patch ``openbot.webapp.run_dispatch`` to a no-op so no real
+lifecycle). We patch ``openbot.entrypoints.api.app.run_dispatch`` to a no-op so no real
 GitHub API or LLM calls occur — we only assert the HTTP layer degrades
 gracefully.
 """

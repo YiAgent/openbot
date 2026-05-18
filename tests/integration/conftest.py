@@ -24,9 +24,14 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from openbot.adapters.github import GitHubAdapter
-from openbot.persistence import WebhookDedup, create_schema, make_engine, make_session_factory
-from openbot.persistence.models import State, TaskRun
+from openbot.infrastructure.adapters.github import GitHubAdapter
+from openbot.infrastructure.persistence import (
+    WebhookDedup,
+    create_schema,
+    make_engine,
+    make_session_factory,
+)
+from openbot.infrastructure.persistence.models import State, TaskRun
 
 # Use the same secret and payloads as the L2 state-machine tests so
 # assertions on delivery IDs and resource keys are compatible.
@@ -46,7 +51,7 @@ class SMHarness:
     session_factory: async_sessionmaker[AsyncSession]
 
     async def queue_len(self) -> int:
-        """Entries currently in the ``openbot:workflows`` stream."""
+        """Entries currently in the ``openbot.application.workflows`` stream."""
         return await self.redis.xlen("openbot:workflows")
 
     async def _db_row(self, resource_key: str) -> TaskRun | None:
@@ -75,7 +80,7 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     The fixture name is intentionally the same so integration test files
     can use ``sm: SMHarness`` without caring which conftest provides it.
     """
-    from openbot.config import get_settings
+    from openbot.core.settings import get_settings
 
     monkeypatch.setenv("OPENBOT_DEBUG_ECHO_ENABLED", "false")
     get_settings.cache_clear()
@@ -85,7 +90,7 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     await create_schema(engine)
     session_factory = make_session_factory(engine)
 
-    from openbot.webapp import app
+    from openbot.entrypoints.api.app import app
 
     app.state.redis = redis_fake
     app.state.dedup = WebhookDedup(redis_fake)

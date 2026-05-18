@@ -33,10 +33,10 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from openbot.application.state.classifier import classify
 from openbot.domain.intents import EventClassification, Intent, State
-from openbot.persistence.models import TaskRun
+from openbot.infrastructure.persistence.models import TaskRun
 
 if TYPE_CHECKING:
-    from openbot.events import UnifiedEvent
+    from openbot.domain.events import UnifiedEvent
 
 _logger = logging.getLogger(__name__)
 

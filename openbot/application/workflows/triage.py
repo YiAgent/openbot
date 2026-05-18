@@ -22,13 +22,13 @@ import logging
 from typing import TYPE_CHECKING
 
 from openbot.application.workflows._lifecycle import audit_lifecycle
-from openbot.events import EventKind
-from openbot.persistence.models import Workflow
+from openbot.domain.events import EventKind
+from openbot.infrastructure.persistence.models import Workflow
 
 if TYPE_CHECKING:
-    from openbot.middleware.preflight import PreflightContext
+    from openbot.application.middleware.preflight import PreflightContext
 
-_logger = logging.getLogger("openbot.workflows.triage")
+_logger = logging.getLogger("openbot.application.workflows.triage")
 
 _ACK_TEMPLATE = (
     ":robot: Hi @{actor} — OpenBot received this issue and will triage shortly.\n\n"

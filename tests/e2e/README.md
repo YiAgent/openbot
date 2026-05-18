@@ -188,7 +188,7 @@ Run these in order. Each scenario lists:
 ```
 ✅ Both 202 accepted (no errors)
 ✅ Exactly one bot comment visible on the PR after both runs complete
-✅ Redis PEL empty (verify with: redis-cli XPENDING openbot:workflows openbot:workflows:group - +)
+✅ Redis PEL empty (verify with: redis-cli XPENDING openbot.application.workflows openbot.application.workflows:group - +)
 ```
 
 ---
@@ -257,12 +257,12 @@ uv run python scripts/fire_smoke.py issue-opened \
 **Verification**:
 ```bash
 # Check PEL before restart:
-redis-cli XPENDING openbot:workflows openbot:workflows:group - + 10
+redis-cli XPENDING openbot.application.workflows openbot.application.workflows:group - + 10
 # Should show 1 entry owned by the crashed consumer.
 
 # After restart (60s delay in production; see _PENDING_IDLE_MS):
 # PEL should become empty again.
-redis-cli XPENDING openbot:workflows openbot:workflows:group - + 10
+redis-cli XPENDING openbot.application.workflows openbot.application.workflows:group - + 10
 # Should show 0 pending entries.
 ```
 
@@ -371,7 +371,7 @@ Deploy to production
 The webhook secret in `.env` doesn't match the GitHub App's webhook secret.
 ```bash
 # Verify the secret is loaded:
-uv run python -c "from openbot.config import get_settings; s = get_settings(); print(bool(s.github_webhook_secret))"
+uv run python -c "from openbot.core.settings import get_settings; s = get_settings(); print(bool(s.github_webhook_secret))"
 ```
 
 ### smee relay shows no events after creating issue
@@ -397,13 +397,13 @@ If `_PENDING_IDLE_MS` is the production default (60 s), the entry stays in PEL f
 
 ```bash
 # Watch the stream in real time:
-redis-cli XREAD BLOCK 0 STREAMS openbot:workflows $
+redis-cli XREAD BLOCK 0 STREAMS openbot.application.workflows $
 
 # Check pending entries (PEL):
-redis-cli XPENDING openbot:workflows openbot:workflows:group - + 10
+redis-cli XPENDING openbot.application.workflows openbot.application.workflows:group - + 10
 
 # Check DLQ entries:
-redis-cli XRANGE openbot:workflows:dead - + COUNT 10
+redis-cli XRANGE openbot.application.workflows:dead - + COUNT 10
 
 # Count active cancel flags:
 redis-cli KEYS "openbot:run_cancel:*" | wc -l

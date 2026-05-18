@@ -1,6 +1,6 @@
 """Observability bootstrap — Sentry init shared by webapp + worker.
 
-Two entry processes (``openbot.webapp:app`` and ``openbot.queue.runner``)
+Two entry processes (``openbot.entrypoints.api.app:app`` and ``openbot.infrastructure.queue.runner``)
 both need Sentry attached. Centralising the init here keeps the contract
 in one place:
 
@@ -31,7 +31,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from openbot.config import Settings
+    from openbot.core.settings import Settings
 
 _logger = logging.getLogger(__name__)
 

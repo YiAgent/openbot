@@ -11,20 +11,20 @@
 
 | Spec 锚点 | 模块 | 状态 |
 |---|---|---|
-| §3 M1 | `openbot/config_repo.py` — yaml.safe_load + 60s TTL cache | ✅ |
-| §3 M2 | `openbot/router.py` — `dispatch_for` + `derive_task_id` | ✅ |
-| §3 M3 | `openbot/middleware/preflight.py` — runner + `announce_once` | ✅ |
-| §3 M4 | `openbot/middleware/cancel.py` — KillSwitch / CancelLabel / CancelComment | ✅ |
-| §3 M5 | `openbot/middleware/budget.py` — monthly_soft + global_hard | ✅ |
-| §3 M6 | `openbot/middleware/rate_limit.py` — per-user-day / per-repo-hour | ✅ |
-| §3 M7 | `openbot/middleware/security.py` — ForkPRGate / ActorRole | ✅ |
-| §3 M8 | `openbot/llm/sanitize.py` — `wrap_user_input(text, source)` | 🟡 函数有，调用方与 lint 缺 |
-| §3 M9 | `openbot/workflows/_lifecycle.py` — STARTED/COMPLETED/FAILED | 🟡 STARTED 写在 handler 内（见 G2） |
-| §3 M10 | `openbot/queue/{enqueue,worker,runner,payload}.py` | ✅ |
-| §3 M11 | `openbot/workflows/chat_parser.py` | ✅ |
-| §3 M12 | `openbot/workflows/{review,fix,chat,triage}.py` stubs | ✅ |
+| §3 M1 | `openbot.infrastructure.config_loader.py` — yaml.safe_load + 60s TTL cache | ✅ |
+| §3 M2 | `openbot.application.router.py` — `dispatch_for` + `derive_task_id` | ✅ |
+| §3 M3 | `openbot.application.middleware/preflight.py` — runner + `announce_once` | ✅ |
+| §3 M4 | `openbot.application.middleware/cancel.py` — KillSwitch / CancelLabel / CancelComment | ✅ |
+| §3 M5 | `openbot.application.middleware/budget.py` — monthly_soft + global_hard | ✅ |
+| §3 M6 | `openbot.application.middleware/rate_limit.py` — per-user-day / per-repo-hour | ✅ |
+| §3 M7 | `openbot.application.middleware/security.py` — ForkPRGate / ActorRole | ✅ |
+| §3 M8 | `openbot.infrastructure.llm/sanitize.py` — `wrap_user_input(text, source)` | 🟡 函数有，调用方与 lint 缺 |
+| §3 M9 | `openbot.application.workflows/_lifecycle.py` — STARTED/COMPLETED/FAILED | 🟡 STARTED 写在 handler 内（见 G2） |
+| §3 M10 | `openbot.infrastructure.queue/{enqueue,worker,runner,payload}.py` | ✅ |
+| §3 M11 | `openbot.application.workflows/chat_parser.py` | ✅ |
+| §3 M12 | `openbot.application.workflows/{review,fix,chat,triage}.py` stubs | ✅ |
 
-**当前 chain（`openbot/dispatch.py:51-66`）**：
+**当前 chain（`openbot.application.dispatcher.py:51-66`）**：
 ```
 KillSwitch → CancelLabel → CancelComment → ForkPRGate → ActorRole → RateLimit → Budget → handler
 ```
@@ -63,9 +63,9 @@ SanitizeInputs → KillSwitch → CancelLabel → ForkPRGate → ActorRole → R
 
 | # | Gap | 影响 | 新建路径 |
 |---|---|---|---|
-| G1 | `SanitizeInputs` 不是 middleware；用户输入未在 chain 入口做格式过滤 | 一旦 agent 接入易遭 zero-width / RTL / 超长字段绕过 | `openbot/middleware/sanitize.py` |
-| G2 | `AuditStart` 不在 chain；handler 进入前 crash 没有 STARTED 行 | 审计缺一段，事后无法判定 "preflight 过了但 handler 没跑" | `openbot/middleware/audit.py` |
-| G3 | `FeatureToggleMiddleware` 缺失；`features.chat=false` 不会 BLOCK | spec §3 M1 隐含承诺破裂；用户改 yaml 不生效 | `openbot/middleware/feature_toggle.py` |
+| G1 | `SanitizeInputs` 不是 middleware；用户输入未在 chain 入口做格式过滤 | 一旦 agent 接入易遭 zero-width / RTL / 超长字段绕过 | `openbot.application.middleware/sanitize.py` |
+| G2 | `AuditStart` 不在 chain；handler 进入前 crash 没有 STARTED 行 | 审计缺一段，事后无法判定 "preflight 过了但 handler 没跑" | `openbot.application.middleware/audit.py` |
+| G3 | `FeatureToggleMiddleware` 缺失；`features.chat=false` 不会 BLOCK | spec §3 M1 隐含承诺破裂；用户改 yaml 不生效 | `openbot.application.middleware/feature_toggle.py` |
 | G4 | Prompt-injection lint 没建；workflow 改动后注入面无静态护栏 | spec §3 M8 Acceptance 第 3 条未满足 | `tests/test_no_raw_user_input.py` |
 | G5 | Spec §7 八条 demo 未脚本化 | 回归网破洞——任何 chain 改动都靠手动复现 | `tests/e2e/test_spec_demos.py` |
 | G6 | `make doctor` 缺失；`.env.example` 漏 `OPENBOT_WORKER_CONCURRENCY` 等 | 首跑用户排查成本高；env-覆盖路径不可发现 | `scripts/doctor.py` + `Makefile` + `.env.example` |
@@ -74,7 +74,7 @@ SanitizeInputs → KillSwitch → CancelLabel → ForkPRGate → ActorRole → R
 
 ## 3. 详细规格
 
-### G1. `SanitizeInputs` middleware — `openbot/middleware/sanitize.py`
+### G1. `SanitizeInputs` middleware — `openbot.application.middleware/sanitize.py`
 
 **目的**：在 chain 第 1 格对 `UnifiedEvent` 携带的所有 user-controlled string（`title`、`body`、`comment_body`、`actor`、`labels`）做一次入口级别的过滤；这是 spec §3 M8 LLM-side `wrap_user_input` 的**上游**——前者管"危险字节进系统"，后者管"危险结构进 LLM"。
 
@@ -116,7 +116,7 @@ class SanitizeInputsMiddleware:
 
 ---
 
-### G2. `AuditStart` middleware — `openbot/middleware/audit.py`
+### G2. `AuditStart` middleware — `openbot.application.middleware/audit.py`
 
 **目的**：在 chain 末尾、handler 之前**强制**写一行 `audit_log(phase=STARTED, …)`。任何 handler 入口前的异常都能在 audit 表里看到 STARTED-无配对，便于事后定位。
 
@@ -130,7 +130,7 @@ class AuditStartMiddleware:
 
 **实现要点**
 
-- 复用 `openbot/workflows/_lifecycle.py:_write_phase`，写一行 `STARTED`。
+- 复用 `openbot.application.workflows/_lifecycle.py:_write_phase`，写一行 `STARTED`。
 - 失败不 BLOCK：DB 挂时返回 PROCEED + WARNING log（与现有 fall-open 策略一致）。
 - 同时把 `audit_lifecycle` 内部的 STARTED 写入改成 **"如果 ctx.cache['audit_started']=True 就跳过"**，避免双写。
   - `AuditStartMiddleware` 写完后 `ctx.cache["audit_started"] = True`；
@@ -144,7 +144,7 @@ class AuditStartMiddleware:
 
 ---
 
-### G3. `FeatureToggleMiddleware` — `openbot/middleware/feature_toggle.py`
+### G3. `FeatureToggleMiddleware` — `openbot.application.middleware/feature_toggle.py`
 
 **目的**：把 `EffectiveConfig.features.{triage,review,fix,chat}` 真正变成开关。
 
@@ -172,11 +172,11 @@ class FeatureToggleMiddleware:
 
 ### G4. Prompt-injection lint — `tests/test_no_raw_user_input.py`
 
-**目的**：spec §3 M8 Acceptance 第 3 条——杜绝 `event.comment_body` / `event.raw[...]` 在 `openbot/workflows/*.py` 与 `openbot/llm/*.py` 里**直接**作为 string 进入 LLM messages。
+**目的**：spec §3 M8 Acceptance 第 3 条——杜绝 `event.comment_body` / `event.raw[...]` 在 `openbot.application.workflows/*.py` 与 `openbot.infrastructure.llm/*.py` 里**直接**作为 string 进入 LLM messages。
 
 **实现**
 
-- 用 `ast` 模块扫描 `openbot/workflows/` 和 `openbot/llm/` 全部 `.py`：
+- 用 `ast` 模块扫描 `openbot.application.workflows/` 和 `openbot.infrastructure.llm/` 全部 `.py`：
   - 找 `Attribute` 节点 value=`Name("event")` attr 在 `{"comment_body", "title", "body"}` 中
   - 找 `Subscript` 节点 value 形如 `event.raw[...]`
   - 检查这些表达式是否被传入 `wrap_user_input(...)` 调用、字面常量赋值（如 `_ACK_TEMPLATE = "..."`）或日志 `extra={...}` 字典 —— 这些是允许场景
@@ -238,7 +238,7 @@ async def webhook_harness(...) -> WebhookHarness:
 3. **Redis 可达**：`PING`。
 4. **Schema 已建**：`SELECT 1 FROM audit_log LIMIT 0` / `cost_meter` 都返回 0 行。
 5. **签名往返**：用 webhook_secret 对一条假 issue payload 算 HMAC，POST 到 `/webhook/github`，期望返回 `status=accepted` 或 `ignored`。
-6. **Worker 心跳**（可选，仅当 `--with-worker` 传入）：检查 Redis Stream `openbot:workflows` 的 `XLEN` 没有积压（< 100 entries 未 ACK）。
+6. **Worker 心跳**（可选，仅当 `--with-worker` 传入）：检查 Redis Stream `openbot.application.workflows` 的 `XLEN` 没有积压（< 100 entries 未 ACK）。
 
 **`Makefile` 加目标**
 
@@ -268,7 +268,7 @@ doctor: ## Run setup self-check (ENV, PG, Redis, schema, webhook round-trip)
 
 | Slice | 范围 | 依赖 | 验收 demo |
 |---|---|---|---|
-| **E1** chain 完整化 | G1 + G2 + G3 + `dispatch.py` 重排 + 各 middleware unit test | A–D | `python -c "from openbot.dispatch import build_preflight_chain; print([m.name for m in build_preflight_chain()])"` 输出 spec §3 M3 同序 8 格 |
+| **E1** chain 完整化 | G1 + G2 + G3 + `dispatch.py` 重排 + 各 middleware unit test | A–D | `python -c "from openbot.application.dispatcher import build_preflight_chain; print([m.name for m in build_preflight_chain()])"` 输出 spec §3 M3 同序 8 格 |
 | **E2** 验收脚本固化 | G5 八条 demo | E1 | `pytest tests/e2e/test_spec_demos.py -v` 9/9 ✓ |
 | **E3** 注入面静态护栏 | G4 lint + `wrap_user_input` 在 chat workflow 内 dry-run（仅生成消息字符串，不调 LLM） | E1 | 在 `chat.py` 注入 `event.comment_body` 直拼，`make check` 红 |
 | **E4** 上手体验 | G6 doctor + `.env.example` + Makefile | A–D（独立） | `make doctor` ✓；故意改坏 .env 后 ✗ |
@@ -321,7 +321,7 @@ doctor: ## Run setup self-check (ENV, PG, Redis, schema, webhook round-trip)
 
 - [ ] `make check` 全绿（含新增 ~32 测试 case）
 - [ ] `pytest tests/e2e/test_spec_demos.py -v` 9/9 ✓
-- [ ] `python -c "from openbot.dispatch import build_preflight_chain; print(','.join(m.name for m in build_preflight_chain()))"` 输出顺序与 spec §3 M3 + 本 plan §5 amendments 一致
+- [ ] `python -c "from openbot.application.dispatcher import build_preflight_chain; print(','.join(m.name for m in build_preflight_chain()))"` 输出顺序与 spec §3 M3 + 本 plan §5 amendments 一致
 - [ ] `make doctor` 在 `docker compose up -d && make dev` 起来后 5 秒内 ✓
 - [ ] 故意在 `workflows/chat.py` 写 `messages.append(event.comment_body)` → `make check` 红
 - [ ] `harness-spec.md` 的 §3 / §6 已按 §5 amendments 回填
@@ -333,7 +333,7 @@ doctor: ## Run setup self-check (ENV, PG, Redis, schema, webhook round-trip)
 - LangGraph + DeepAgent 接入 LLM workflow（Week 3+）
 - Modal sandbox `SandboxBackend` ABC + 实现
 - LangSmith workflow-level metadata
-- `.openbot/config.yaml` 校验 CLI（`python -m openbot.config_repo validate <path>`）
+- `.openbot/config.yaml` 校验 CLI（`python -m openbot.infrastructure.config_loader validate <path>`）
 - `config-approved` label 高风险字段闸（v0.2）
 - pgvector / Issue dedup（v0.2）
 - LinearAdapter / SlackAdapter / DiscordAdapter（v0.2）

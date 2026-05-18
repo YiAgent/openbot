@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openbot.config_repo import baked_in_defaults
-from openbot.events import EventKind, UnifiedEvent
-from openbot.llm.router import Feature
-from openbot.middleware import PreflightContext
-from openbot.router import Dispatch, derive_task_id
-from openbot.workflows.triage import maybe_run_triage
+from openbot.application.middleware import PreflightContext
+from openbot.application.router import Dispatch, derive_task_id
+from openbot.application.workflows.triage import maybe_run_triage
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.config_loader import baked_in_defaults
+from openbot.infrastructure.llm.model_router import Feature
 
 _INSTALL_ID = 132_536_131
 
@@ -113,7 +113,7 @@ async def test_skips_when_installation_id_missing(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     adapter = _adapter()
-    with caplog.at_level(logging.WARNING, logger="openbot.workflows.triage"):
+    with caplog.at_level(logging.WARNING, logger="openbot.application.workflows.triage"):
         await maybe_run_triage(_ctx(adapter, _event(installation_id=None)))
     adapter.reply.assert_not_awaited()
     assert any(r.message == "triage_skipped_missing_context" for r in caplog.records)
@@ -123,7 +123,7 @@ async def test_skips_when_issue_number_missing(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     adapter = _adapter()
-    with caplog.at_level(logging.WARNING, logger="openbot.workflows.triage"):
+    with caplog.at_level(logging.WARNING, logger="openbot.application.workflows.triage"):
         await maybe_run_triage(_ctx(adapter, _event(issue_number=None)))
     adapter.reply.assert_not_awaited()
     assert any(r.message == "triage_skipped_missing_context" for r in caplog.records)
@@ -143,7 +143,7 @@ async def test_does_not_ack_bot_authored_issue(
     bot_event = _event(actor="dependabot[bot]", actor_type="Bot")
     assert bot_event.is_from_bot is True  # sanity
 
-    with caplog.at_level(logging.INFO, logger="openbot.workflows.triage"):
+    with caplog.at_level(logging.INFO, logger="openbot.application.workflows.triage"):
         await maybe_run_triage(_ctx(adapter, bot_event))
 
     adapter.reply.assert_not_awaited()
@@ -174,7 +174,7 @@ async def test_reply_failure_is_logged_not_raised(
     adapter = _adapter()
     adapter.reply = AsyncMock(side_effect=RuntimeError("boom"))
 
-    with caplog.at_level(logging.ERROR, logger="openbot.workflows.triage"):
+    with caplog.at_level(logging.ERROR, logger="openbot.application.workflows.triage"):
         # Must NOT raise — background tasks that 500 would be invisible to GitHub
         # but visible as nasty traceback in logs every time. Audit + drop instead.
         await maybe_run_triage(_ctx(adapter, _event()))

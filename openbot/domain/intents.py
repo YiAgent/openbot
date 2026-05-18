@@ -1,7 +1,7 @@
 """Intent + State enums + EventClassification dataclass.
 
 These are the pure value types the classifier returns and the runs repo
-persists. No I/O, no dependencies beyond ``openbot.events`` and the
+persists. No I/O, no dependencies beyond ``openbot.domain.events`` and the
 stdlib so the test for the classifier is a table-driven pure-function
 exercise.
 

@@ -52,12 +52,12 @@ from openbot.application.middleware.preflight import (
     MiddlewareResult,
     PreflightContext,
 )
-from openbot.persistence.models import WorkflowPhase
+from openbot.infrastructure.persistence.models import WorkflowPhase
 
 if TYPE_CHECKING:
-    from openbot.events import UnifiedEvent
+    from openbot.domain.events import UnifiedEvent
 
-_logger = logging.getLogger("openbot.middleware.sanitize")
+_logger = logging.getLogger("openbot.application.middleware.sanitize")
 
 # 8 KB / field — well above realistic chat comments but bounds the
 # per-field tokenization cost downstream. Tunable per-instance via the
@@ -68,7 +68,7 @@ _DEFAULT_MAX_FIELD_LENGTH: Final = 8_000
 _DEFAULT_MAX_TOTAL_LENGTH: Final = 64_000
 
 # GitHub login grammar (PRD §5.1 / spec §9.1 lock). Mirrors the literal
-# in ``openbot.middleware.rate_limit`` rather than importing it; a
+# in ``openbot.application.middleware.rate_limit`` rather than importing it; a
 # circular slice-A/B import isn't worth one regex.
 _ACTOR_RE: Final = re.compile(r"^[A-Za-z0-9-]{1,39}$")
 

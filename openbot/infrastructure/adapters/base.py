@@ -10,7 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 
-from openbot.events import UnifiedEvent
+from openbot.domain.events import UnifiedEvent
 
 
 class SignatureError(Exception):

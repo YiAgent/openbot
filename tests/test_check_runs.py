@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from openbot.config import get_settings
-from openbot.webapp import app
+from openbot.core.settings import get_settings
+from openbot.entrypoints.api.app import app
 
 
 @pytest.fixture
@@ -69,10 +69,10 @@ def test_webhook_creates_check_run_for_pr_event(
 
 @pytest.mark.asyncio
 async def test_run_dispatch_updates_check_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    from openbot.dispatch import run_dispatch
-    from openbot.events import EventKind, UnifiedEvent
-    from openbot.llm.router import Feature
-    from openbot.router import Dispatch
+    from openbot.application.dispatcher import run_dispatch
+    from openbot.application.router import Dispatch
+    from openbot.domain.events import EventKind, UnifiedEvent
+    from openbot.infrastructure.llm.model_router import Feature
 
     adapter = AsyncMock()
     event = UnifiedEvent(
@@ -91,12 +91,15 @@ async def test_run_dispatch_updates_check_run(monkeypatch: pytest.MonkeyPatch) -
     dispatch = Dispatch(feature=Feature.REVIEW, task_id="t1", handler=fake_handler)
 
     # Mock config loading
-    monkeypatch.setattr("openbot.dispatch.load_for_repo", AsyncMock(return_value=AsyncMock()))
+    monkeypatch.setattr(
+        "openbot.application.dispatcher.load_for_repo", AsyncMock(return_value=AsyncMock())
+    )
     # Mock preflight
-    from openbot.middleware import MiddlewareDecision
+    from openbot.application.middleware import MiddlewareDecision
 
     monkeypatch.setattr(
-        "openbot.dispatch.run_preflight", AsyncMock(return_value=MiddlewareDecision.proceed())
+        "openbot.application.dispatcher.run_preflight",
+        AsyncMock(return_value=MiddlewareDecision.proceed()),
     )
 
     await run_dispatch(
@@ -123,10 +126,10 @@ async def test_run_dispatch_updates_check_run(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.asyncio
 async def test_run_dispatch_updates_check_run_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    from openbot.dispatch import run_dispatch
-    from openbot.events import EventKind, UnifiedEvent
-    from openbot.llm.router import Feature
-    from openbot.router import Dispatch
+    from openbot.application.dispatcher import run_dispatch
+    from openbot.application.router import Dispatch
+    from openbot.domain.events import EventKind, UnifiedEvent
+    from openbot.infrastructure.llm.model_router import Feature
 
     adapter = AsyncMock()
     event = UnifiedEvent(
@@ -145,12 +148,15 @@ async def test_run_dispatch_updates_check_run_on_failure(monkeypatch: pytest.Mon
     dispatch = Dispatch(feature=Feature.REVIEW, task_id="t1", handler=crashing_handler)
 
     # Mock config loading
-    monkeypatch.setattr("openbot.dispatch.load_for_repo", AsyncMock(return_value=AsyncMock()))
+    monkeypatch.setattr(
+        "openbot.application.dispatcher.load_for_repo", AsyncMock(return_value=AsyncMock())
+    )
     # Mock preflight
-    from openbot.middleware import MiddlewareDecision
+    from openbot.application.middleware import MiddlewareDecision
 
     monkeypatch.setattr(
-        "openbot.dispatch.run_preflight", AsyncMock(return_value=MiddlewareDecision.proceed())
+        "openbot.application.dispatcher.run_preflight",
+        AsyncMock(return_value=MiddlewareDecision.proceed()),
     )
 
     await run_dispatch(

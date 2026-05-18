@@ -31,10 +31,10 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from openbot.queue.payload import DEAD_STREAM, GROUP_NAME
-from openbot.queue.worker import _MAX_ATTEMPTS
 
-from openbot.queue import STREAM_NAME, consume_loop, ensure_consumer_group
+from openbot.infrastructure.queue import STREAM_NAME, consume_loop, ensure_consumer_group
+from openbot.infrastructure.queue.payload import DEAD_STREAM, GROUP_NAME
+from openbot.infrastructure.queue.worker import _MAX_ATTEMPTS
 from tests.state_machine._payloads import pr_body, sign
 
 from .conftest import SMHarness
@@ -49,7 +49,7 @@ async def _one_iteration(
 ) -> None:
     """Run one ``consume_loop`` iteration and wait for it to finish.
 
-    Patches ``openbot.queue.worker.run_dispatch`` for the duration:
+    Patches ``openbot.infrastructure.queue.worker.run_dispatch`` for the duration:
       - If ``dispatch_raises`` is given, the mock raises that exception
         (simulates a crashed handler).
       - Otherwise the mock returns None (simulates a successful handler).
@@ -64,7 +64,7 @@ async def _one_iteration(
     shutdown = asyncio.Event()
     adapter = AsyncMock()
 
-    with patch("openbot.queue.worker.run_dispatch", new=mock_dispatch):
+    with patch("openbot.infrastructure.queue.worker.run_dispatch", new=mock_dispatch):
         task = asyncio.create_task(
             consume_loop(
                 redis=sm.redis,
@@ -100,7 +100,7 @@ async def test_crashed_consumer_entry_reclaimed_by_recovery_consumer(
     """
     # Monkeypatch idle threshold to 0 so any PEL entry is immediately
     # claimable — avoids waiting 60 s in tests.
-    monkeypatch.setattr("openbot.queue.worker._PENDING_IDLE_MS", 0)
+    monkeypatch.setattr("openbot.infrastructure.queue.worker._PENDING_IDLE_MS", 0)
 
     # Consumer group must exist before the XADD (id="$" means the group
     # starts reading from the stream tip; entries before group creation
@@ -168,7 +168,7 @@ async def test_max_attempts_exhausted_sends_to_dlq(
     The test runs exactly ``_MAX_ATTEMPTS`` failing iterations, then
     asserts the entry is in the DLQ and the main PEL is empty.
     """
-    monkeypatch.setattr("openbot.queue.worker._PENDING_IDLE_MS", 0)
+    monkeypatch.setattr("openbot.infrastructure.queue.worker._PENDING_IDLE_MS", 0)
 
     await ensure_consumer_group(sm.redis)
 

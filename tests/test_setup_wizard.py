@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 import pytest
 
-from openbot import setup_wizard
+from openbot.entrypoints.cli import setup_wizard
 
 # ───── _build_manifest ─────
 

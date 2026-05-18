@@ -19,10 +19,10 @@ from typing import Any
 import httpx
 import pytest
 
-from openbot.adapters.base import SignatureError
-from openbot.adapters.github import GitHubAdapter
-from openbot.adapters.github_auth import GitHubAppAuth, InstallationToken
-from openbot.events import EventKind, UnifiedEvent
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.adapters.base import SignatureError
+from openbot.infrastructure.adapters.github import GitHubAdapter
+from openbot.infrastructure.adapters.github_auth import GitHubAppAuth, InstallationToken
 
 _SECRET = "test-secret"
 
@@ -474,7 +474,7 @@ async def test_low_rate_limit_emits_warning(
         )
 
     adapter, _ = adapter_factory(handler, auth=_FakeAuth())
-    with caplog.at_level(logging.WARNING, logger="openbot.adapters.github"):
+    with caplog.at_level(logging.WARNING, logger="openbot.infrastructure.adapters.github"):
         await adapter.reply(_event(), "hi")
 
     matching = [r for r in caplog.records if r.message == "github_rate_limit_low"]
@@ -489,7 +489,7 @@ async def test_normal_rate_limit_silent(
         return httpx.Response(201, json={"id": 1}, headers={"x-ratelimit-remaining": "4500"})
 
     adapter, _ = adapter_factory(handler, auth=_FakeAuth())
-    with caplog.at_level(logging.WARNING, logger="openbot.adapters.github"):
+    with caplog.at_level(logging.WARNING, logger="openbot.infrastructure.adapters.github"):
         await adapter.reply(_event(), "hi")
 
     assert not [r for r in caplog.records if r.message == "github_rate_limit_low"]

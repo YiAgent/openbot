@@ -11,14 +11,14 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
-from openbot.config_repo import (
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.config_loader import (
     EffectiveConfig,
     baked_in_defaults,
     clear_cache,
     load_for_repo,
 )
-from openbot.events import EventKind, UnifiedEvent
-from openbot.llm.router import Feature
+from openbot.infrastructure.llm.model_router import Feature
 
 # ───── fixtures ─────
 
@@ -263,7 +263,7 @@ def test_module_uses_safe_load_not_load() -> None:
     """Static guard: `yaml.load` (CWE-502 unsafe) must never appear in this module."""
     import pathlib
 
-    from openbot import config_repo
+    from openbot.infrastructure import config_loader as config_repo
 
     src = pathlib.Path(config_repo.__file__ or "")
     text = src.read_text(encoding="utf-8")

@@ -97,7 +97,7 @@ class Settings(BaseSettings):
     # ─── Worker queue (PRD §5.1 / harness spec §9.3) ───
     # Single-process worker with N asyncio consumers. v0.1 defaults to
     # 4 — fine for individual maintainer scale (<10 events/day). At
-    # higher load: start more `python -m openbot.queue.runner` processes;
+    # higher load: start more `python -m openbot.entrypoints.worker` processes;
     # they share the same Redis consumer group.
     worker_concurrency: int = Field(
         default=4,
@@ -105,7 +105,7 @@ class Settings(BaseSettings):
         le=64,
         description=(
             "Number of asyncio consumer tasks per worker process. "
-            "Each task pulls from openbot:workflows independently."
+            "Each task pulls from the openbot:workflows Redis stream independently."
         ),
     )
 
@@ -113,7 +113,7 @@ class Settings(BaseSettings):
 
     # ─── Debug echo (state-machine slice) ───
     # Routes every classified webhook to the debug echo handler — see
-    # ``openbot.handlers.debug_echo``. Default ``True`` so the
+    # ``openbot.application.handlers.debug_echo``. Default ``True`` so the
     # initial state-machine slice has visible end-to-end output before
     # real workflow logic lands. Flip to ``False`` once triage/review/fix/
     # chat handlers are wired through real LLM calls (PRD section 4.1 to 4.4).

@@ -15,7 +15,7 @@ Router gaps (events ``dispatch_for`` returns None for — not routed to SM):
 
 from __future__ import annotations
 
-from openbot.persistence.models import State
+from openbot.infrastructure.persistence.models import State
 from tests.state_machine._payloads import _REPO, issue_assigned_body, issue_body, sign
 from tests.state_machine.conftest import SMHarness
 

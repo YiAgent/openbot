@@ -3,7 +3,7 @@
 from fastapi.testclient import TestClient
 
 from openbot import __version__
-from openbot.webapp import app
+from openbot.entrypoints.api.app import app
 
 
 def test_health_returns_ok() -> None:

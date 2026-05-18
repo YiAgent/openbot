@@ -1,7 +1,7 @@
 """Table-driven coverage of ``state.classifier.classify``.
 
 One ``pytest.param`` per row of the intent matrix documented at the top
-of ``openbot/state/classifier.py``. Each row exercises:
+of ``openbot/application/state/classifier.py``. Each row exercises:
 
   * a synthetic ``UnifiedEvent`` (the minimum fields the classifier
     inspects — channel/repo/delivery_id are arbitrary)
@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import pytest
 
-from openbot.events import EventKind, UnifiedEvent
-from openbot.state.classifier import classify
-from openbot.state.intents import Intent, State
+from openbot.application.state.classifier import classify
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.domain.intents import Intent, State
 
 
 def _event(

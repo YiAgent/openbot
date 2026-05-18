@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 # Leaf-enum exception: domain → infrastructure layer violation, documented
 # and deferred to Task 1.10's import-linter contract design.
-from openbot.llm.router import Feature
+from openbot.infrastructure.llm.model_router import Feature
 
 SeverityThreshold = Literal["critical", "high", "medium", "low"]
 

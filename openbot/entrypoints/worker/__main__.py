@@ -9,7 +9,7 @@ shared ``asyncio.Event``; each consumer loop checks the event between
 ``XREADGROUP`` calls and exits cleanly. In-flight handlers finish their
 current dispatch before the process exits.
 
-Shape mirrors ``openbot.webapp.lifespan`` deliberately so the two
+Shape mirrors ``openbot.entrypoints.api.app.lifespan`` deliberately so the two
 entrypoints share their startup story. A future ``runner`` that swaps
 the dispatch layer (e.g. for v0.2 LangGraph + Modal) just changes what
 ``consume_loop`` does internally — the bootstrap is the same.
@@ -24,17 +24,17 @@ import sys
 from typing import TYPE_CHECKING
 
 from openbot import __version__
-from openbot.adapters.github import GitHubAdapter
-from openbot.adapters.github_auth import GitHubAppAuth
-from openbot.config import Settings, get_settings
-from openbot.infrastructure.queue.worker import consume_loop, ensure_consumer_group
-from openbot.obs import init_sentry
-from openbot.persistence import (
+from openbot.core.settings import Settings, get_settings
+from openbot.infrastructure.adapters.github import GitHubAdapter
+from openbot.infrastructure.adapters.github_auth import GitHubAppAuth
+from openbot.infrastructure.observability import init_sentry
+from openbot.infrastructure.persistence import (
     create_schema,
     make_client,
     make_engine,
     make_session_factory,
 )
+from openbot.infrastructure.queue.worker import consume_loop, ensure_consumer_group
 
 if TYPE_CHECKING:
     pass

@@ -5,7 +5,7 @@ OpenBot v0.1 在 Heroku 上的部署形状：
 | 进程  | Dyno   | 价格    | 行为                                                |
 |------|--------|--------|----------------------------------------------------|
 | web   | Basic  | $7/mo  | 永不休眠，HMAC 验签 → Redis dedup → 入队 → 返回 202 |
-| worker| Eco    | $5/mo  | `python -m openbot.queue.runner`，消费 Stream      |
+| worker| Eco    | $5/mo  | `python -m openbot.entrypoints.worker`，消费 Stream      |
 
 外部依赖（不走 Heroku addons）：
 
@@ -57,7 +57,7 @@ bash scripts/heroku-doppler-bootstrap.sh
 1. 旧 key 重命名：
    - `POSTGRES_URL` → `OPENBOT_POSTGRES_URL`
    - `REDIS_URL` → `OPENBOT_REDIS_URL`
-   - `OPENBOT_GITHUB_APP_PRIVATE_KEY_BASE64` → `OPENBOT_GITHUB_APP_PRIVATE_KEY_PEM`（新方案，配合 `openbot/config.py` 的 `github_app_private_key_pem`）
+   - `OPENBOT_GITHUB_APP_PRIVATE_KEY_BASE64` → `OPENBOT_GITHUB_APP_PRIVATE_KEY_PEM`（新方案，配合 `openbot.core.settings.py` 的 `github_app_private_key_pem`）
 2. 常量写入：`OPENBOT_SANDBOX_BACKEND=daytona` / `PYTHONUNBUFFERED=1` / `OPENBOT_WORKER_CONCURRENCY=4`
 3. 扫描空值并打印仍缺什么
 

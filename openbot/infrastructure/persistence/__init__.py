@@ -1,7 +1,7 @@
 """Persistence layer — Redis + Postgres.
 
 Redis (slice 1/3):
-  - webhook dedup        (openbot.persistence.dedup)
+  - webhook dedup        (openbot.infrastructure.persistence.dedup)
   - rate-limit counters  (middleware slice)
   - workflow queue       (middleware slice)
 

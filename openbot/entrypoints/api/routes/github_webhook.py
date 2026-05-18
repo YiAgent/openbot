@@ -25,9 +25,9 @@ if TYPE_CHECKING:
     from openbot.domain.events import UnifiedEvent
 
 # Keep the original logger name so existing log-based monitoring and any
-# future caplog tests targeting "openbot.webapp" continue to work.
+# future caplog tests targeting "openbot.entrypoints.api.app" continue to work.
 # TODO(Task 1.11): rename to "openbot.api.github_webhook" when shims are removed.
-_logger = logging.getLogger("openbot.webapp")
+_logger = logging.getLogger("openbot.entrypoints.api.app")
 
 router = APIRouter()
 
@@ -355,13 +355,13 @@ async def _run_dispatch(
 ) -> None:
     """In-process dispatch — used as the fallback when Redis is absent.
 
-    Production runs through the Redis queue worker (``openbot.queue.runner``)
+    Production runs through the Redis queue worker (``openbot.infrastructure.queue.runner``)
     instead; this path exists so `make dev` without docker-compose still
     delivers a working bot and so unit tests don't need fakeredis just
     to exercise the webhook flow.
 
     The actual middleware chain + handler invocation lives in
-    ``openbot.dispatch.run_dispatch`` so the worker and the webapp can't
+    ``openbot.application.dispatcher.run_dispatch`` so the worker and the webapp can't
     drift apart.
     """
     await run_dispatch(

@@ -6,11 +6,11 @@ from dataclasses import replace
 
 import pytest
 
-from openbot.config_repo import baked_in_defaults
-from openbot.llm.router import Feature
-from openbot.middleware import MiddlewareResult
-from openbot.middleware.feature_toggle import FeatureToggleMiddleware
-from openbot.persistence.models import WorkflowPhase
+from openbot.application.middleware import MiddlewareResult
+from openbot.application.middleware.feature_toggle import FeatureToggleMiddleware
+from openbot.infrastructure.config_loader import baked_in_defaults
+from openbot.infrastructure.llm.model_router import Feature
+from openbot.infrastructure.persistence.models import WorkflowPhase
 from tests.middleware.conftest import make_ctx
 
 

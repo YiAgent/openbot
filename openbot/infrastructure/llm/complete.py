@@ -2,7 +2,7 @@
 
 Single entry point for every LLM call OpenBot makes. Every call:
 
-  1. Routes feature → primary model via `openbot.llm.router.primary_model_for()`
+  1. Routes feature → primary model via `openbot.infrastructure.llm.model_router.primary_model_for()`
   2. Calls `litellm.acompletion(...)` — LiteLLM handles vendor fallback
      if the runtime model list is configured for it.
   3. Computes USD cost via `litellm.completion_cost(...)`.

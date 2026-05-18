@@ -4,7 +4,7 @@
 
 **Goal:** Create `tests/state_machine/` — 16 tests covering the full webhook endpoint flow (HTTP → dedup → router → state machine → Redis enqueue) using `httpx.AsyncClient + ASGITransport`, `fakeredis`, and `aiosqlite`.
 
-**Architecture:** Patch `openbot.webapp.make_client` before the ASGI lifespan runs so the app uses a per-test `FakeRedis`. Set `OPENBOT_POSTGRES_URL=sqlite+aiosqlite:///:memory:` so lifespan creates an in-memory SQLite DB with the full schema. `AsyncClient + ASGITransport` (not `TestClient`) runs in the same event loop as `FakeRedis`.
+**Architecture:** Patch `openbot.entrypoints.api.app.make_client` before the ASGI lifespan runs so the app uses a per-test `FakeRedis`. Set `OPENBOT_POSTGRES_URL=sqlite+aiosqlite:///:memory:` so lifespan creates an in-memory SQLite DB with the full schema. `AsyncClient + ASGITransport` (not `TestClient`) runs in the same event loop as `FakeRedis`.
 
 **Tech Stack:** pytest-asyncio (auto mode), httpx + ASGITransport, fakeredis.aioredis, aiosqlite + SQLAlchemy 2.x.
 
@@ -152,7 +152,7 @@ git commit -m "test(state-machine): add payload builders for L2 suite"
 ```python
 """State-machine L2 integration harness.
 
-Injection: ``openbot.webapp.make_client`` is patched to return a per-test
+Injection: ``openbot.entrypoints.api.app.make_client`` is patched to return a per-test
 FakeRedis before the ASGI lifespan runs. ``OPENBOT_POSTGRES_URL`` is set
 to ``sqlite+aiosqlite:///:memory:`` so ``make_engine`` creates in-memory
 SQLite; ``create_schema`` initialises all tables inside the lifespan.
@@ -170,10 +170,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from openbot.persistence.models import State, TaskRun
+from openbot.infrastructure.persistence.models import State, TaskRun
 from tests.state_machine._payloads import _SM_SECRET
 
-_STREAM_NAME = "openbot:workflows"
+_STREAM_NAME = "openbot.application.workflows"
 
 
 @dataclass
@@ -209,7 +209,7 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     all OPENBOT_* vars before each test; our monkeypatch.setenv calls layer
     on top of that strip.
     """
-    from openbot.config import get_settings
+    from openbot.core.settings import get_settings
 
     monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SM_SECRET)
     monkeypatch.setenv("OPENBOT_POSTGRES_URL", "sqlite+aiosqlite:///:memory:")
@@ -220,9 +220,9 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     get_settings.cache_clear()
 
     redis_fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    monkeypatch.setattr("openbot.webapp.make_client", lambda _url: redis_fake)
+    monkeypatch.setattr("openbot.entrypoints.api.app.make_client", lambda _url: redis_fake)
 
-    from openbot.webapp import app
+    from openbot.entrypoints.api.app import app
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield SMHarness(
@@ -264,7 +264,7 @@ NOTE (I-04): ISSUE_CLOSED is not routed by dispatch_for() — router gap.
 """
 from __future__ import annotations
 
-from openbot.persistence.models import State
+from openbot.infrastructure.persistence.models import State
 from tests.state_machine._payloads import _REPO, issue_assigned_body, issue_body, sign
 from tests.state_machine.conftest import SMHarness
 
@@ -380,7 +380,7 @@ NOTE (P-04): PR_CLOSED / PR_MERGED not routed by dispatch_for() — router gap.
 """
 from __future__ import annotations
 
-from openbot.persistence.models import State
+from openbot.infrastructure.persistence.models import State
 from tests.state_machine._payloads import _REPO, pr_body, sign
 from tests.state_machine.conftest import SMHarness
 
@@ -529,8 +529,8 @@ async def test_redis_enqueue_failure_graceful(sm: SMHarness, monkeypatch: pytest
     async def _noop_dispatch(*_a: Any, **_kw: Any) -> None:
         pass
 
-    monkeypatch.setattr("openbot.webapp.enqueue", _raise_on_enqueue)
-    monkeypatch.setattr("openbot.webapp.run_dispatch", _noop_dispatch)
+    monkeypatch.setattr("openbot.entrypoints.api.app.enqueue", _raise_on_enqueue)
+    monkeypatch.setattr("openbot.entrypoints.api.app.run_dispatch", _noop_dispatch)
 
     body = issue_body("opened", number=42)
     resp = await sm.client.post("/webhook/github", content=body, headers=sign(body, event="issues", delivery="d-32"))

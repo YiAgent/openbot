@@ -13,7 +13,7 @@ RUFF     ?= $(PY) ruff
 PYTEST   ?= $(PY) pytest
 UVICORN  ?= $(PY) uvicorn
 
-APP      ?= openbot.webapp:app
+APP      ?= openbot.entrypoints.api.app:app
 PORT     ?= 8080
 HOST     ?= 127.0.0.1
 TARGET_URL := http://$(HOST):$(PORT)/webhook/github
@@ -88,13 +88,13 @@ run: ## Run FastAPI app (production-style, no reload)
 	$(UVICORN) $(APP) --host $(HOST) --port $(PORT)
 
 worker: ## Run the Redis Stream worker (slice D — consumes openbot:workflows)
-	uv run python -m openbot.queue.runner
+	uv run python -m openbot.entrypoints.worker
 
 smoke: ## Hit /health to verify server is up
 	@curl -sf "http://$(HOST):$(PORT)/health" && echo
 
 setup: ## Interactive GitHub App + .env wizard (manifest flow)
-	uv run python -m openbot.setup_wizard
+	uv run python -m openbot.entrypoints.cli.setup_wizard
 
 doctor: ## First-run self-check (ENV / Postgres / Redis / schema / webhook round-trip)
 	$(PY) python scripts/doctor.py

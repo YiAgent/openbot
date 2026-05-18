@@ -19,13 +19,13 @@ from typing import Any
 import httpx
 import pytest
 
-from openbot.adapters.github import (
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.adapters.github import (
     _RETRY_MAX_ATTEMPTS,
     GitHubAdapter,
     _is_retryable_github_error,
 )
-from openbot.adapters.github_auth import InstallationToken
-from openbot.events import EventKind, UnifiedEvent
+from openbot.infrastructure.adapters.github_auth import InstallationToken
 
 _SECRET = "test-secret"
 _INSTALL_ID = 9_999_999

@@ -187,7 +187,7 @@ def test_fake_has_transition_method() -> None:
 async def test_queued_result_returned_in_order() -> None:
     from openbot.application.state.classifier import EventClassification
     from openbot.application.state.runs_repo import State
-    from openbot.application.state.intents import Intent  # adjust to domain.intents path
+    from openbot.domain.intents import Intent  # adjust to domain.intents path
 
     repo = FakeRunsRepo()
     repo.queued = [

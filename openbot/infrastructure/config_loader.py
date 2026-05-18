@@ -50,8 +50,8 @@ from openbot.domain.config_schema import (
     RateLimitConfig,
     SeverityThreshold,
 )
-from openbot.events import UnifiedEvent
-from openbot.llm.router import Feature
+from openbot.domain.events import UnifiedEvent
+from openbot.infrastructure.llm.model_router import Feature
 
 _logger = logging.getLogger(__name__)
 

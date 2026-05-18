@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from openbot.middleware import MiddlewareResult
-from openbot.middleware.audit import AUDIT_STARTED_CACHE_KEY, AuditStartMiddleware
-from openbot.persistence.models import Base, Workflow, WorkflowPhase
-from openbot.persistence.repository import AuditLogRepo
+from openbot.application.middleware import MiddlewareResult
+from openbot.application.middleware.audit import AUDIT_STARTED_CACHE_KEY, AuditStartMiddleware
+from openbot.infrastructure.persistence.models import Base, Workflow, WorkflowPhase
+from openbot.infrastructure.persistence.repository import AuditLogRepo
 from tests.middleware.conftest import make_ctx
 
 
@@ -82,7 +82,7 @@ async def test_db_failure_falls_open(caplog: pytest.LogCaptureFixture) -> None:
     bad_factory.return_value.__aenter__ = AsyncMock(side_effect=RuntimeError("db down"))
 
     ctx = make_ctx(session_factory=bad_factory)
-    with caplog.at_level(logging.ERROR, logger="openbot.middleware.audit"):
+    with caplog.at_level(logging.ERROR, logger="openbot.application.middleware.audit"):
         decision = await AuditStartMiddleware()(ctx)
 
     assert decision.result is MiddlewareResult.PROCEED

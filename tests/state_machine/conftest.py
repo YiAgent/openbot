@@ -33,9 +33,14 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from openbot.adapters.github import GitHubAdapter
-from openbot.persistence import WebhookDedup, create_schema, make_engine, make_session_factory
-from openbot.persistence.models import State, TaskRun
+from openbot.infrastructure.adapters.github import GitHubAdapter
+from openbot.infrastructure.persistence import (
+    WebhookDedup,
+    create_schema,
+    make_engine,
+    make_session_factory,
+)
+from openbot.infrastructure.persistence.models import State, TaskRun
 from tests.state_machine._payloads import _SM_SECRET
 
 
@@ -54,7 +59,7 @@ class SMHarness:
     session_factory: async_sessionmaker[AsyncSession]
 
     async def queue_len(self) -> int:
-        """Number of entries currently in the ``openbot:workflows`` stream."""
+        """Number of entries currently in the ``openbot.application.workflows`` stream."""
         return await self.redis.xlen("openbot:workflows")
 
     async def _db_row(self, resource_key: str) -> TaskRun | None:
@@ -89,7 +94,7 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     The only setting the app reads inside a request is ``debug_echo_enabled``
     (to choose the workflow handler in ``_resolve_handler``), so we set that.
     """
-    from openbot.config import get_settings
+    from openbot.core.settings import get_settings
 
     monkeypatch.setenv("OPENBOT_DEBUG_ECHO_ENABLED", "false")
     get_settings.cache_clear()
@@ -99,7 +104,7 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     await create_schema(engine)
     session_factory = make_session_factory(engine)
 
-    from openbot.webapp import app
+    from openbot.entrypoints.api.app import app
 
     # Populate app.state with test doubles — mirrors what lifespan would write.
     app.state.redis = redis_fake

@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openbot.events import EventKind
-from openbot.llm.router import Feature
-from openbot.middleware import MiddlewareResult
-from openbot.middleware.security import (
+from openbot.application.middleware import MiddlewareResult
+from openbot.application.middleware.security import (
     ActorRoleMiddleware,
     ForkPRGateMiddleware,
 )
+from openbot.domain.events import EventKind
+from openbot.infrastructure.llm.model_router import Feature
 from tests.middleware.conftest import make_ctx, make_event
 
 
@@ -191,7 +191,7 @@ async def test_actor_role_blocks_chat_when_allow_anyone_false() -> None:
     """Workspace can opt into restricted chat by setting allow_anyone: false."""
     from dataclasses import replace
 
-    from openbot.config_repo import baked_in_defaults
+    from openbot.infrastructure.config_loader import baked_in_defaults
 
     # Build a config with chat.allow_anyone explicitly False in raw.
     base = baked_in_defaults()

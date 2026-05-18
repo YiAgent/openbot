@@ -5,7 +5,7 @@ Harness spec §3 M2 / §9.1.
 This is the **input-side** Router only. It maps an authenticated webhook
 event to the workflow stub that should handle it; it does **not** decide
 whether the workflow may proceed. Authorization / budget / rate-limit
-gating happens in the pre-flight middleware chain (`openbot.middleware`).
+gating happens in the pre-flight middleware chain (`openbot.application.middleware`).
 
 Pure, no I/O. `dispatch_for(event)` returns `None` for events the bot
 doesn't react to — the webapp short-circuits with 202 in that case.
@@ -34,7 +34,7 @@ State-machine slice (this revision):
     handler-side code degrades gracefully.
   - When ``settings.debug_echo_enabled`` is True, every classified
     feature routes to ``handlers.debug_echo`` instead of the real
-    workflow stub — see ``openbot.handlers.debug_echo`` for the trace
+    workflow stub — see ``openbot.application.handlers.debug_echo`` for the trace
     schema.
 """
 
@@ -44,16 +44,16 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
-from openbot.config import get_settings
+from openbot.core.settings import get_settings
+from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.identifiers import derive_run_id, derive_task_id
-from openbot.events import EventKind, UnifiedEvent
-from openbot.llm.router import Feature
+from openbot.infrastructure.llm.model_router import Feature
 
 if TYPE_CHECKING:
     # Avoid the import-cycle: workflows import middleware → middleware
     # imports nothing from router. We only need the handlers' callable
     # signature for type-checking.
-    from openbot.middleware.preflight import PreflightContext
+    from openbot.application.middleware.preflight import PreflightContext
 
     Handler = Callable[[PreflightContext], Awaitable[None]]
 else:

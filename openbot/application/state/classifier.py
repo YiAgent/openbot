@@ -33,11 +33,11 @@ from __future__ import annotations
 
 from typing import Final
 
+from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.intents import EventClassification, Intent, State
-from openbot.events import EventKind, UnifiedEvent
 
 # The chat-mention prefixes the classifier accepts. Kept in sync with
-# ``openbot.router._get_chat_prefix`` — when that grows to read settings,
+# ``openbot.application.router._get_chat_prefix`` — when that grows to read settings,
 # this should follow. For now both default to the same constants so chat
 # routing is byte-identical between the legacy and state-machine paths.
 _CHAT_PREFIXES: Final = ("@openbot ", "@yibots ")

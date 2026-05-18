@@ -24,7 +24,7 @@ guarantee one of the two patterns appears in audit_log:
 
 To avoid double-writes, this middleware sets
 ``ctx.cache["audit_started"] = True`` after a successful write;
-``openbot.workflows._lifecycle.audit_lifecycle`` reads that flag and
+``openbot.application.workflows._lifecycle.audit_lifecycle`` reads that flag and
 **skips** its own STARTED write when the middleware already did it.
 
 Fall-open semantics: a DB unavailability MUST NOT block all webhooks.
@@ -42,7 +42,7 @@ from openbot.application.middleware.preflight import (
     MiddlewareDecision,
     PreflightContext,
 )
-from openbot.persistence.models import WorkflowPhase
+from openbot.infrastructure.persistence.models import WorkflowPhase
 
 _logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class AuditStartMiddleware:
         # Local import keeps this module importable in unit tests
         # that don't pull in SQLAlchemy (mirrors the pattern used
         # by ``preflight._write_block_audit``).
-        from openbot.persistence.repository import AuditLogRepo
+        from openbot.infrastructure.persistence.repository import AuditLogRepo
 
         try:
             async with ctx.session_factory() as session:
