@@ -63,12 +63,38 @@ class AuditStartMiddleware:
     name = "audit_start"
 
     async def __call__(self, ctx: PreflightContext) -> MiddlewareDecision:
+        workflow_value = ctx.dispatch.feature.value
+
+        # Prefer the Port if wired.
+        if ctx.audit is not None:
+            try:
+                await ctx.audit.write(
+                    phase=WorkflowPhase.STARTED.value,
+                    delivery_id=ctx.event.delivery_id or None,
+                    repo=ctx.event.repo or None,
+                    actor=ctx.event.actor or None,
+                    workflow=workflow_value,
+                    outcome=None,
+                )
+            except Exception:
+                _logger.exception(
+                    "audit_start_write_failed",
+                    extra={
+                        "delivery_id": ctx.event.delivery_id,
+                        "repo": ctx.event.repo,
+                        "workflow": workflow_value,
+                    },
+                )
+                return MiddlewareDecision.proceed()
+            ctx.cache[AUDIT_STARTED_CACHE_KEY] = True
+            return MiddlewareDecision.proceed()
+
+        # Backward-compat: session_factory path.
         if ctx.session_factory is None:
             # No Postgres configured — dev mode. Nothing to write
             # and nothing for the lifecycle helper to suppress.
             return MiddlewareDecision.proceed()
 
-        workflow_value = ctx.dispatch.feature.value
         # Local import keeps this module importable in unit tests
         # that don't pull in SQLAlchemy (mirrors the pattern used
         # by ``preflight._write_block_audit``).

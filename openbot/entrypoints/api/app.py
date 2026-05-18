@@ -123,12 +123,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.db_engine = db_engine
     app.state.db_session_factory = db_session_factory
 
+    from openbot.infrastructure.persistence.audit_log_impl import SqlAuditLog
     from openbot.infrastructure.persistence.runs_repo_impl import SqlRunsRepo
 
     if db_session_factory is not None:
         app.state.runs_repo = SqlRunsRepo(db_session_factory)
+        app.state.audit = SqlAuditLog(db_session_factory)
     else:
         app.state.runs_repo = None
+        app.state.audit = None
 
     app.state.github_auth = auth
     github_adapter: ChannelAdapterPort | None = (

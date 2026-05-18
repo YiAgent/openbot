@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     import redis.asyncio as redis_async
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from openbot.application.ports.audit_log import AuditLogPort
     from openbot.application.router import Dispatch
     from openbot.domain.events import UnifiedEvent
     from openbot.infrastructure.adapters.github import GitHubAdapter
@@ -106,6 +107,7 @@ async def run_dispatch(
     session_factory: async_sessionmaker[AsyncSession] | None,
     redis: redis_async.Redis | None,
     check_run_id: int | None = None,
+    audit: AuditLogPort | None = None,
 ) -> None:
     """Load config → pre-flight → handler.
 
@@ -151,6 +153,7 @@ async def run_dispatch(
         session_factory=session_factory,
         redis=redis,
         check_run_id=check_run_id,
+        audit=audit,
     )
 
     try:

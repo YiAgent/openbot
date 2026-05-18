@@ -272,6 +272,7 @@ async def github_webhook(
         event,
         dispatch,
         check_run_id,
+        getattr(request.app.state, "audit", None),
     )
 
     return {
@@ -339,6 +340,7 @@ async def _run_dispatch(
     event: UnifiedEvent,
     dispatch: Dispatch,
     check_run_id: int | None = None,
+    audit: object | None = None,
 ) -> None:
     """In-process dispatch — used as the fallback when Redis is absent.
 
@@ -358,4 +360,5 @@ async def _run_dispatch(
         session_factory=getattr(app_instance.state, "db_session_factory", None),
         redis=getattr(app_instance.state, "redis", None),
         check_run_id=check_run_id,
+        audit=audit,
     )
