@@ -111,15 +111,15 @@ async def test_two_concurrent_synchronize_one_wins(sm: SMHarness) -> None:
     # We must read from the stream to get the actual run_ids.
     sync_run_ids = await _stream_run_ids(sm, skip=1)  # skip the open entry
     assert len(sync_run_ids) == 2, f"Expected 2 sync run_ids, got {sync_run_ids}"
-    assert (
-        final_run_id in sync_run_ids
-    ), f"Final DB run_id={final_run_id!r} must be one of the sync run_ids={sync_run_ids}"
+    assert final_run_id in sync_run_ids, (
+        f"Final DB run_id={final_run_id!r} must be one of the sync run_ids={sync_run_ids}"
+    )
 
     # The losing sync run MUST have a cancel flag.
     losing_id = (set(sync_run_ids) - {final_run_id}).pop()
-    assert (
-        await sm.cancel_flag(losing_id) is True
-    ), f"Expected cancel flag for superseded sync run_id={losing_id!r}"
+    assert await sm.cancel_flag(losing_id) is True, (
+        f"Expected cancel flag for superseded sync run_id={losing_id!r}"
+    )
 
 
 # ── I-20 (adapted): three concurrent synchronize events ───────────────────
@@ -169,9 +169,9 @@ async def test_three_concurrent_synchronize_one_wins(sm: SMHarness) -> None:
 
     # The two non-winning sync run_ids must be cancelled.
     for rid in set(sync_run_ids) - {final_run_id}:
-        assert (
-            await sm.cancel_flag(rid) is True
-        ), f"Expected cancel flag for losing sync run_id={rid!r}"
+        assert await sm.cancel_flag(rid) is True, (
+            f"Expected cancel flag for losing sync run_id={rid!r}"
+        )
 
     # Winner has no cancel flag.
     assert await sm.cancel_flag(final_run_id) is False
@@ -222,9 +222,9 @@ async def test_concurrent_issue_opened_no_double_start(sm: SMHarness) -> None:
 
     # The ignored one must carry reason=already_running.
     ignored = data_a if data_a["status"] == "ignored" else data_b
-    assert (
-        ignored.get("reason") == "already_running"
-    ), f"Expected reason='already_running', got {ignored.get('reason')!r}"
+    assert ignored.get("reason") == "already_running", (
+        f"Expected reason='already_running', got {ignored.get('reason')!r}"
+    )
 
     # DB must have exactly one RUNNING state.
     assert await sm.db_state(_ISSUE_RK) == State.RUNNING

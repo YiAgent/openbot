@@ -103,9 +103,9 @@ async def test_issue_opened_db_committed_before_stream_entry(sm: SMHarness) -> N
     assert payload.run_id is not None
 
     db_run_id = await sm.db_run_id(_ISSUE_RK)
-    assert (
-        db_run_id == payload.run_id
-    ), "Ordering violation: issue stream entry predates the DB commit"
+    assert db_run_id == payload.run_id, (
+        "Ordering violation: issue stream entry predates the DB commit"
+    )
 
 
 # ── I-24c: SUPERSEDE — new entry's run_id matches post-commit DB state ────
@@ -154,8 +154,8 @@ async def test_supersede_stream_payload_matches_db_run_id(sm: SMHarness) -> None
 
     # The DB must already hold the NEW run_id (not the original).
     db_run_id_after = await sm.db_run_id(_PR_RK)
-    assert (
-        db_run_id_after == payload_sync.run_id
-    ), "After SUPERSEDE: DB run_id must equal the superseding payload's run_id"
+    assert db_run_id_after == payload_sync.run_id, (
+        "After SUPERSEDE: DB run_id must equal the superseding payload's run_id"
+    )
     # And the new run_id must be different from the original.
     assert db_run_id_after != run_id_open

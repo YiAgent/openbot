@@ -209,9 +209,9 @@ async def test_max_attempts_exhausted_sends_to_dlq(
 
     # The DLQ entry must carry the failure reason and the source entry_id.
     _, dlq_fields = dlq_entries[-1]
-    assert (
-        dlq_fields.get("reason") == "max_attempts"
-    ), f"DLQ entry reason must be 'max_attempts', got {dlq_fields.get('reason')!r}"
+    assert dlq_fields.get("reason") == "max_attempts", (
+        f"DLQ entry reason must be 'max_attempts', got {dlq_fields.get('reason')!r}"
+    )
 
     # PEL must be empty — no entry stuck in the PEL after DLQ.
     pending_final = await sm.redis.xpending(STREAM_NAME, GROUP_NAME)
