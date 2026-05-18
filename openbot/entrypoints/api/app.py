@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 
 from openbot import __version__
+from openbot.application.ports.dedup import DedupPort
 from openbot.core.settings import Settings, get_settings
 from openbot.entrypoints.api.routes.github_webhook import router as _webhook_router
 from openbot.entrypoints.api.routes.health import router as _health_router
@@ -99,7 +100,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         make_client(settings.redis_url) if settings.redis_url else None
     )
     app.state.redis = redis_client
-    app.state.dedup = WebhookDedup(redis_client)
+    dedup: DedupPort = WebhookDedup(redis_client)
+    app.state.dedup = dedup
 
     db_engine: AsyncEngine | None = None
     db_session_factory: async_sessionmaker[AsyncSession] | None = None

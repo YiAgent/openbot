@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 from enum import StrEnum
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import redis.asyncio as redis_async
 
@@ -127,3 +127,10 @@ class WebhookDedup:
             return DedupOutcome.FALLBACK_OPEN
 
         return DedupOutcome.FRESH if was_set else DedupOutcome.DUPLICATE
+
+
+if TYPE_CHECKING:
+    from openbot.application.ports.dedup import DedupPort
+
+    # Structural check — fails type-checking if the API drifts.
+    _witness: DedupPort = WebhookDedup(redis=None)  # type: ignore[arg-type]

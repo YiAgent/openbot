@@ -11,6 +11,7 @@ layers =
     openbot.core
 unmatched_ignore_imports_alerting = warn
 ignore_imports =
+    openbot.application.ports.dedup -> openbot.infrastructure.persistence.dedup
     openbot.application.middleware.* -> openbot.infrastructure.persistence.*
     openbot.application.state.* -> openbot.infrastructure.persistence.*
     openbot.application.middleware.* -> openbot.infrastructure.llm.*
