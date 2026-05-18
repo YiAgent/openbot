@@ -92,8 +92,10 @@ async def test_redis_enqueue_failure_graceful(
     async def _noop_dispatch(*_a: Any, **_kw: Any) -> None:
         pass
 
-    monkeypatch.setattr("openbot.webapp.enqueue", _raise_on_enqueue)
-    monkeypatch.setattr("openbot.webapp.run_dispatch", _noop_dispatch)
+    monkeypatch.setattr("openbot.entrypoints.api.routes.github_webhook.enqueue", _raise_on_enqueue)
+    monkeypatch.setattr(
+        "openbot.entrypoints.api.routes.github_webhook.run_dispatch", _noop_dispatch
+    )
 
     body = issue_body("opened", number=42)
     resp = await sm.client.post(
