@@ -194,18 +194,16 @@ async def _forward(
 
 
 async def _create_channel() -> str:
-    """POST to smee.io/new and follow redirect to get channel URL."""
-    async with httpx.AsyncClient(follow_redirects=False) as client:
-        resp = await client.post("https://smee.io/new", timeout=10.0)
-        if resp.status_code in (301, 302, 303):
-            channel_url = str(resp.headers["location"])
-            if not channel_url.startswith("http"):
-                channel_url = "https://smee.io" + channel_url
-            return channel_url
-        # smee.io sometimes returns 200 with the URL in the body.
-        if resp.status_code == 200 and resp.url != "https://smee.io/new":
-            return str(resp.url)
-        raise RuntimeError(f"failed to create smee channel: HTTP {resp.status_code}")
+    """GET https://smee.io/new (follow redirect) to obtain a fresh channel URL."""
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        resp = await client.get("https://smee.io/new", timeout=10.0)
+        # After the redirect chain, the final URL is the new channel.
+        final_url = str(resp.url)
+        if final_url != "https://smee.io/new" and final_url.startswith("https://smee.io/"):
+            return final_url
+        raise RuntimeError(
+            f"failed to create smee channel: HTTP {resp.status_code} url={final_url}"
+        )
 
 
 # ── Main relay loop ───────────────────────────────────────────────────────────
