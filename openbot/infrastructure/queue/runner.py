@@ -27,6 +27,7 @@ from openbot import __version__
 from openbot.adapters.github import GitHubAdapter
 from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.config import Settings, get_settings
+from openbot.infrastructure.queue.worker import consume_loop, ensure_consumer_group
 from openbot.obs import init_sentry
 from openbot.persistence import (
     create_schema,
@@ -34,7 +35,6 @@ from openbot.persistence import (
     make_engine,
     make_session_factory,
 )
-from openbot.queue.worker import consume_loop, ensure_consumer_group
 
 if TYPE_CHECKING:
     pass

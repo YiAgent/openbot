@@ -1,58 +1,29 @@
-"""Persistence layer — Redis + Postgres.
+"""Phase-1 shim — re-export from infrastructure.persistence."""
 
-Redis (slice 1/3):
-  - webhook dedup        (openbot.persistence.dedup)
-  - rate-limit counters  (middleware slice)
-  - workflow queue       (middleware slice)
+import sys as _sys
 
-Postgres (slice 2/3, this slice):
-  - cost_meter           (every LLM call, drives PRD §4.5 budget caps)
-  - audit_log            (workflow lifecycle, drives PRD §9.4 audit trail)
-"""
-
-from openbot.persistence.db import (
-    create_schema,
-    make_engine,
-    make_session_factory,
-    session_scope,
+from openbot.infrastructure.persistence import *  # noqa: F403
+from openbot.infrastructure.persistence import (
+    db as db,
 )
-from openbot.persistence.dedup import DedupOutcome, WebhookDedup
-from openbot.persistence.models import (
-    AuditLog,
-    Base,
-    CostMeter,
-    CostStatus,
-    Intent,
-    State,
-    TaskRun,
-    Workflow,
-    WorkflowPhase,
+from openbot.infrastructure.persistence import (
+    dedup as dedup,
 )
-from openbot.persistence.redis import make_client
-from openbot.persistence.repository import (
-    AuditLogRepo,
-    CostMeterRepo,
-    rolling_month_window,
+from openbot.infrastructure.persistence import (
+    models as models,
+)
+from openbot.infrastructure.persistence import (
+    redis as redis,
+)
+from openbot.infrastructure.persistence import (
+    repository as repository,
 )
 
-__all__ = [
-    "AuditLog",
-    "AuditLogRepo",
-    "Base",
-    "CostMeter",
-    "CostMeterRepo",
-    "CostStatus",
-    "DedupOutcome",
-    "Intent",
-    "State",
-    "TaskRun",
-    "WebhookDedup",
-    "Workflow",
-    "WorkflowPhase",
-    "create_schema",
-    "make_client",
-    "make_engine",
-    "make_session_factory",
-    "rolling_month_window",
-    "session_scope",
-]
+# `from X import Y` binds Y as an attribute of this module, which is what
+# `getattr` walks (e.g. monkeypatch.setattr) need.  The sys.modules
+# registration is belt-and-suspenders for direct `import` use.
+_sys.modules[__name__ + ".db"] = db
+_sys.modules[__name__ + ".dedup"] = dedup
+_sys.modules[__name__ + ".models"] = models
+_sys.modules[__name__ + ".redis"] = redis
+_sys.modules[__name__ + ".repository"] = repository

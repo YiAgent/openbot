@@ -53,7 +53,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCAN_DIRS: tuple[Path, ...] = (
     _REPO_ROOT / "openbot" / "workflows",
-    _REPO_ROOT / "openbot" / "llm",
+    _REPO_ROOT / "openbot" / "infrastructure" / "llm",
 )
 
 # Fields on ``UnifiedEvent`` that carry user-controlled text (PRD §4.8
@@ -174,7 +174,7 @@ def test_scan_actually_runs_on_known_files() -> None:
         "openbot/workflows/triage.py",
         "openbot/workflows/review.py",
         "openbot/workflows/fix.py",
-        "openbot/llm/sanitize.py",
+        "openbot/infrastructure/llm/sanitize.py",
     }
     missing = must_include - rel
     assert not missing, f"AST lint scan missed expected files: {missing}"

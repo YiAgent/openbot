@@ -1,44 +1,30 @@
-"""Redis Stream workflow queue — harness spec §3 M10.
+"""Phase-1 shim — re-export from infrastructure.queue."""
 
-Replaces FastAPI ``BackgroundTasks`` with a persistent queue so workflows
-survive a worker restart. The webhook handler enqueues; one or more
-worker processes (``python -m openbot.queue.runner``) consume.
+import importlib as _importlib
+import sys as _sys
 
-Slice D delivers the **single-process** variant per spec §9.3:
-``asyncio.gather`` over N consumers in one process, default N=4
-(``OPENBOT_WORKER_CONCURRENCY``). Multi-process is a v0.2 extension —
-the consumer-group plumbing is already in place; running multiple
-``runner.py`` processes that share the same group name is the only
-configuration change needed.
-
-Stream layout
--------------
-
-  ``openbot:workflows``               main work stream (capped MAXLEN)
-  ``openbot:workflows:group``         consumer group name
-  ``openbot:workflows:dead``          DLQ — entries that exceeded retry cap
-  ``openbot:workflows:retries:<id>``  per-entry attempt counter, 7d TTL
-"""
-
-from openbot.queue.enqueue import enqueue
-from openbot.queue.payload import (
-    DEAD_STREAM,
-    GROUP_NAME,
-    MAX_STREAM_LEN,
-    STREAM_NAME,
-    QueuePayload,
-    deserialize_payload,
+from openbot.infrastructure.queue import *  # noqa: F403
+from openbot.infrastructure.queue import (
+    enqueue as enqueue,
 )
-from openbot.queue.worker import consume_loop, ensure_consumer_group
+from openbot.infrastructure.queue import (
+    payload as payload,
+)
+from openbot.infrastructure.queue import (
+    runner as runner,
+)
+from openbot.infrastructure.queue import (
+    worker as worker,
+)
 
-__all__ = [
-    "DEAD_STREAM",
-    "GROUP_NAME",
-    "MAX_STREAM_LEN",
-    "STREAM_NAME",
-    "QueuePayload",
-    "consume_loop",
-    "deserialize_payload",
-    "enqueue",
-    "ensure_consumer_group",
-]
+# `from X import Y` already binds Y as an attribute of this module, which
+# is what `monkeypatch.setattr` needs (it walks via getattr, not importlib).
+# The sys.modules registration is belt-and-suspenders for direct module imports.
+#
+# NOTE: enqueue is a function (not a module), so we must import the actual
+# module separately for sys.modules registration.
+_enqueue_mod = _importlib.import_module("openbot.infrastructure.queue.enqueue")
+_sys.modules[__name__ + ".enqueue"] = _enqueue_mod
+_sys.modules[__name__ + ".payload"] = payload
+_sys.modules[__name__ + ".runner"] = runner
+_sys.modules[__name__ + ".worker"] = worker

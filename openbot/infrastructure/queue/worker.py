@@ -34,7 +34,7 @@ import logging
 from typing import TYPE_CHECKING, Final
 
 from openbot.dispatch import run_dispatch
-from openbot.queue.payload import (
+from openbot.infrastructure.queue.payload import (
     DEAD_STREAM,
     GROUP_NAME,
     MAX_STREAM_LEN,

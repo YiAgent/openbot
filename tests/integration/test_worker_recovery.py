@@ -31,10 +31,10 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
-from openbot.queue import STREAM_NAME, consume_loop, ensure_consumer_group
 from openbot.queue.payload import DEAD_STREAM, GROUP_NAME
 from openbot.queue.worker import _MAX_ATTEMPTS
+
+from openbot.queue import STREAM_NAME, consume_loop, ensure_consumer_group
 from tests.state_machine._payloads import pr_body, sign
 
 from .conftest import SMHarness

@@ -1,10 +1,21 @@
-"""ChannelAdapter implementations.
+"""Phase-1 shim — re-export from infrastructure.adapters."""
 
-PRD §13 #11: ABC stays day-1; v0.1 ships only GitHubAdapter. v0.2 adds
-LinearAdapter; v0.3+ Slack / Discord.
-"""
+import sys as _sys
 
-from openbot.adapters.base import ChannelAdapter, SignatureError
-from openbot.adapters.github import GitHubAdapter
+from openbot.infrastructure.adapters import *  # noqa: F403
+from openbot.infrastructure.adapters import (
+    base as base,
+)
+from openbot.infrastructure.adapters import (
+    github as github,
+)
+from openbot.infrastructure.adapters import (
+    github_auth as github_auth,
+)
 
-__all__ = ["ChannelAdapter", "GitHubAdapter", "SignatureError"]
+# `from X import Y` binds Y as an attribute of this module, which is what
+# `getattr` walks (e.g. monkeypatch.setattr) need.  The sys.modules
+# registration is belt-and-suspenders for direct `import` use.
+_sys.modules[__name__ + ".base"] = base
+_sys.modules[__name__ + ".github"] = github
+_sys.modules[__name__ + ".github_auth"] = github_auth

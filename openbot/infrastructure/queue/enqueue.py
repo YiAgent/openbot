@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from openbot.queue.payload import MAX_STREAM_LEN, STREAM_NAME, QueuePayload
+from openbot.infrastructure.queue.payload import MAX_STREAM_LEN, STREAM_NAME, QueuePayload
 
 if TYPE_CHECKING:
     import redis.asyncio as redis_async

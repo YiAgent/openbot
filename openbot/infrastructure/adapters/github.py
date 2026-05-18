@@ -36,9 +36,9 @@ from tenacity import (
 )
 
 from openbot import __version__
-from openbot.adapters.base import ChannelAdapter, SignatureError
-from openbot.adapters.github_auth import GitHubAppAuth
 from openbot.events import EventKind, UnifiedEvent
+from openbot.infrastructure.adapters.base import ChannelAdapter, SignatureError
+from openbot.infrastructure.adapters.github_auth import GitHubAppAuth
 
 _logger = logging.getLogger(__name__)
 

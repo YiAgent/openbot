@@ -88,7 +88,7 @@ async def create_schema(engine: AsyncEngine) -> None:
     The first schema CHANGE will introduce alembic; until then, the migration
     surface is zero.
     """
-    from openbot.persistence.models import Base
+    from openbot.infrastructure.persistence.models import Base
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

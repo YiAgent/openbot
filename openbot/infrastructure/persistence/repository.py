@@ -16,7 +16,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from openbot.persistence.models import AuditLog, CostMeter, CostStatus
+from openbot.infrastructure.persistence.models import AuditLog, CostMeter, CostStatus
 
 
 class CostMeterRepo:

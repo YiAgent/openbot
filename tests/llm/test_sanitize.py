@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from openbot.llm.sanitize import (
+from openbot.infrastructure.llm.sanitize import (
     SYSTEM_PROMPT_PREAMBLE,
     UserInputSource,
     wrap_user_input,

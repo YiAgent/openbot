@@ -33,9 +33,9 @@ from typing import TYPE_CHECKING, Any
 
 import litellm
 
-from openbot.llm.router import Feature, primary_model_for
-from openbot.persistence.models import CostStatus
-from openbot.persistence.repository import CostMeterRepo
+from openbot.infrastructure.llm.model_router import Feature, primary_model_for
+from openbot.infrastructure.persistence.models import CostStatus
+from openbot.infrastructure.persistence.repository import CostMeterRepo
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession

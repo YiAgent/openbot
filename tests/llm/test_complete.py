@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from openbot.infrastructure.llm.complete import CompletionResult, complete
 from openbot.llm import Feature
-from openbot.llm.complete import CompletionResult, complete
 from openbot.persistence import (
     CostMeterRepo,
     create_schema,
@@ -62,7 +62,7 @@ def _patch_litellm(
     def fake_cost(*, completion_response: Any) -> float:
         return cost
 
-    import openbot.llm.complete as mod
+    import openbot.infrastructure.llm.complete as mod
 
     monkeypatch.setattr(mod.litellm, "acompletion", fake_acompletion)
     monkeypatch.setattr(mod.litellm, "completion_cost", fake_cost)
@@ -217,7 +217,7 @@ async def test_unexpected_cost_exception_propagates(
     if LiteLLM's API drifts. Defending against that explicitly: only the
     known pricing-error types are caught.
     """
-    import openbot.llm.complete as mod
+    import openbot.infrastructure.llm.complete as mod
 
     async def fake_acompletion(**_: Any) -> Any:
         return _fake_response()
@@ -317,7 +317,7 @@ async def test_expected_pricing_error_persists_zero_with_status(
     (because cost is unknown not zero), but the row's existence is preserved
     so the call is auditable.
     """
-    import openbot.llm.complete as mod
+    import openbot.infrastructure.llm.complete as mod
     from openbot.persistence import CostStatus
 
     async def fake_acompletion(**_: Any) -> Any:
