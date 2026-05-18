@@ -32,6 +32,7 @@ from openbot.infrastructure.persistence import (
     make_session_factory,
 )
 from openbot.infrastructure.persistence.models import State, TaskRun
+from openbot.infrastructure.queue.enqueue import RedisStreamQueue
 
 # Use the same secret and payloads as the L2 state-machine tests so
 # assertions on delivery IDs and resource keys are compatible.
@@ -94,6 +95,7 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
 
     app.state.redis = redis_fake
     app.state.dedup = WebhookDedup(redis_fake)
+    app.state.queue = RedisStreamQueue(redis_fake)
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
     app.state.github_auth = None

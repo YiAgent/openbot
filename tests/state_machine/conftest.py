@@ -17,6 +17,7 @@ errors. ASGITransport avoids that.
 Backend map (matches what lifespan would write to app.state):
   app.state.redis              FakeRedis
   app.state.dedup              WebhookDedup(redis_fake)
+  app.state.queue              RedisStreamQueue(redis_fake)
   app.state.db_engine          aiosqlite in-memory engine
   app.state.db_session_factory async_sessionmaker bound to engine
   app.state.github_auth        None  (no App creds → no check-run creation)
@@ -41,6 +42,7 @@ from openbot.infrastructure.persistence import (
     make_session_factory,
 )
 from openbot.infrastructure.persistence.models import State, TaskRun
+from openbot.infrastructure.queue.enqueue import RedisStreamQueue
 from tests.state_machine._payloads import _SM_SECRET
 
 
@@ -109,6 +111,7 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     # Populate app.state with test doubles — mirrors what lifespan would write.
     app.state.redis = redis_fake
     app.state.dedup = WebhookDedup(redis_fake)
+    app.state.queue = RedisStreamQueue(redis_fake)
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
     app.state.github_auth = None  # no check-run creation in tests

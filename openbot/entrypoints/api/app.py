@@ -25,6 +25,7 @@ from fastapi import FastAPI
 
 from openbot import __version__
 from openbot.application.ports.dedup import DedupPort
+from openbot.application.ports.queue import QueuePort
 from openbot.core.settings import Settings, get_settings
 from openbot.entrypoints.api.routes.github_webhook import router as _webhook_router
 from openbot.entrypoints.api.routes.health import router as _health_router
@@ -38,6 +39,7 @@ from openbot.infrastructure.persistence import (
     make_engine,
     make_session_factory,
 )
+from openbot.infrastructure.queue.enqueue import RedisStreamQueue
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -102,6 +104,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.redis = redis_client
     dedup: DedupPort = WebhookDedup(redis_client)
     app.state.dedup = dedup
+    queue: QueuePort = RedisStreamQueue(redis_client)
+    app.state.queue = queue
 
     db_engine: AsyncEngine | None = None
     db_session_factory: async_sessionmaker[AsyncSession] | None = None

@@ -60,3 +60,19 @@ async def enqueue(redis: redis_async.Redis, payload: QueuePayload) -> str:
         },
     )
     return entry_id
+
+
+class RedisStreamQueue:
+    """Stateful QueuePort impl — owns one Redis client."""
+
+    def __init__(self, redis: redis_async.Redis) -> None:
+        self._redis = redis
+
+    async def enqueue(self, payload: QueuePayload) -> str:
+        return await enqueue(self._redis, payload)
+
+
+if TYPE_CHECKING:
+    from openbot.application.ports.queue import QueuePort
+
+    _witness: QueuePort = RedisStreamQueue(redis=None)  # type: ignore[arg-type]

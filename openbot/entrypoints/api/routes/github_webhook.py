@@ -16,7 +16,7 @@ from openbot.domain.intents import Intent
 from openbot.infrastructure.adapters.base import SignatureError
 from openbot.infrastructure.adapters.github import GitHubAdapter
 from openbot.infrastructure.persistence import DedupOutcome, WebhookDedup
-from openbot.infrastructure.queue import QueuePayload, enqueue
+from openbot.infrastructure.queue.payload import QueuePayload
 
 if TYPE_CHECKING:
     import redis.asyncio as redis_async
@@ -246,7 +246,7 @@ async def github_webhook(
                 resource_key=dispatch.resource_key,
                 event_seq=dispatch.event_seq,
             )
-            entry_id = await enqueue(redis_client, payload)
+            entry_id = await request.app.state.queue.enqueue(payload)
             return {
                 "status": "accepted",
                 "delivery_id": event.delivery_id,
