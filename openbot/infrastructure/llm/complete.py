@@ -27,6 +27,7 @@ Cost-status semantics (see `CostStatus`):
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -279,3 +280,42 @@ def _extract_cost(response: Any, *, model: str) -> tuple[Decimal, CostStatus]:
         return Decimal("0"), CostStatus.PRICING_FAILED
 
     return decimal_cost, CostStatus.RECORDED
+
+
+# ───────────────────────── Port implementation ─────────────────────────
+
+if TYPE_CHECKING:
+    from openbot.application.ports.llm import LLMPort
+
+
+class LiteLLMCompleter:
+    """LLMPort impl backed by litellm.acompletion.
+
+    Bypasses the cost-accounting ``complete()`` function above — this
+    adapter is the raw LLM call surface for the future agent slice.
+    Cost tracking for agent calls will be layered on top separately.
+    """
+
+    async def complete(
+        self,
+        *,
+        model: str,
+        messages: Sequence[dict[str, Any]],
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> str:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": list(messages),
+            "temperature": temperature,
+        }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        response = await litellm.acompletion(**kwargs)
+        # Use attribute access — litellm returns a ModelResponse object,
+        # and the rest of this module uses the same pattern (e.g. line 181).
+        return response.choices[0].message.content
+
+
+if TYPE_CHECKING:
+    _witness: LLMPort = LiteLLMCompleter()
