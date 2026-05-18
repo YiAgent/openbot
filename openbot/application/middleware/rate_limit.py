@@ -37,12 +37,12 @@ import re
 from datetime import UTC, datetime
 from typing import Final
 
-from openbot.llm.router import Feature
-from openbot.middleware.preflight import (
+from openbot.application.middleware.preflight import (
     MiddlewareDecision,
     MiddlewareResult,
     PreflightContext,
 )
+from openbot.llm.router import Feature
 from openbot.persistence.models import WorkflowPhase
 
 _logger = logging.getLogger(__name__)

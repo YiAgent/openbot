@@ -13,8 +13,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from openbot.application.workflows._lifecycle import audit_lifecycle
 from openbot.persistence.models import Workflow
-from openbot.workflows._lifecycle import audit_lifecycle
 
 if TYPE_CHECKING:
     from openbot.middleware.preflight import PreflightContext

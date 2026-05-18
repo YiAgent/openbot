@@ -35,13 +35,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Final
 
-from openbot.events import EventKind
-from openbot.llm.router import Feature
-from openbot.middleware.preflight import (
+from openbot.application.middleware.preflight import (
     MiddlewareDecision,
     MiddlewareResult,
     PreflightContext,
 )
+from openbot.events import EventKind
+from openbot.llm.router import Feature
 from openbot.persistence.models import WorkflowPhase
 
 if TYPE_CHECKING:

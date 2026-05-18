@@ -14,9 +14,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from openbot.application.workflows._lifecycle import audit_lifecycle
+from openbot.application.workflows.chat_parser import parse as parse_chat_command
 from openbot.persistence.models import Workflow
-from openbot.workflows._lifecycle import audit_lifecycle
-from openbot.workflows.chat_parser import parse as parse_chat_command
 
 if TYPE_CHECKING:
     from openbot.middleware.preflight import PreflightContext

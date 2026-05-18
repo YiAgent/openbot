@@ -39,14 +39,14 @@ import re
 import unicodedata
 from typing import TYPE_CHECKING, Final
 
-from openbot.events import EventKind
-from openbot.llm.router import Feature
-from openbot.middleware.preflight import (
+from openbot.application.middleware.preflight import (
     Middleware,
     MiddlewareDecision,
     MiddlewareResult,
     PreflightContext,
 )
+from openbot.events import EventKind
+from openbot.llm.router import Feature
 from openbot.persistence.models import WorkflowPhase
 
 if TYPE_CHECKING:

@@ -1,16 +1,11 @@
-"""Handlers — terminal workflow callables invoked after middleware passes.
+"""Phase-1 shim — re-export from application.handlers."""
 
-The Router resolves a (Feature, handler) pair from each
-classified event; the handler is then invoked by ``dispatch.run_dispatch``
-once the middleware chain returns PROCEED.
+import sys as _sys
 
-This package currently exposes only ``debug_echo`` — the placeholder
-handler used while the state-machine slice is being verified end-to-end
-on the live worker. The real workflow handlers continue to live under
-``openbot.workflows.{triage,review,fix,chat}`` and become reachable
-again when ``OPENBOT_DEBUG_ECHO=0``.
-"""
+from openbot.application.handlers import *  # noqa: F403
+from openbot.application.handlers import (
+    debug_echo,
+    debug_echo_handler,  # noqa: F401
+)
 
-from openbot.handlers.debug_echo import debug_echo_handler
-
-__all__ = ["debug_echo_handler"]
+_sys.modules[__name__ + ".debug_echo"] = debug_echo

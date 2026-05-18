@@ -47,7 +47,7 @@ import unicodedata
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final
 
-from openbot.middleware.preflight import (
+from openbot.application.middleware.preflight import (
     MiddlewareDecision,
     MiddlewareResult,
     PreflightContext,
@@ -57,7 +57,7 @@ from openbot.persistence.models import WorkflowPhase
 if TYPE_CHECKING:
     from openbot.events import UnifiedEvent
 
-_logger = logging.getLogger(__name__)
+_logger = logging.getLogger("openbot.middleware.sanitize")
 
 # 8 KB / field — well above realistic chat comments but bounds the
 # per-field tokenization cost downstream. Tunable per-instance via the

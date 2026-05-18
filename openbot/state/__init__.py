@@ -1,25 +1,22 @@
-"""Per-resource state machine — webhook → intent → persisted transition.
+"""Phase-1 shim — re-export from application.state + domain.intents.
 
-Each GitHub webhook for an issue or PR is classified into one of four
-canonical intents (``START`` / ``SUPERSEDE`` / ``CANCEL`` / ``IGNORE``)
-based on the event kind and the resource's current state. The classified
-intent + a CAS-guarded ``TaskRun`` write drives the supersede / cancel /
-ignore-stale semantics the upstream queue cannot express on its own
-(see ``docs/_archive/slices/2026-05-17-input-side-completeness.md``).
-
-Modules:
-
-  - ``intents``        Intent / State enums + EventClassification dataclass.
-  - ``classifier``     pure ``classify(event, current_state) -> EventClassification``.
-  - ``runs_repo``      SQLAlchemy CRUD for ``task_runs`` (CAS via ``version_id_col``).
-  - ``resource_lock``  thin Redis SET NX EX wrapper with bounded retry.
-  - ``cancellation``   in-process asyncio.Task registry + Redis cancel flag.
+``runs_repo`` is a separate file shim (openbot/state/runs_repo.py) to avoid a
+circular import between openbot.persistence.models and this __init__.py.
 """
 
-from openbot.state.intents import EventClassification, Intent, State
+import sys as _sys
 
-__all__ = [
-    "EventClassification",
-    "Intent",
-    "State",
-]
+from openbot.application.state import (
+    cancellation,
+    classifier,
+    resource_lock,
+)
+from openbot.domain import intents
+from openbot.domain.intents import EventClassification, Intent, State  # noqa: F401
+
+# Register submodules so `import openbot.state.X` / `from openbot.state.X import Y` work.
+# runs_repo resolves via the file shim openbot/state/runs_repo.py on disk.
+_sys.modules[__name__ + ".cancellation"] = cancellation
+_sys.modules[__name__ + ".classifier"] = classifier
+_sys.modules[__name__ + ".resource_lock"] = resource_lock
+_sys.modules[__name__ + ".intents"] = intents

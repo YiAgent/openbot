@@ -38,7 +38,7 @@ from __future__ import annotations
 import logging
 from typing import Final
 
-from openbot.middleware.preflight import (
+from openbot.application.middleware.preflight import (
     MiddlewareDecision,
     PreflightContext,
 )

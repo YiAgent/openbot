@@ -36,7 +36,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Final
 
-from openbot.middleware.preflight import (
+from openbot.application.middleware.preflight import (
     MiddlewareDecision,
     MiddlewareResult,
     PreflightContext,

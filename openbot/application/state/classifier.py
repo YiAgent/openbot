@@ -33,8 +33,8 @@ from __future__ import annotations
 
 from typing import Final
 
+from openbot.domain.intents import EventClassification, Intent, State
 from openbot.events import EventKind, UnifiedEvent
-from openbot.state.intents import EventClassification, Intent, State
 
 # The chat-mention prefixes the classifier accepts. Kept in sync with
 # ``openbot.router._get_chat_prefix`` — when that grows to read settings,

@@ -31,12 +31,12 @@ from __future__ import annotations
 
 import logging
 
-from openbot.llm.router import Feature
-from openbot.middleware.preflight import (
+from openbot.application.middleware.preflight import (
     MiddlewareDecision,
     MiddlewareResult,
     PreflightContext,
 )
+from openbot.llm.router import Feature
 from openbot.persistence.models import WorkflowPhase
 
 _logger = logging.getLogger(__name__)

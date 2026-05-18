@@ -1,20 +1,24 @@
-"""High-level workflows — PRD §4 / harness spec §3 M12.
+"""Phase-1 shim — re-export from application.workflows."""
 
-Each feature has one entry point with the `maybe_run_*(ctx)` signature
-where `ctx` is a `PreflightContext` (pre-flight gates have already run).
+import sys as _sys
 
-v0.1 Week 2 ships all four as ACK-only stubs. Real LLM agents land
-once the agent slice arrives.
-"""
+from openbot.application.workflows import *  # noqa: F403
+from openbot.application.workflows import (  # noqa: F401  # noqa: F401
+    _lifecycle,
+    chat,
+    chat_parser,
+    fix,
+    maybe_run_chat,
+    maybe_run_fix,
+    maybe_run_review,
+    maybe_run_triage,
+    review,
+    triage,
+)
 
-from openbot.workflows.chat import maybe_run_chat
-from openbot.workflows.fix import maybe_run_fix
-from openbot.workflows.review import maybe_run_review
-from openbot.workflows.triage import maybe_run_triage
-
-__all__ = [
-    "maybe_run_chat",
-    "maybe_run_fix",
-    "maybe_run_review",
-    "maybe_run_triage",
-]
+_sys.modules[__name__ + "._lifecycle"] = _lifecycle
+_sys.modules[__name__ + ".chat"] = chat
+_sys.modules[__name__ + ".chat_parser"] = chat_parser
+_sys.modules[__name__ + ".fix"] = fix
+_sys.modules[__name__ + ".review"] = review
+_sys.modules[__name__ + ".triage"] = triage
