@@ -20,3 +20,4 @@ from openbot.application.ports.queue import QueuePort  # noqa: F401
 from openbot.application.ports.rate_limiter import RateLimiterPort  # noqa: F401
 from openbot.application.ports.resource_lock import ResourceLockPort  # noqa: F401
 from openbot.application.ports.runs_repo import RunsRepoPort  # noqa: F401
+from openbot.application.ports.sandbox import SandboxPort  # noqa: F401

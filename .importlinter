@@ -11,9 +11,12 @@ layers =
     openbot.core
 unmatched_ignore_imports_alerting = warn
 ignore_imports =
+    # Allowed structural exception: DedupPort's adapter lives alongside the protocol
+    # in infrastructure.persistence.dedup to keep the dedup check atomic (Redis Lua
+    # script) — this is intentional co-location, not an architecture violation.
     openbot.application.ports.dedup -> openbot.infrastructure.persistence.dedup
-    openbot.application.middleware.* -> openbot.infrastructure.persistence.*
-    openbot.application.middleware.* -> openbot.infrastructure.llm.*
-    openbot.application.workflows.* -> openbot.infrastructure.persistence.*
-    openbot.application.handlers.* -> openbot.infrastructure.persistence.*
+    # TODO(phase-3): domain.config_schema imports Feature from infrastructure.llm.model_router.
+    # Feature should be promoted to a domain enum (openbot.domain.feature) to remove
+    # this domain→infra violation.  All middleware that currently imports Feature from
+    # infrastructure.llm.model_router will follow once the move is done.
     openbot.domain.config_schema -> openbot.infrastructure.llm.model_router
