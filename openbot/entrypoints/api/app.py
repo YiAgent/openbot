@@ -32,6 +32,7 @@ from openbot.entrypoints.api.routes.github_webhook import router as _webhook_rou
 from openbot.entrypoints.api.routes.health import router as _health_router
 from openbot.infrastructure.adapters.github import GitHubAdapter
 from openbot.infrastructure.adapters.github_auth import GitHubAppAuth
+from openbot.infrastructure.config_loader import YamlConfigLoader
 from openbot.infrastructure.observability import init_sentry
 from openbot.infrastructure.persistence import (
     WebhookDedup,
@@ -114,6 +115,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.queue = queue
     rate_limiter = RedisRateLimiter(redis_client)
     app.state.rate_limiter = rate_limiter
+    config_loader = YamlConfigLoader()
+    app.state.config_loader = config_loader
 
     db_engine: AsyncEngine | None = None
     db_session_factory: async_sessionmaker[AsyncSession] | None = None

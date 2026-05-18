@@ -362,4 +362,5 @@ async def _run_dispatch(
         check_run_id=check_run_id,
         audit=audit,
         rate_limiter=getattr(app_instance.state, "rate_limiter", None),
+        config_loader=getattr(app_instance.state, "config_loader", None),
     )
