@@ -108,6 +108,7 @@ dev = [
     "httpx>=0.28.1",            # FastAPI TestClient runtime
     "fakeredis>=2.26",          # in-memory Redis for unit tests (async-compatible)
     "aiosqlite>=0.20",          # in-memory SQLite via SQLAlchemy for unit tests
+    "import-linter>=2.0",       # hexagonal layer boundary enforcement
 ]
 
 [build-system]

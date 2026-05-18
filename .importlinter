@@ -1,0 +1,20 @@
+[importlinter]
+root_package = openbot
+
+[importlinter:contract:layers]
+name = Hexagonal layers — domain ← application ← infrastructure ← entrypoints
+type = layers
+layers =
+    openbot.entrypoints
+    openbot.application : openbot.infrastructure
+    openbot.domain
+    openbot.core
+unmatched_ignore_imports_alerting = warn
+ignore_imports =
+    openbot.application.middleware.* -> openbot.infrastructure.persistence.*
+    openbot.application.state.* -> openbot.infrastructure.persistence.*
+    openbot.application.middleware.* -> openbot.infrastructure.llm.*
+    openbot.application.workflows.* -> openbot.infrastructure.persistence.*
+    openbot.application.handlers.* -> openbot.infrastructure.persistence.*
+    openbot.application.handlers.* -> openbot.infrastructure.adapters.*
+    openbot.infrastructure.queue.runner -> openbot.entrypoints.worker.__main__
