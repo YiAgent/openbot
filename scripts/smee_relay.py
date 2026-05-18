@@ -42,8 +42,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
+import hmac as _hmac
 import json
 import logging
+import os
 import sys
 import time
 from collections.abc import AsyncIterator
@@ -121,28 +124,53 @@ _HEADER_EXACT = {"content-type", "user-agent"}
 def _split_smee_data(
     data: dict[str, Any],
 ) -> tuple[dict[str, str], bytes]:
-    """Return (headers, body_bytes) from a flat smee event object.
+    """Return (headers, body_bytes) from a smee SSE event object.
 
-    smee.io merges the GitHub webhook body fields with the delivery
-    headers into one JSON object.  We partition them:
-      - ``x-*`` keys  →  headers (GitHub signature, event, delivery id)
-      - ``content-type``, ``user-agent``  →  headers
-      - everything else  →  webhook body (re-serialized as JSON)
+    smee.io nests the original GitHub webhook body under the ``"body"``
+    key and puts the request headers (``x-*``, ``content-type``, etc.)
+    as sibling top-level keys. Additional smee metadata (``timestamp``,
+    ``query``, routing headers) is ignored.
+
+    Layout::
+
+        {
+          "x-github-event": "issues",
+          "x-github-delivery": "abc123",
+          "x-hub-signature-256": "sha256=…",
+          "content-type": "application/json",
+          "body": {"action": "opened", "issue": {…}, …},
+          "timestamp": 1234567890,
+          …
+        }
     """
     headers: dict[str, str] = {}
-    body_fields: dict[str, Any] = {}
 
     for key, value in data.items():
+        if key == "body":
+            continue  # handled separately below
         is_header = any(key.startswith(p) for p in _HEADER_PREFIXES) or key in _HEADER_EXACT
         if is_header:
             headers[key] = str(value)
-        else:
-            body_fields[key] = value
 
-    body_bytes = json.dumps(body_fields).encode()
-    # Smee sends content-type from GitHub, but we override to ensure JSON.
+    # ``body`` holds the raw GitHub webhook JSON; fall back to ``{}`` for
+    # the smee "ready" ping event that arrives on first connection.
+    body_data = data.get("body") or {}
+    body_bytes = json.dumps(body_data).encode()
     headers.setdefault("content-type", "application/json")
     return headers, body_bytes
+
+
+def _resign(body: bytes, secret: str) -> str:
+    """Re-compute HMAC-SHA256 over ``body`` using ``secret``.
+
+    smee.io re-serializes the webhook payload JSON, so the byte sequence
+    differs from the original GitHub payload and the original signature is
+    always invalid. Re-signing with the local webhook secret makes the
+    server's HMAC check pass. The local secret must match the secret
+    configured on the GitHub App / repo webhook.
+    """
+    digest = _hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
 
 
 async def _forward(
@@ -151,13 +179,20 @@ async def _forward(
     data: dict[str, Any],
     *,
     verbose: bool,
+    resign_secret: str | None = None,
 ) -> None:
     """POST one smee event to the local webhook endpoint."""
     headers, body = _split_smee_data(data)
 
+    # Re-sign with the local secret so the server's HMAC check passes.
+    # smee re-serializes the JSON body, invalidating GitHub's original sig.
+    if resign_secret:
+        headers["x-hub-signature-256"] = _resign(body, resign_secret)
+
     event_type = headers.get("x-github-event", "unknown")
     delivery = headers.get("x-github-delivery", "?")
-    action = data.get("action", "")
+    body_obj = data.get("body") or {}
+    action = body_obj.get("action", "") if isinstance(body_obj, dict) else ""
 
     try:
         t0 = time.monotonic()
@@ -214,11 +249,19 @@ async def relay(
     target: str = _DEFAULT_TARGET,
     *,
     verbose: bool = False,
+    resign_secret: str | None = None,
 ) -> None:
-    """Subscribe to ``channel_url`` and forward every event to ``target``."""
+    """Subscribe to ``channel_url`` and forward every event to ``target``.
+
+    Args:
+        resign_secret: When set, re-signs each forwarded request with this
+            HMAC secret. Required when the smee channel is connected to a
+            real GitHub App / repo webhook, because smee re-serializes the
+            JSON body and invalidates the original signature.
+    """
     async with httpx.AsyncClient() as sse_client, httpx.AsyncClient() as post_client:
         async for data in _sse_events(sse_client, channel_url):
-            await _forward(post_client, target, data, verbose=verbose)
+            await _forward(post_client, target, data, verbose=verbose, resign_secret=resign_secret)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -245,6 +288,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=_DEFAULT_TARGET,
         metavar="URL",
         help=f"Local webhook endpoint (default: {_DEFAULT_TARGET})",
+    )
+    p.add_argument(
+        "--secret",
+        default=os.environ.get("OPENBOT_GITHUB_WEBHOOK_SECRET", ""),
+        metavar="SECRET",
+        help=(
+            "Webhook HMAC secret used to re-sign forwarded requests. "
+            "smee re-serializes the JSON body so the original GitHub "
+            "signature is always invalid; re-signing with the local "
+            "secret makes the server's HMAC check pass. "
+            "Defaults to OPENBOT_GITHUB_WEBHOOK_SECRET env var."
+        ),
     )
     p.add_argument(
         "-v",
@@ -276,8 +331,6 @@ async def _main() -> None:
         print()
 
     if not channel_url:
-        import os
-
         channel_url = os.environ.get("SMEE_CHANNEL")
 
     if not channel_url:
@@ -291,11 +344,17 @@ async def _main() -> None:
         print(f"error: expected a smee.io URL, got: {channel_url}", file=sys.stderr)
         sys.exit(1)
 
+    resign = args.secret or None
+    if resign:
+        _logger.info("re-signing: enabled (secret configured)")
+    else:
+        _logger.info("re-signing: disabled (no secret — HMAC will use GitHub's original sig)")
+
     _logger.info("relay: %s → %s", channel_url, args.target)
     _logger.info("press ctrl-c to stop")
 
     try:
-        await relay(channel_url, args.target, verbose=args.verbose)
+        await relay(channel_url, args.target, verbose=args.verbose, resign_secret=resign)
     except KeyboardInterrupt:
         _logger.info("stopped")
 

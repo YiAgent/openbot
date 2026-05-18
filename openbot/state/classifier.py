@@ -6,7 +6,7 @@ runtime values. Persistence and ordering rules (stale-seq, CAS, lock)
 live in ``runs_repo`` and ``webapp``.
 
 Decision matrix mirrors the table in
-``docs/superpowers/plans/2026-05-17-input-side-completeness.md``:
+``docs/_archive/slices/2026-05-17-input-side-completeness.md``:
 
     | event.kind                          | current state | intent      |
     |-------------------------------------|---------------|-------------|

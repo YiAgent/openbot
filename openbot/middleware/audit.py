@@ -1,7 +1,9 @@
 """AuditStart middleware — write STARTED before handler entry (chain end).
 
-Spec anchor: docs/prd/openbot-harness-spec.md §3 M3 (chain position
-"AuditStart, before handler") + §3 M9 (lifecycle audit).
+Spec anchor: docs/_archive/prd-history/openbot-harness-spec.md §3 M3
+(chain position "AuditStart, before handler") + §3 M9 (lifecycle audit).
+The harness spec is archived; its chain decisions are carried forward
+in docs/specs/2026-05-17-webhook-worker-layering-design.md.
 
 Why this exists as a separate middleware (and not just inside
 ``audit_lifecycle``): when a workflow handler raises *before* entering

@@ -5,7 +5,7 @@ canonical intents (``START`` / ``SUPERSEDE`` / ``CANCEL`` / ``IGNORE``)
 based on the event kind and the resource's current state. The classified
 intent + a CAS-guarded ``TaskRun`` write drives the supersede / cancel /
 ignore-stale semantics the upstream queue cannot express on its own
-(see ``docs/superpowers/plans/2026-05-17-input-side-completeness.md``).
+(see ``docs/_archive/slices/2026-05-17-input-side-completeness.md``).
 
 Modules:
 

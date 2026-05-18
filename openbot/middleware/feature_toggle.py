@@ -1,8 +1,10 @@
 """FeatureToggle middleware — `.openbot/config.yaml` `features.{x}=false` enforcement.
 
-Spec anchor: docs/prd/openbot-harness-spec.md §3 M1 (the
-``features`` block in ``EffectiveConfig`` is loaded but slice A/B
-never wired it into a gate; this closes that commitment).
+Spec anchor: docs/_archive/prd-history/openbot-harness-spec.md §3 M1
+(the ``features`` block in ``EffectiveConfig`` is loaded but slice A/B
+never wired it into a gate; this closes that commitment). The harness
+spec is archived; current chain layout lives in
+docs/specs/2026-05-17-webhook-worker-layering-design.md §3.2 D4.
 
 Position in chain: directly after ``KillSwitchMiddleware``.
 

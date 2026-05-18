@@ -1,7 +1,9 @@
 """SanitizeInputs middleware — entry-side byte gate (chain position #1).
 
-Spec anchor: docs/prd/openbot-harness-spec.md §3 M8 (entry-side
-companion to the LLM-side ``wrap_user_input``).
+Spec anchor: docs/_archive/prd-history/openbot-harness-spec.md §3 M8
+(entry-side companion to the LLM-side ``wrap_user_input``). The harness
+spec is archived; current chain layout lives in
+docs/specs/2026-05-17-webhook-worker-layering-design.md §3.2 D2.
 
 This is a **byte-level** gate that runs first in the pre-flight chain.
 It operates on the immutable ``UnifiedEvent`` fields carrying
