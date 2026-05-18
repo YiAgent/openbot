@@ -41,8 +41,8 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from openbot.application.router import Dispatch
+    from openbot.domain.config_schema import EffectiveConfig
     from openbot.infrastructure.adapters.github import GitHubAdapter
-    from openbot.infrastructure.config_loader import EffectiveConfig
 
 _logger = logging.getLogger(__name__)
 

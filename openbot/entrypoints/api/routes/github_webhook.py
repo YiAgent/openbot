@@ -24,10 +24,7 @@ if TYPE_CHECKING:
 
     from openbot.domain.events import UnifiedEvent
 
-# Keep the original logger name so existing log-based monitoring and any
-# future caplog tests targeting "openbot.entrypoints.api.app" continue to work.
-# TODO(Task 1.11): rename to "openbot.api.github_webhook" when shims are removed.
-_logger = logging.getLogger("openbot.entrypoints.api.app")
+_logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
