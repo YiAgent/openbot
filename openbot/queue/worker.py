@@ -42,7 +42,16 @@ from openbot.queue.payload import (
     QueuePayload,
     deserialize_payload,
 )
-from openbot.router import dispatch_for
+from openbot.router import dispatch_for, upgrade_dispatch
+from openbot.state.cancellation import (
+    deregister as cancellation_deregister,
+)
+from openbot.state.cancellation import (
+    register as cancellation_register,
+)
+from openbot.state.cancellation import (
+    signal as cancellation_signal,
+)
 
 if TYPE_CHECKING:
     import redis.asyncio as redis_async
@@ -101,7 +110,7 @@ async def ensure_consumer_group(redis: redis_async.Redis) -> None:
 async def consume_loop(
     *,
     redis: redis_async.Redis,
-    adapter: GitHubAdapter | None,
+    adapter: GitHubAdapter,
     session_factory: async_sessionmaker[AsyncSession] | None,
     consumer_name: str,
     shutdown: asyncio.Event | None = None,
@@ -163,7 +172,7 @@ async def consume_loop(
 async def _read_and_dispatch(
     *,
     redis: redis_async.Redis,
-    adapter: GitHubAdapter | None,
+    adapter: GitHubAdapter,
     session_factory: async_sessionmaker[AsyncSession] | None,
     consumer_name: str,
     read_block_ms: int = _READ_BLOCK_MS,
@@ -258,29 +267,90 @@ async def _process_entry(
         await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
         return
 
-    attempts = await _bump_attempt_counter(redis, entry_id)
-    try:
-        await run_dispatch(
-            adapter=adapter,
-            event=event,
-            dispatch=new_dispatch,
-            session_factory=session_factory,
-            redis=redis,
-            check_run_id=payload.check_run_id,
+    # State-machine slice (v2 payload): carry the receive-side's
+    # classification through to the handler. v1 payloads have
+    # ``intent`` / ``run_id`` / ``resource_key`` defaulted by the
+    # deserializer, so this branch is safe to take unconditionally.
+    if payload.resource_key is not None and payload.intent is not None:
+        new_dispatch = upgrade_dispatch(
+            new_dispatch,
+            intent=payload.intent,
+            run_id=payload.run_id or payload.task_id,
+            prev_run_id=payload.prev_run_id,
+            event_seq=payload.event_seq,
+            resource_key=payload.resource_key,
         )
-    except Exception:
-        # `run_dispatch` already swallows its own errors; this is a
-        # belt-and-suspenders catch for any crash that escapes (e.g.
-        # OOM during a future code path). The entry is recoverable
-        # via PEL on next XAUTOCLAIM.
-        _logger.exception(
-            "queue_run_dispatch_escaped",
-            extra={"entry_id": entry_id, "delivery_id": payload.delivery_id},
+
+    # Cross-dyno cancellation: if this entry's intent supersedes or
+    # cancels a prior run, signal that run before we touch the handler.
+    # The receive side already signalled — this is the belt-and-suspenders
+    # path that catches the case where the queue lagged enough for the
+    # prev_run_id flag to expire between receive and dequeue (very
+    # unlikely with the 1-hour flag TTL, but cheap to do).
+    if payload.prev_run_id and payload.intent in {"supersede", "cancel"}:
+        try:
+            await cancellation_signal(redis, payload.prev_run_id)
+        except Exception:
+            _logger.exception(
+                "queue_cancellation_signal_failed",
+                extra={
+                    "entry_id": entry_id,
+                    "prev_run_id": payload.prev_run_id,
+                    "intent": payload.intent,
+                },
+            )
+
+    # A CANCEL intent only stops the prior run — there's no new run
+    # to invoke. XACK and move on; the audit row was written on the
+    # receive side via the state-machine row write.
+    if payload.intent == "cancel":
+        await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
+        _logger.info(
+            "queue_entry_cancel_only",
+            extra={
+                "entry_id": entry_id,
+                "delivery_id": payload.delivery_id,
+                "prev_run_id": payload.prev_run_id,
+            },
         )
-        # Don't XACK — let the next reclaim cycle pick it up.
-        if attempts >= _MAX_ATTEMPTS:
-            await _ack_and_dlq(redis, entry_id, reason="max_attempts", payload=payload)
         return
+
+    attempts = await _bump_attempt_counter(redis, entry_id)
+    # Register the current task under the new run_id so a future
+    # SUPERSEDE/CANCEL arriving on this same dyno can ``.cancel()``
+    # us. ``deregister`` in finally guarantees no stale entry survives
+    # the handler exit (success OR exception).
+    active_run_id = new_dispatch.run_id or new_dispatch.task_id
+    cancellation_register(active_run_id)
+    try:
+        try:
+            await run_dispatch(
+                adapter=adapter,
+                event=event,
+                dispatch=new_dispatch,
+                session_factory=session_factory,
+                redis=redis,
+                check_run_id=payload.check_run_id,
+            )
+        except Exception:
+            # `run_dispatch` already swallows its own errors; this is a
+            # belt-and-suspenders catch for any crash that escapes (e.g.
+            # OOM during a future code path). The entry is recoverable
+            # via PEL on next XAUTOCLAIM.
+            _logger.exception(
+                "queue_run_dispatch_escaped",
+                extra={"entry_id": entry_id, "delivery_id": payload.delivery_id},
+            )
+            # Don't XACK — let the next reclaim cycle pick it up.
+            if attempts >= _MAX_ATTEMPTS:
+                await _ack_and_dlq(redis, entry_id, reason="max_attempts", payload=payload)
+            return
+    finally:
+        # Always free the registry slot, even on exception or early return.
+        # Leaving a stale entry would let a future SUPERSEDE cancel a task
+        # that has already exited — usually harmless, but the spurious
+        # ``CancelledError`` would noise up logs.
+        cancellation_deregister(active_run_id)
 
     await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
     _logger.info(
