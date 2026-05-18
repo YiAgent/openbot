@@ -18,17 +18,23 @@ class EventKind(StrEnum):
     """The subset of channel events OpenBot v0.1 reacts to.
 
     PRD §4 triggers:
-      - triage  → ISSUE_OPENED
-      - review  → PR_OPENED, PR_SYNCHRONIZED
+      - triage  → ISSUE_OPENED, ISSUE_REOPENED
+      - review  → PR_OPENED, PR_SYNCHRONIZED, PR_REOPENED
       - fix     → ISSUE_ASSIGNED (assignee includes the bot)
       - chat    → ISSUE_COMMENT_CREATED, PR_REVIEW_COMMENT_CREATED
+      - cancel  → ISSUE_CLOSED, PR_CLOSED, PR_MERGED
     """
 
     ISSUE_OPENED = "issue.opened"
     ISSUE_ASSIGNED = "issue.assigned"
     ISSUE_COMMENT_CREATED = "issue_comment.created"
+    ISSUE_CLOSED = "issue.closed"
+    ISSUE_REOPENED = "issue.reopened"
     PR_OPENED = "pull_request.opened"
     PR_SYNCHRONIZED = "pull_request.synchronize"
+    PR_CLOSED = "pull_request.closed"
+    PR_REOPENED = "pull_request.reopened"
+    PR_MERGED = "pull_request.merged"
     PR_REVIEW_COMMENT_CREATED = "pull_request_review_comment.created"
     UNKNOWN = "unknown"
 
@@ -59,6 +65,13 @@ class UnifiedEvent:
     # required to mint an installation token before any write-back API call.
     # Present in every authentic GitHub webhook payload under `installation.id`.
     installation_id: int | None = None
+    # Monotonic per-resource sequence — for GitHub we derive this from
+    # ``updated_at`` (epoch ms) of ``issue`` / ``pull_request`` so late
+    # webhooks (close-arrives-before-open after a retry) can be detected
+    # by the state machine and dropped as ``IGNORE``. ``0`` is the safe
+    # sentinel (no ``updated_at`` available); the classifier treats 0 as
+    # "never older than the high-water mark" so we never spuriously drop.
+    event_seq: int = 0
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @property
@@ -76,3 +89,18 @@ class UnifiedEvent:
         suffixes are not part of GitHub's API contract; `sender.type` is.
         """
         return self.actor_type == "Bot"
+
+    @property
+    def resource_key(self) -> str | None:
+        """Per-resource identifier for the state machine.
+
+        Shape: ``github:{owner/repo}:issue:{n}`` or ``github:{owner/repo}:pr:{n}``.
+
+        Returns ``None`` when no issue/PR number is present (e.g. ``ping``,
+        ``push``) — the caller should treat that as "not stateful".
+        """
+        if self.pr_number is not None:
+            return f"{self.channel}:{self.repo}:pr:{self.pr_number}"
+        if self.issue_number is not None:
+            return f"{self.channel}:{self.repo}:issue:{self.issue_number}"
+        return None

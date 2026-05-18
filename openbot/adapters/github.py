@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any, Final
 from urllib.parse import quote
 
@@ -48,12 +49,22 @@ _SIGNATURE_PREFIX: Final = "sha256="
 
 # (X-GitHub-Event header, payload.action) → EventKind
 # Anything unmapped returns UNKNOWN — we never crash on a new event type.
+#
+# ``pull_request.closed`` is mapped to PR_CLOSED here, but the parser
+# (see ``parse_event``) upgrades it to PR_MERGED when
+# ``payload.pull_request.merged is True`` — GitHub overloads the same
+# ``closed`` action for both states and only the boolean tells them
+# apart.
 _EVENT_TABLE: Final[dict[tuple[str, str], EventKind]] = {
     ("issues", "opened"): EventKind.ISSUE_OPENED,
     ("issues", "assigned"): EventKind.ISSUE_ASSIGNED,
+    ("issues", "closed"): EventKind.ISSUE_CLOSED,
+    ("issues", "reopened"): EventKind.ISSUE_REOPENED,
     ("issue_comment", "created"): EventKind.ISSUE_COMMENT_CREATED,
     ("pull_request", "opened"): EventKind.PR_OPENED,
     ("pull_request", "synchronize"): EventKind.PR_SYNCHRONIZED,
+    ("pull_request", "closed"): EventKind.PR_CLOSED,
+    ("pull_request", "reopened"): EventKind.PR_REOPENED,
     ("pull_request_review_comment", "created"): EventKind.PR_REVIEW_COMMENT_CREATED,
 }
 
@@ -74,6 +85,30 @@ _RETRY_BACKOFF_MAX: Final = 4.0
 # only delays. 429 is intentionally NOT retried here — GitHub returns
 # Retry-After and we surface that as a low-rate-limit warning instead.
 _RETRYABLE_STATUSES: Final = frozenset({502, 503, 504})
+
+
+def _extract_event_seq(pull_request: dict[str, Any], issue: dict[str, Any]) -> int:
+    """Epoch-ms of the resource's ``updated_at`` — monotonic ordering hint.
+
+    GitHub stamps every issue/PR mutation with an ISO-8601 ``updated_at``
+    (UTC, second precision). We convert that to epoch milliseconds so the
+    state machine can use it as ``last_event_seq`` and drop late
+    deliveries (close-before-open after a retry, etc.) as ``stale_event``.
+
+    Returns 0 on any failure to parse — the classifier treats 0 as "no
+    high-water mark available" and never spuriously drops on that
+    sentinel. We prefer "monotonic check disabled for this event" over
+    "blow up the receive path on a malformed payload".
+    """
+    raw = pull_request.get("updated_at") or issue.get("updated_at")
+    if not isinstance(raw, str) or not raw:
+        return 0
+    try:
+        # GitHub uses trailing "Z" for UTC; fromisoformat accepts that
+        # natively on 3.11+, which is the project floor.
+        return int(datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp() * 1000)
+    except ValueError:
+        return 0
 
 
 def _is_retryable_github_error(exc: BaseException) -> bool:
@@ -172,6 +207,14 @@ class GitHubAdapter(ChannelAdapter):
         issue = payload.get("issue") or {}
         pull_request = payload.get("pull_request") or {}
 
+        # GitHub overloads ``pull_request.closed`` for both genuine closes
+        # and merges — only the boolean ``pull_request.merged`` tells them
+        # apart. The state machine treats the two the same (both CANCEL),
+        # but auditing wants to see the difference, so we keep distinct
+        # EventKinds and promote PR_CLOSED → PR_MERGED here.
+        if kind is EventKind.PR_CLOSED and bool(pull_request.get("merged")):
+            kind = EventKind.PR_MERGED
+
         # issue_comment on a PR: GitHub still sends event=issue_comment but
         # `issue.pull_request` is set and `issue.number` IS the PR number.
         comment_on_pr = bool(issue.get("pull_request"))
@@ -187,6 +230,7 @@ class GitHubAdapter(ChannelAdapter):
 
         comment_body = (payload.get("comment") or {}).get("body")
         installation_id = (payload.get("installation") or {}).get("id")
+        event_seq = _extract_event_seq(pull_request, issue)
 
         return UnifiedEvent(
             channel=self.name,
@@ -199,6 +243,7 @@ class GitHubAdapter(ChannelAdapter):
             pr_number=pr_number,
             comment_body=comment_body,
             installation_id=installation_id,
+            event_seq=event_seq,
             raw=payload,
         )
 
