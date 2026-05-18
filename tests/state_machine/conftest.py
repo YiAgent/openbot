@@ -20,6 +20,7 @@ Backend map (matches what lifespan would write to app.state):
   app.state.queue              RedisStreamQueue(redis_fake)
   app.state.db_engine          aiosqlite in-memory engine
   app.state.db_session_factory async_sessionmaker bound to engine
+  app.state.runs_repo          SqlRunsRepo(session_factory)
   app.state.github_auth        None  (no App creds → no check-run creation)
   app.state.github_adapter     GitHubAdapter(webhook_secret=_SM_SECRET)
 """
@@ -42,6 +43,7 @@ from openbot.infrastructure.persistence import (
     make_session_factory,
 )
 from openbot.infrastructure.persistence.models import State, TaskRun
+from openbot.infrastructure.persistence.runs_repo_impl import SqlRunsRepo
 from openbot.infrastructure.queue.enqueue import RedisStreamQueue
 from tests.state_machine._payloads import _SM_SECRET
 
@@ -114,6 +116,7 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     app.state.queue = RedisStreamQueue(redis_fake)
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
+    app.state.runs_repo = SqlRunsRepo(session_factory)
     app.state.github_auth = None  # no check-run creation in tests
     app.state.github_adapter = GitHubAdapter(webhook_secret=_SM_SECRET, auth=None)
 

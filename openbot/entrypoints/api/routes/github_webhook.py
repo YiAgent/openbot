@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
@@ -11,7 +12,7 @@ from openbot.application.dispatcher import run_dispatch
 from openbot.application.router import Dispatch, derive_run_id, dispatch_for, upgrade_dispatch
 from openbot.application.state.cancellation import signal as cancellation_signal
 from openbot.application.state.resource_lock import resource_lock
-from openbot.application.state.runs_repo import TransitionResult, transition
+from openbot.application.state.runs_repo import TransitionResult
 from openbot.domain.intents import Intent
 from openbot.infrastructure.adapters.base import SignatureError
 from openbot.infrastructure.adapters.github import GitHubAdapter
@@ -20,8 +21,8 @@ from openbot.infrastructure.queue.payload import QueuePayload
 
 if TYPE_CHECKING:
     import redis.asyncio as redis_async
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from openbot.application.ports.runs_repo import RunsRepoPort
     from openbot.domain.events import UnifiedEvent
 
 _logger = logging.getLogger(__name__)
@@ -138,15 +139,15 @@ async def github_webhook(
     # ping/push) are present. The two-tier guard means dev mode
     # without docker-compose and integration tests without a DB still
     # exercise the original v1 path without crashing.
-    db_factory = getattr(request.app.state, "db_session_factory", None)
+    runs_repo = getattr(request.app.state, "runs_repo", None)
     redis_client = getattr(request.app.state, "redis", None)
     transition_result: TransitionResult | None = None
-    if db_factory is not None and event.resource_key is not None:
+    if runs_repo is not None and event.resource_key is not None:
         try:
             dispatch, transition_result = await _classify_and_upgrade(
                 event=event,
                 dispatch=dispatch,
-                session_factory=db_factory,
+                runs_repo=runs_repo,
                 redis=redis_client,
             )
         except Exception:
@@ -290,7 +291,7 @@ async def _classify_and_upgrade(
     *,
     event: UnifiedEvent,
     dispatch: Dispatch,
-    session_factory: async_sessionmaker[AsyncSession],
+    runs_repo: RunsRepoPort,
     redis: redis_async.Redis | None,
 ) -> tuple[Dispatch, TransitionResult]:
     """Run the state-machine classifier under the per-resource lock.
@@ -317,20 +318,11 @@ async def _classify_and_upgrade(
     # serial so two simultaneous classified events for the same
     # resource end up with distinct ``run_id`` hashes even when the
     # clock granularity is coarse.
-    import time
-
     serial = time.monotonic_ns()
     new_run_id = derive_run_id(event.resource_key, serial)
 
-    async with (
-        resource_lock(redis, event.resource_key) as _acquired,
-        session_factory() as session,
-    ):
-        result = await transition(session, event=event, new_run_id=new_run_id)
-        # transition() does NOT commit — keeping the boundary here
-        # means the CAS check and the row write see the same
-        # transaction snapshot.
-        await session.commit()
+    async with resource_lock(redis, event.resource_key) as _acquired:
+        result = await runs_repo.transition(event=event, new_run_id=new_run_id)
 
     upgraded = upgrade_dispatch(
         dispatch,

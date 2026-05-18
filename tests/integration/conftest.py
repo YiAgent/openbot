@@ -32,6 +32,7 @@ from openbot.infrastructure.persistence import (
     make_session_factory,
 )
 from openbot.infrastructure.persistence.models import State, TaskRun
+from openbot.infrastructure.persistence.runs_repo_impl import SqlRunsRepo
 from openbot.infrastructure.queue.enqueue import RedisStreamQueue
 
 # Use the same secret and payloads as the L2 state-machine tests so
@@ -98,6 +99,7 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     app.state.queue = RedisStreamQueue(redis_fake)
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
+    app.state.runs_repo = SqlRunsRepo(session_factory)
     app.state.github_auth = None
     app.state.github_adapter = GitHubAdapter(webhook_secret=_SM_SECRET, auth=None)
 
