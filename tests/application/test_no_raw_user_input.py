@@ -52,10 +52,8 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SCAN_DIRS: tuple[Path, ...] = (
-    # Phase-1 restructure: real code moved to application/workflows/.
-    # Keep old path so any future files there are also scanned.
-    _REPO_ROOT / "openbot" / "workflows",
-    _REPO_ROOT / "openbot" / "application" / "workflows",
+    # Hexagonal restructure: use cases consolidated into application/use_cases/.
+    _REPO_ROOT / "openbot" / "application" / "use_cases",
     _REPO_ROOT / "openbot" / "infrastructure" / "llm",
 )
 
@@ -173,11 +171,11 @@ def test_scan_actually_runs_on_known_files() -> None:
     # must be in scope. If this set shrinks, the test is no longer
     # protecting what its docstring claims.
     must_include = {
-        # Phase-1 restructure: real code moved to application/workflows/.
-        "openbot/application/workflows/chat.py",
-        "openbot/application/workflows/triage.py",
-        "openbot/application/workflows/review.py",
-        "openbot/application/workflows/fix.py",
+        # Hexagonal restructure: use cases consolidated into application/use_cases/.
+        "openbot/application/use_cases/chat.py",
+        "openbot/application/use_cases/triage.py",
+        "openbot/application/use_cases/review.py",
+        "openbot/application/use_cases/fix.py",
         "openbot/infrastructure/llm/sanitize.py",
     }
     missing = must_include - rel

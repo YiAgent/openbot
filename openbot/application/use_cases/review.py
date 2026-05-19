@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from openbot.application.workflows._lifecycle import audit_lifecycle
+from openbot.application.use_cases._lifecycle import audit_lifecycle
 from openbot.domain.workflows import Workflow
 
 if TYPE_CHECKING:

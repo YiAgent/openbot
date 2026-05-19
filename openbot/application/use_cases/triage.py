@@ -21,14 +21,14 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from openbot.application.workflows._lifecycle import audit_lifecycle
+from openbot.application.use_cases._lifecycle import audit_lifecycle
 from openbot.domain.events import EventKind
 from openbot.domain.workflows import Workflow
 
 if TYPE_CHECKING:
     from openbot.application.middleware.preflight import PreflightContext
 
-_logger = logging.getLogger("openbot.application.workflows.triage")
+_logger = logging.getLogger("openbot.application.use_cases.triage")
 
 _ACK_TEMPLATE = (
     ":robot: Hi @{actor} — OpenBot received this issue and will triage shortly.\n\n"

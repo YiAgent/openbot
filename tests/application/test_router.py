@@ -7,7 +7,7 @@ from collections.abc import Iterator
 import pytest
 
 from openbot.application.router import _CHAT_PREFIX_DEFAULT, derive_task_id, dispatch_for
-from openbot.application.workflows import (
+from openbot.application.use_cases import (
     maybe_run_chat,
     maybe_run_fix,
     maybe_run_review,

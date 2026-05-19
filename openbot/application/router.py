@@ -107,11 +107,11 @@ def _resolve_handler(feature: Feature) -> Handler:
     module stays free of side-effects at import time.
     """
     if get_settings().debug_echo_enabled:
-        from openbot.application.handlers.debug_echo import debug_echo_handler
+        from openbot.application.use_cases import debug_echo_handler
 
         return debug_echo_handler
 
-    from openbot.application.workflows import (
+    from openbot.application.use_cases import (
         maybe_run_chat,
         maybe_run_fix,
         maybe_run_review,
