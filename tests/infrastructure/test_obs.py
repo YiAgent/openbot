@@ -36,12 +36,12 @@ def test_init_sentry_is_noop_without_dsn() -> None:
 
 def test_init_sentry_passes_settings_through_when_dsn_set() -> None:
     """DSN set → SDK init is called with the configured DSN, environment,
-    traces sample rate, profiles sample rate, and the component tag."""
+    traces sample rate, profile session sample rate, and the component tag."""
     settings = Settings(
         sentry_dsn="https://public@example.ingest.sentry.io/12345",  # type: ignore[arg-type]
         environment="production",
         sentry_traces_sample_rate=0.1,
-        sentry_profiles_sample_rate=0.1,
+        sentry_profile_session_sample_rate=1.0,
     )
 
     with (
@@ -55,8 +55,8 @@ def test_init_sentry_passes_settings_through_when_dsn_set() -> None:
     assert kwargs["dsn"] == "https://public@example.ingest.sentry.io/12345"
     assert kwargs["environment"] == "production"
     assert kwargs["traces_sample_rate"] == 0.1
-    # profiles_sample_rate drives Sentry Profiling on sampled transactions.
-    assert kwargs["profiles_sample_rate"] == 0.1
+    # profile_session_sample_rate drives continuous profiling (sentry-sdk 2.24+).
+    assert kwargs["profile_session_sample_rate"] == 1.0
     # PII off by default — webhook bodies contain repo/actor already
     # captured in audit_log, no need to duplicate into Sentry.
     assert kwargs["send_default_pii"] is False

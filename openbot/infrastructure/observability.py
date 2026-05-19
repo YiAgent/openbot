@@ -78,7 +78,7 @@ def init_sentry(settings: Settings, *, component: str) -> None:
         dsn=dsn,  # None = no-op; sentry-sdk documents this contract
         environment=settings.environment,
         traces_sample_rate=settings.sentry_traces_sample_rate,
-        profiles_sample_rate=settings.sentry_profiles_sample_rate,
+        profile_session_sample_rate=settings.sentry_profile_session_sample_rate,
         # Webhook bodies may carry repo / actor info that's already in
         # the audit log; do not duplicate into Sentry.
         send_default_pii=False,

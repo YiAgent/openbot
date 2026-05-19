@@ -154,14 +154,21 @@ class Settings(BaseSettings):
         default="development",
         description="Environment tag attached to Sentry events.",
     )
-    # 0.0 = error-only (cheapest tier). Bump to 0.05-0.2 once you have
-    # the Sentry Performance budget to spare. Keep <1.0 or you'll burn
-    # the free-tier event budget on the first traffic spike.
+    # 0.1 = 10% of transactions (standard production starting point).
+    # Bump to 1.0 during active debugging or if traffic is very low.
     sentry_traces_sample_rate: float = Field(
-        default=0.0,
+        default=0.1,
         ge=0.0,
         le=1.0,
         description="Fraction of transactions sent to Sentry Performance.",
+    )
+    # Continuous profiling — always-on, low overhead, does not require
+    # traces_sample_rate > 0. 1.0 = profile every session (recommended).
+    sentry_profile_session_sample_rate: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of sessions profiled continuously (sentry-sdk 2.24+).",
     )
 
     # ── Coerce "" → None for optional non-string fields ──
