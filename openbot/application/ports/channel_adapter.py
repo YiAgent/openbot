@@ -46,3 +46,27 @@ class ChannelAdapterPort(Protocol):
         Returns 'none' on failure.
         """
         ...
+
+    async def update_check_run(
+        self,
+        event: UnifiedEvent,
+        check_run_id: int,
+        status: str = "completed",
+        conclusion: str | None = None,
+        completed_at: str | None = None,
+        output: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing check run's status and output.
+
+        Args:
+            event: The unified event context.
+            check_run_id: The numeric ID of the check run to update.
+            status: The new status (e.g., 'completed').
+            conclusion: The conclusion (e.g., 'success', 'failure', 'skipped').
+            completed_at: Timestamp when the check run completed.
+            output: Output dict with 'title' and 'summary' fields.
+
+        Returns:
+            The updated check run object.
+        """
+        ...

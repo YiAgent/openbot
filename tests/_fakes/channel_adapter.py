@@ -41,3 +41,14 @@ class FakeChannelAdapter:
 
     async def get_actor_role(self, event: UnifiedEvent, login: str | None = None) -> str:
         return "none"
+
+    async def update_check_run(
+        self,
+        event: UnifiedEvent,
+        check_run_id: int,
+        status: str = "completed",
+        conclusion: str | None = None,
+        completed_at: str | None = None,
+        output: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {"ok": True, "id": check_run_id}
