@@ -32,8 +32,9 @@ class Metrics:
         try:
             from sentry_sdk import metrics
 
-            metrics.incr(key, value, unit=unit, tags=tags or {})
-        except (ImportError, RuntimeError):
+            # Sentry 2.x uses 'count' for counters and 'attributes' for tags.
+            metrics.count(key, value, unit=unit, attributes=tags or {})
+        except (ImportError, RuntimeError, AttributeError):
             pass
 
     def distribution(
@@ -47,8 +48,8 @@ class Metrics:
         try:
             from sentry_sdk import metrics
 
-            metrics.distribution(key, value, unit=unit, tags=tags or {})
-        except (ImportError, RuntimeError):
+            metrics.distribution(key, value, unit=unit, attributes=tags or {})
+        except (ImportError, RuntimeError, AttributeError):
             pass
 
     def gauge(
@@ -62,8 +63,8 @@ class Metrics:
         try:
             from sentry_sdk import metrics
 
-            metrics.gauge(key, value, unit=unit, tags=tags or {})
-        except (ImportError, RuntimeError):
+            metrics.gauge(key, value, unit=unit, attributes=tags or {})
+        except (ImportError, RuntimeError, AttributeError):
             pass
 
     def set(
@@ -77,8 +78,10 @@ class Metrics:
         try:
             from sentry_sdk import metrics
 
-            metrics.set(key, value, unit=unit, tags=tags or {})
-        except (ImportError, RuntimeError):
+            # If 'set' is not available, we skip it.
+            if hasattr(metrics, "set"):
+                metrics.set(key, value, unit=unit, attributes=tags or {})
+        except (ImportError, RuntimeError, AttributeError):
             pass
 
 
