@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from openbot.infrastructure.persistence.dedup import DedupOutcome
+from openbot.domain.dedup import DedupOutcome
 
 
 @runtime_checkable

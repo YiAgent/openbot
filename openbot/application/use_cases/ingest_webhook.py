@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from openbot.application.router import Dispatch, derive_run_id, dispatch_for, upgrade_dispatch
 from openbot.application.state.runs_repo import TransitionResult
+from openbot.domain.dedup import DedupOutcome
 from openbot.domain.intents import Intent
 
 if TYPE_CHECKING:
@@ -200,9 +201,6 @@ async def ingest_webhook(
       5. GitHub check run creation.
       6. Redis enqueue or BackgroundTask fallback.
     """
-    from openbot.infrastructure.persistence import DedupOutcome
-    from openbot.infrastructure.queue.payload import QueuePayload
-
     # ── 1. Dedup ─────────────────────────────────────────────────────────────
     outcome = await dedup.check_and_mark(event.channel, event.delivery_id)
     if outcome is DedupOutcome.DUPLICATE:
@@ -342,7 +340,8 @@ async def ingest_webhook(
     # working bot.
     if redis_client is not None:
         try:
-            payload = QueuePayload.from_event(
+            assert queue is not None, "queue port must be set when redis_client is present"
+            entry_id = await queue.enqueue(
                 event,
                 feature=dispatch.feature,
                 task_id=dispatch.task_id,
@@ -353,8 +352,6 @@ async def ingest_webhook(
                 resource_key=dispatch.resource_key,
                 event_seq=dispatch.event_seq,
             )
-            assert queue is not None, "queue port must be set when redis_client is present"
-            entry_id = await queue.enqueue(payload)
             return IngestResult(
                 status="accepted",
                 delivery_id=event.delivery_id,

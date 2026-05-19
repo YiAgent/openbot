@@ -11,7 +11,19 @@ layers =
     openbot.core
 unmatched_ignore_imports_alerting = warn
 ignore_imports =
-    # Allowed structural exception: DedupPort's adapter lives alongside the protocol
-    # in infrastructure.persistence.dedup to keep the dedup check atomic (Redis Lua
-    # script) — this is intentional co-location, not an architecture violation.
-    openbot.application.ports.dedup -> openbot.infrastructure.persistence.dedup
+    # Documented exceptions — each must have a justification comment:
+
+    # AuditLogRepo: concrete fallback when AuditLogPort not injected (composition root exception)
+    openbot.application.middleware.audit -> openbot.infrastructure.persistence.repository
+    openbot.application.middleware.preflight -> openbot.infrastructure.persistence.repository
+    openbot.application.workflows._lifecycle -> openbot.infrastructure.persistence.repository
+    openbot.application.handlers.debug_echo -> openbot.infrastructure.persistence.repository
+
+    # CostMeterRepo: concrete fallback for budget enforcement
+    openbot.application.middleware.budget -> openbot.infrastructure.persistence.repository
+
+    # TaskRun ORM model: application.state is the anti-corruption layer for the state machine
+    openbot.application.state.runs_repo -> openbot.infrastructure.persistence.models
+
+    # config_loader: dispatcher uses infra load_for_repo directly (port injection pending)
+    openbot.application.dispatcher -> openbot.infrastructure.config_loader
