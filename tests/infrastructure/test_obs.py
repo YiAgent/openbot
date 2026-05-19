@@ -15,6 +15,7 @@ DNS / TLS to a real Sentry ingest endpoint.
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import patch
 
 from openbot.core.settings import Settings
@@ -33,11 +34,12 @@ def test_init_sentry_is_noop_without_dsn() -> None:
 
 def test_init_sentry_passes_settings_through_when_dsn_set() -> None:
     """DSN set → SDK init is called with the configured DSN, environment,
-    and traces sample rate, plus the component tag is applied."""
+    traces sample rate, profiles sample rate, and the component tag."""
     settings = Settings(
         sentry_dsn="https://public@example.ingest.sentry.io/12345",  # type: ignore[arg-type]
         environment="production",
         sentry_traces_sample_rate=0.1,
+        sentry_profiles_sample_rate=0.1,
     )
 
     with (
@@ -51,6 +53,8 @@ def test_init_sentry_passes_settings_through_when_dsn_set() -> None:
     assert kwargs["dsn"] == "https://public@example.ingest.sentry.io/12345"
     assert kwargs["environment"] == "production"
     assert kwargs["traces_sample_rate"] == 0.1
+    # profiles_sample_rate drives Sentry Profiling on sampled transactions.
+    assert kwargs["profiles_sample_rate"] == 0.1
     # PII off by default — webhook bodies contain repo/actor already
     # captured in audit_log, no need to duplicate into Sentry.
     assert kwargs["send_default_pii"] is False
@@ -72,3 +76,21 @@ def test_init_sentry_survives_missing_sdk(monkeypatch) -> None:  # type: ignore[
     monkeypatch.setattr(builtins, "__import__", fake_import)
     # Must not raise.
     init_sentry(Settings(), component="webapp")
+
+
+def test_init_sentry_logs_sentry_initialised(caplog) -> None:  # type: ignore[no-untyped-def]
+    """When a DSN is configured, init_sentry must emit a structured
+    'sentry_initialised' log line so operators can confirm the SDK
+    is active at startup without needing to check the Sentry dashboard."""
+    settings = Settings(
+        sentry_dsn="https://public@example.ingest.sentry.io/12345",  # type: ignore[arg-type]
+    )
+    with (
+        patch("sentry_sdk.init"),
+        patch("sentry_sdk.set_tag"),
+        caplog.at_level(logging.INFO, logger="openbot.infrastructure.observability"),
+    ):
+        init_sentry(settings, component="webapp")
+
+    messages = [r.message for r in caplog.records]
+    assert "sentry_initialised" in messages
