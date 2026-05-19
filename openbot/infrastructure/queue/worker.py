@@ -46,6 +46,7 @@ from openbot.application.state.cancellation import (
 from openbot.application.state.cancellation import (
     signal as cancellation_signal,
 )
+from openbot.core.metrics import queue_depth
 from openbot.infrastructure.queue.payload import (
     DEAD_STREAM,
     GROUP_NAME,
@@ -87,6 +88,24 @@ _RETRY_TTL_SECONDS: Final = 7 * 86400
 
 def _retry_key(entry_id: str) -> str:
     return f"openbot:workflows:retries:{entry_id}"
+
+
+def _attach_sentry_tags(payload: QueuePayload) -> None:
+    """Push delivery context to the Sentry scope for the current dispatch.
+
+    Tags appear in the Sentry UI as filterable dimensions, allowing ops to
+    jump from a Sentry issue directly to the originating GitHub delivery_id.
+    Wrapped in try/except so a missing sentry_sdk dep (slim CI image) never
+    crashes the consumer loop.
+    """
+    try:
+        import sentry_sdk
+
+        sentry_sdk.set_tag("delivery_id", payload.delivery_id)
+        sentry_sdk.set_tag("feature", payload.feature)
+        sentry_sdk.set_tag("repo", payload.repo)
+    except Exception:
+        pass  # Sentry tagging is best-effort; never crash the dispatch loop
 
 
 async def ensure_consumer_group(redis: redis_async.Redis) -> None:
@@ -187,6 +206,14 @@ async def _read_and_dispatch(
         count=_READ_COUNT,
         block=read_block_ms,
     )
+    # Update queue-depth gauge after each read so Prometheus reflects the
+    # current backlog. XLEN is O(1) and cheap relative to the block timeout.
+    try:
+        depth = await redis.xlen(STREAM_NAME)
+        queue_depth.set(float(depth))
+    except Exception:
+        pass  # gauge staleness is acceptable; never crash the consumer loop
+
     if not response:
         return
     for _stream_name, entries in response:
@@ -324,6 +351,13 @@ async def _process_entry(
     # the handler exit (success OR exception).
     active_run_id = new_dispatch.run_id or new_dispatch.task_id
     cancellation_register(active_run_id)
+
+    # Attach delivery context to Sentry for this dispatch so any
+    # uncaught exception carries the delivery_id / repo / feature tags.
+    # push_scope() is async-safe: the tags are scoped to this coroutine's
+    # Sentry hub and don't bleed into concurrent dispatches.
+    _attach_sentry_tags(payload)
+
     try:
         try:
             await run_dispatch(

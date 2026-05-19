@@ -11,28 +11,28 @@ This module is HTTP glue only:
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 
 from openbot.application.dispatcher import run_dispatch
 from openbot.application.use_cases.ingest_webhook import ingest_webhook
-from openbot.infrastructure.adapters.base import SignatureError
+from openbot.entrypoints.api.deps import verified_github_event
 from openbot.infrastructure.adapters.github import GitHubAdapter
 
 if TYPE_CHECKING:
     from openbot.application.router import Dispatch
     from openbot.domain.events import UnifiedEvent
 
-_logger = logging.getLogger(__name__)
-
 router = APIRouter()
+_verified_github_event = Depends(verified_github_event)
 
 
 @router.post("/webhook/github", status_code=status.HTTP_202_ACCEPTED)
 async def github_webhook(
-    request: Request, background: BackgroundTasks
+    request: Request,
+    background: BackgroundTasks,
+    event: UnifiedEvent = _verified_github_event,
 ) -> dict[str, str | int | bool | None]:
     """Receive a GitHub webhook.
 
@@ -48,39 +48,7 @@ async def github_webhook(
     keyed worker lands in the middleware slice so workflows survive a
     process restart.
     """
-    adapter: GitHubAdapter | None = getattr(request.app.state, "github_adapter", None)
-    if adapter is None:
-        # Webhooks intentionally off until setup.sh has run.
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "OPENBOT_GITHUB_WEBHOOK_SECRET is not set",
-        )
-
-    body = await request.body()
-    headers = {k.lower(): v for k, v in request.headers.items()}
-
-    try:
-        adapter.verify_signature(body, headers)
-    except SignatureError as exc:
-        # Audit: log the failed delivery_id so attacker probes are visible.
-        _logger.warning(
-            "webhook_signature_rejected",
-            extra={"delivery_id": headers.get("x-github-delivery", "?"), "reason": str(exc)},
-        )
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
-
-    try:
-        event = adapter.parse_event(body, headers)
-    except SignatureError as exc:
-        # parse_event raises SignatureError for "valid HMAC + invalid JSON"
-        # by design (github.py docstring): a passer-by who can sign but
-        # sends garbage is a more pointed probe than one who can't sign at
-        # all, so we collapse it into the same 401 lane rather than 500.
-        _logger.warning(
-            "webhook_payload_unparseable",
-            extra={"delivery_id": headers.get("x-github-delivery", "?"), "reason": str(exc)},
-        )
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
+    adapter: GitHubAdapter = request.app.state.github_adapter
 
     state = request.app.state
     result = await ingest_webhook(

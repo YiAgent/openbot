@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 import litellm
 
+from openbot.core.metrics import llm_cost_usd_total
 from openbot.infrastructure.llm.model_router import Feature, primary_model_for
 from openbot.infrastructure.persistence.models import CostStatus
 from openbot.infrastructure.persistence.repository import CostMeterRepo
@@ -151,6 +152,11 @@ async def complete(
                 "cost_status": effective_status.value,
             },
         )
+
+    # Increment cost counter regardless of Postgres persistence outcome —
+    # the metric reflects actual LLM spend, not storage success.
+    if effective_status is CostStatus.RECORDED:
+        llm_cost_usd_total.labels(feature=feature.value).inc(float(cost_usd))
 
     if extraction_error is not None:
         raise extraction_error

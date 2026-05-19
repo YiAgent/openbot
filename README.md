@@ -63,10 +63,21 @@ Any new channel implements one ABC. Same pipeline, different entry points.
 git clone https://github.com/<you>/openbot && cd openbot
 cp .env.example .env             # or use Doppler — see Development setup
 
-# 3. Run
-docker compose up
-# Webhook URL is now live at http://<your-host>/webhook
+# 3. Initialize the database schema
+make db-init
+
+# 4. Run the app locally (native-first dev)
+make dev-server
+make worker
+
+# 5. Verify readiness
+curl -fsS http://127.0.0.1:8080/ready
 ```
+
+Native local development is the primary path. Docker is optional:
+
+- Infra only: `docker compose up postgres redis`
+- Full container stack: `docker compose --profile app up --build`
 
 Default LLM is Anthropic Claude via [LiteLLM](https://github.com/BerriAI/litellm); set `OPENAI_API_KEY` or `GOOGLE_API_KEY` to route to any of 100+ providers.
 
@@ -189,8 +200,9 @@ doppler setup --project openbot --config dev      # bind repo to dev config
 Daily:
 
 ```bash
-doppler run -- uvicorn openbot.entrypoints.api.app:app --reload        # local dev
-doppler run --config prd -- python -m openbot.entrypoints.worker      # worker (when implemented)
+doppler run -- uv run python -m openbot.entrypoints.cli.db_init
+doppler run -- uvicorn openbot.entrypoints.api.app:app --reload
+doppler run -- python -m openbot.entrypoints.worker
 ```
 
 Offline fallback:
@@ -226,6 +238,7 @@ make lint     # ruff check
 make test     # pytest, excludes evals/
 make check    # fmt-check + lint + test  ← run before every commit
 make dev      # uvicorn with autoreload
+make db-init  # create the current database schema
 make hooks    # install git hooks
 ```
 

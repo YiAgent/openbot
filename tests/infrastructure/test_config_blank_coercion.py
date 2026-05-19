@@ -48,3 +48,7 @@ def test_blank_redis_and_postgres_urls_become_none(monkeypatch: pytest.MonkeyPat
     s = Settings()
     assert s.redis_url is None
     assert s.postgres_url is None
+
+
+def test_debug_echo_is_disabled_by_default() -> None:
+    assert Settings().debug_echo_enabled is False

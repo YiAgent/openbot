@@ -1,12 +1,14 @@
-# OpenBot · local Postgres + Redis for dev.
+# OpenBot compose stack.
 #
-# Scope (v0.1 Day 2-3): just the stateful infra; OpenBot itself runs natively
-# via `make dev` against these services. We do NOT containerize OpenBot here —
-# the published Docker image (PRD §7 Docker Hub) lands later with a separate
-# multi-stage Dockerfile.
+# Default use:
+#   - local native-first dev: `docker compose up postgres redis`
+#     then run `make db-init`, `make dev-server`, `make worker` locally.
+#   - full container stack for other contributors / smoke deploys:
+#     `docker compose --profile app up --build`
 #
-# Ports bind to 127.0.0.1 only: no LAN exposure, no accidental "but my DB
-# accepted that connection from a hotel wifi" stories.
+# App services are behind the optional `app` profile so local development
+# is not forced through Docker, but the full web+worker stack is still
+# available and tested from the same compose file.
 #
 # Schema is owned by the app (no init SQL here yet). PRD §4.5 cost_meter,
 # §4.6 rate_limit_counter, §5.1 thread_metadata land when their consumers do.
@@ -57,6 +59,62 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  web:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openbot-web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      OPENBOT_POSTGRES_URL: postgresql+asyncpg://openbot:openbot@postgres:5432/openbot
+      OPENBOT_REDIS_URL: redis://redis:6379/0
+      PORT: "8080"
+      PYTHONUNBUFFERED: "1"
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8080:8080"
+    command:
+      - uv
+      - run
+      - uvicorn
+      - openbot.entrypoints.api.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+
+  worker:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openbot-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      OPENBOT_POSTGRES_URL: postgresql+asyncpg://openbot:openbot@postgres:5432/openbot
+      OPENBOT_REDIS_URL: redis://redis:6379/0
+      PYTHONUNBUFFERED: "1"
+    env_file:
+      - .env
+    command:
+      - uv
+      - run
+      - python
+      - -m
+      - openbot.entrypoints.worker
 
 volumes:
   openbot-pg-data:

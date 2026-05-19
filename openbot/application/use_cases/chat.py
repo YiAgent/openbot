@@ -15,18 +15,25 @@ import logging
 from typing import TYPE_CHECKING
 
 from openbot.application.use_cases._lifecycle import audit_lifecycle
+from openbot.application.use_cases._tracing import traceable as _traceable
 from openbot.application.use_cases.chat_parser import parse as parse_chat_command
 from openbot.domain.workflows import Workflow
+from openbot.infrastructure.agents import DeepAgentsChatResponder
 
 if TYPE_CHECKING:
     from openbot.application.middleware.preflight import PreflightContext
 
 _logger = logging.getLogger(__name__)
+_RESPONDER = DeepAgentsChatResponder()
 
 _ACK_TEMPLATE = (
     ":robot: Hi @{actor} — OpenBot received your message and is thinking.\n\n"
     "_v0.1 alpha: only the ACK is automated so far. Tool-using chat agent "
     "(read_file / grep / web_fetch / search) lands in an upcoming commit._"
+)
+_ERROR_TEMPLATE = (
+    ":robot: I couldn't complete that request right now.\n\n"
+    "Please try again shortly. If this keeps failing, check the worker logs and LLM credentials."
 )
 
 _HELP_TEMPLATE = (
@@ -41,6 +48,11 @@ _HELP_TEMPLATE = (
 )
 
 
+async def _generate_freeform_reply(*, event, user_request: str) -> str:
+    return await _RESPONDER.reply_for_event(event, user_request=user_request)
+
+
+@_traceable(run_type="chain", name="chat")
 async def maybe_run_chat(ctx: PreflightContext) -> None:
     event = ctx.event
     # Chat replies to whichever surface carried the @mention — issue or PR.
@@ -75,9 +87,22 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
         )
         return
 
-    message = (
-        _HELP_TEMPLATE if command.is_help else _ACK_TEMPLATE.format(actor=event.actor or "there")
-    )
+    if command.is_help:
+        message = _HELP_TEMPLATE
+    elif not command.body_after_mention:
+        message = _ACK_TEMPLATE.format(actor=event.actor or "there")
+    else:
+        try:
+            message = await _generate_freeform_reply(
+                event=event,
+                user_request=command.body_after_mention,
+            )
+        except Exception:
+            _logger.exception(
+                "chat_agent_reply_failed",
+                extra={"delivery_id": event.delivery_id, "repo": event.repo},
+            )
+            message = _ERROR_TEMPLATE
 
     try:
         async with audit_lifecycle(ctx, workflow=Workflow.CHAT) as audit:

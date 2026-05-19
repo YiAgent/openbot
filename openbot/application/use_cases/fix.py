@@ -14,6 +14,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from openbot.application.use_cases._lifecycle import audit_lifecycle
+from openbot.application.use_cases._tracing import traceable as _traceable
 from openbot.domain.workflows import Workflow
 
 if TYPE_CHECKING:
@@ -29,6 +30,7 @@ _ACK_TEMPLATE = (
 )
 
 
+@_traceable(run_type="chain", name="fix")
 async def maybe_run_fix(ctx: PreflightContext) -> None:
     event = ctx.event
     if event.issue_number is None or event.installation_id is None:

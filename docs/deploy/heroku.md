@@ -7,11 +7,11 @@ OpenBot v0.1 在 Heroku 上的部署形状：
 | web   | Basic  | $7/mo  | 永不休眠，HMAC 验签 → Redis dedup → 入队 → 返回 202 |
 | worker| Eco    | $5/mo  | `python -m openbot.entrypoints.worker`，消费 Stream      |
 
-外部依赖（不走 Heroku addons）：
+运行时依赖：
 
-- **Postgres**：Neon（`sslmode=require`，asyncpg 驱动）
-- **Redis**：Redis Cloud Addon（`redis://`）
-- **Sandbox**：Daytona（`OPENBOT_SANDBOX_BACKEND=daytona`）
+- **Postgres**：Neon（外部，`sslmode=require`，asyncpg 驱动）
+- **Redis**：Redis Cloud addon（Heroku 内挂载，监控由 Memetria 观察）
+- **Sandbox**：Daytona（外部，`OPENBOT_SANDBOX_BACKEND=daytona`）
 
 LLM provider key、LangSmith key 等通用密钥由 `scripts/doppler-bootstrap-shared.sh` 从 `infra/prd` 同步过来，已在 `openbot/prd` 里。
 
@@ -24,8 +24,45 @@ OpenBot 预置了以下监控工具：
 | 工具 | 用途 | 查看方式 |
 |------|------|----------|
 | **Papertrail** | 实时日志流 & 搜索 | `heroku addons:open papertrail` |
-| **Better Stack** | Uptime 监控 | `heroku addons:open betteruptime` |
+| **Memetria Monitoring for Redis** | Redis 指标 / 大 key / 内存分析 | `heroku addons:open redismonitor` |
+| **Better Uptime** | 外部可用性监控 / 告警 | `heroku addons:open betteruptime` |
 | **Sentry** | 异常上报 | `heroku addons:open sentry` |
+
+### 一键挂监控 addons
+
+项目内已经提供了幂等脚本：
+
+```bash
+bash scripts/heroku-monitoring-bootstrap.sh openbot
+```
+
+它会做三件事：
+
+1. 给 Heroku app 挂上 `redismonitor:free`
+2. 给 Heroku app 挂上 `betteruptime:test`
+3. 用 `BETTERUPTIME_API_TOKEN` 通过 Better Uptime API 自动创建一个指向 `WEB_URL/ready` 的 monitor
+
+脚本的 Redis URL 选择顺序是：
+
+1. `REDISCLOUD_URL`
+2. `OPENBOT_REDIS_URL`
+
+这样可以直接兼容 Heroku `rediscloud` addon，也兼容未来改成外部 Redis 后只保留 `OPENBOT_REDIS_URL` 的形状。
+
+如果你的外部探活不想打 `/ready`，可以覆写：
+
+```bash
+OPENBOT_BETTERUPTIME_PATH=/health bash scripts/heroku-monitoring-bootstrap.sh openbot
+```
+
+如果你未来切到自定义域名，也可以直接指定完整 URL：
+
+```bash
+OPENBOT_BETTERUPTIME_URL=https://bot.example.com/ready \
+  bash scripts/heroku-monitoring-bootstrap.sh openbot
+```
+
+注意：当前 Trusted Host 白名单默认包含 `*.herokuapp.com`，如果 Better Uptime 改打自定义域名，需要同步把这个域名加入应用白名单。
 
 ### Papertrail 使用建议
 
@@ -37,6 +74,51 @@ heroku logs --tail -a openbot
 ```bash
 heroku addons:open papertrail
 ```
+
+### Memetria 使用建议
+
+`Memetria Monitoring for Redis` 不需要改应用代码；它直接连 Redis 做监控。脚本已经优先把 Heroku `REDISCLOUD_URL` 传给它。
+
+如果要打开大 key / 内存分析，需要从免费档升级到付费档：
+
+```bash
+heroku addons:upgrade redismonitor:monitor0 -a openbot
+```
+
+升级后依然从同一个 dashboard 进入：
+
+```bash
+heroku addons:open redismonitor -a openbot
+```
+
+### Better Uptime 使用建议
+
+脚本默认创建一个 `status` monitor，监控目标是公开的 `/ready`：
+
+- `200`：webhook secret、Redis、Postgres 都就绪
+- `503`：至少一个关键依赖不可用
+
+这样 Better Uptime 告警会覆盖 web dyno 存活之外的关键依赖故障，不只是进程还活着。
+
+当前 web dyno 关闭了 `uvicorn` 默认 access log；HTTP 请求级日志由应用层 middleware 发出，统一包含：
+
+- `method`
+- `path`
+- `status_code`
+- `request_id`
+- `delivery_id`（GitHub webhook 时会复用 `X-GitHub-Delivery`）
+- `host`
+- `elapsed_ms`
+
+另外，FastAPI 入口默认只信任以下 Host：
+
+- `localhost`
+- `127.0.0.1`
+- `test`
+- `testserver`
+- `*.herokuapp.com`
+
+如果未来切到自定义域名，需要同步扩展这份白名单。
 
 ---
 
@@ -159,7 +241,7 @@ Eco dyno 是 512MB，4 并发 asyncio 消费者一般够用。提高之前看一
 ## 监控与告警
 
 - **Heroku Metrics**（Basic dyno 自带）：CPU / memory / response time 在 dashboard 看
-- **应用层日志**：JSON 行直接进 Heroku Logplex；推荐挂一个 Papertrail / Logtail addon 做归档
+- **应用层日志**：JSON 行直接进 Heroku Logplex；推荐挂一个 Papertrail addon 做归档
 - **LangSmith**：trace 自动写入 `openbot-prd` project（`LANGSMITH_PROJECT` 已在 Doppler）
 
 ### 健康检查告警建议

@@ -24,10 +24,11 @@ import sys
 from typing import TYPE_CHECKING
 
 from openbot import __version__
+from openbot.core.logging import configure_root_logger
 from openbot.core.settings import Settings, get_settings
 from openbot.infrastructure.adapters.github import GitHubAdapter
 from openbot.infrastructure.adapters.github_auth import GitHubAppAuth
-from openbot.infrastructure.observability import init_sentry
+from openbot.infrastructure.observability import init_langsmith, init_sentry
 from openbot.infrastructure.persistence import (
     create_schema,
     make_client,
@@ -77,6 +78,7 @@ async def _main() -> int:
     # Sentry first — captures any subsequent startup crash (bad DSN
     # for Redis/Postgres, malformed PEM, etc.) on the worker dyno.
     init_sentry(settings, component="worker")
+    init_langsmith()
     if settings.redis_url is None:
         _logger.error("worker_no_redis_url")
         return 2
@@ -95,8 +97,8 @@ async def _main() -> int:
     session_factory = None
     if settings.postgres_url:
         db_engine = make_engine(settings.postgres_url, echo=settings.debug)
-        # Idempotent — same as the webapp's lifespan. Whichever process
-        # wins the race creates the tables; the other gets a no-op.
+        # Idempotent — same as the webapp's lifespan and `make db-init`.
+        # Whichever process wins the race creates the tables; the others no-op.
         await create_schema(db_engine)
         session_factory = make_session_factory(db_engine)
 
@@ -160,10 +162,7 @@ async def _main() -> int:
 
 
 def main() -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    configure_root_logger()
     return asyncio.run(_main())
 
 

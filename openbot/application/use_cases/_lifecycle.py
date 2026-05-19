@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from openbot.core.metrics import workflow_total
 from openbot.domain.workflows import Workflow, WorkflowPhase
 
 if TYPE_CHECKING:
@@ -114,7 +115,9 @@ async def audit_lifecycle(
         # GitHub API error can leak repo paths or login names.
         outcome = f"{type(exc).__name__}"
         await _write_phase(ctx, workflow=workflow, phase=WorkflowPhase.FAILED, outcome=outcome)
+        workflow_total.labels(feature=workflow.value, outcome="failed").inc()
         raise
     await _write_phase(
         ctx, workflow=workflow, phase=WorkflowPhase.COMPLETED, outcome=handle.outcome
     )
+    workflow_total.labels(feature=workflow.value, outcome="completed").inc()

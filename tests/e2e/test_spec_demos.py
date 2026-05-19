@@ -127,10 +127,11 @@ async def test_demo_03_bot_assigned_fix_stub(webhook_harness: WebhookHarness) ->
 
 
 async def test_demo_04_at_openbot_chat_ack(webhook_harness: WebhookHarness) -> None:
-    """`@openbot tell me about X` (freeform, not cancel/help) → CHAT ACK.
+    """`@openbot tell me about X` (freeform, not cancel/help) → CHAT reply.
 
-    The chat ACK template starts with the `:robot: Hi @{actor}` greeting;
-    distinct from the help template which says "OpenBot chat".
+    The e2e harness stubs the DeepAgents call itself; this test verifies
+    the workflow path switched from the old canned ACK to the real
+    freeform branch.
     """
     event = webhook_harness.make_event(
         kind=EventKind.ISSUE_COMMENT_CREATED,
@@ -146,7 +147,7 @@ async def test_demo_04_at_openbot_chat_ack(webhook_harness: WebhookHarness) -> N
     assert len(webhook_harness.adapter.replies) == 1
     _, number, body = webhook_harness.adapter.replies[0]
     assert number == 5
-    assert "OpenBot received your message" in body
+    assert body == "DeepAgents test reply: tell me about this repo"
 
 
 # ───────────────────────── demo 05: cancel label blocks ─────────────────────────

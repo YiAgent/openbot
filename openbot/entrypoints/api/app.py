@@ -18,10 +18,14 @@ e2e testing before the App's private key is provisioned.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from time import perf_counter
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from openbot import __version__
 from openbot.application.ports.channel_adapter import ChannelAdapterPort
@@ -33,7 +37,7 @@ from openbot.entrypoints.api.routes.health import router as _health_router
 from openbot.infrastructure.adapters.github import GitHubAdapter
 from openbot.infrastructure.adapters.github_auth import GitHubAppAuth
 from openbot.infrastructure.config_loader import YamlConfigLoader
-from openbot.infrastructure.observability import init_sentry
+from openbot.infrastructure.observability import init_langsmith, init_sentry
 from openbot.infrastructure.persistence import (
     WebhookDedup,
     create_schema,
@@ -53,6 +57,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 _logger = logging.getLogger("openbot.entrypoints.api.app")
+_TRUSTED_HOSTS = ["localhost", "127.0.0.1", "test", "testserver", "*.herokuapp.com"]
 
 
 def _build_auth(settings: Settings) -> GitHubAppAuth | None:
@@ -101,6 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialise Sentry first so any later startup error (Postgres
     # unreachable, malformed PEM, etc.) is captured.
     init_sentry(settings, component="webapp")
+    init_langsmith()
     auth = _build_auth(settings)
 
     redis_client: redis_async.Redis | None = (
@@ -123,7 +129,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if settings.postgres_url:
         db_engine = make_engine(settings.postgres_url, echo=settings.debug)
         # First-run schema creation. Idempotent — safe to call on every startup.
-        # When the first schema CHANGE ships we replace this with alembic.
+        # Matches the explicit `make db-init` command so manual bootstrap and
+        # runtime bootstrap use the same helper.
         await create_schema(db_engine)
         db_session_factory = make_session_factory(db_engine)
     app.state.db_engine = db_engine
@@ -182,6 +189,74 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
 )
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=_TRUSTED_HOSTS)
+
+
+@app.middleware("http")
+async def attach_request_id(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """Attach a stable request id to request.state and the response.
+
+    GitHub webhook requests already carry ``X-GitHub-Delivery``; reusing it
+    gives us cross-system correlation without inventing another identifier.
+    """
+    request_id = (
+        request.headers.get("x-github-delivery")
+        or request.headers.get("x-request-id")
+        or uuid4().hex
+    )
+    request.state.request_id = request_id
+
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.middleware("http")
+async def log_http_request(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """Emit one ingress log per request.
+
+    Uvicorn access logs are disabled in Procfile, so this becomes the
+    request-level visibility for Heroku / Papertrail.
+    """
+    started = perf_counter()
+    response = await call_next(request)
+    elapsed_ms = round((perf_counter() - started) * 1000, 2)
+    _logger.info(
+        "http_request_completed",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "request_id": getattr(request.state, "request_id", None),
+            "delivery_id": request.headers.get("x-github-delivery"),
+            "host": request.headers.get("host"),
+            "elapsed_ms": elapsed_ms,
+        },
+    )
+    # Record Sentry metrics for high-level visibility without Prometheus
+    from openbot.infrastructure.metrics import metrics
+
+    metrics.incr(
+        "http.request.count",
+        tags={
+            "method": request.method,
+            "path": request.url.path,
+            "status": str(response.status_code),
+        },
+    )
+    metrics.distribution(
+        "http.request.duration",
+        elapsed_ms,
+        unit="millisecond",
+        tags={"method": request.method, "path": request.url.path},
+    )
+    return response
 
 
 def _attach_prometheus_metrics(app: FastAPI) -> None:

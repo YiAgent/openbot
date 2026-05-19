@@ -21,7 +21,7 @@ TARGET_URL := http://$(HOST):$(PORT)/webhook/github
 SMEE_URL := $(shell sed -n 's/^OPENBOT_GITHUB_WEBHOOK_PROXY_URL=\(.*\)$$/\1/p' .env 2>/dev/null)
 
 .PHONY: help install sync hooks test test-fast lint lint-fix lint-imports fmt fmt-check check \
-        dev dev-server dev-smee run smoke setup secret-scan doctor \
+        dev dev-server dev-smee run worker smoke setup secret-scan doctor db-init \
         compose-up compose-down compose-logs compose-ps clean distclean
 
 help: ## Show this help
@@ -89,6 +89,9 @@ run: ## Run FastAPI app (production-style, no reload)
 
 worker: ## Run the Redis Stream worker (slice D — consumes openbot:workflows)
 	uv run python -m openbot.entrypoints.worker
+
+db-init: ## Create the current database schema in OPENBOT_POSTGRES_URL
+	uv run python -m openbot.entrypoints.cli.db_init
 
 smoke: ## Hit /health to verify server is up
 	@curl -sf "http://$(HOST):$(PORT)/health" && echo

@@ -271,6 +271,14 @@ async def webhook_harness(
 
     monkeypatch.setattr("openbot.application.dispatcher.load_for_repo", _fake_load_for_repo)
 
+    async def _fake_chat_reply(*, event: UnifiedEvent, user_request: str) -> str:
+        return f"DeepAgents test reply: {user_request}"
+
+    monkeypatch.setattr(
+        "openbot.application.use_cases.chat._generate_freeform_reply",
+        _fake_chat_reply,
+    )
+
     try:
         yield harness
     finally:

@@ -93,6 +93,12 @@ dependencies = [
     # scraping. Default instrumentator exposes request count / latency
     # histograms; no PII, no body sampling.
     "prometheus-fastapi-instrumentator>=7.0",
+    # Structured JSON logging. Formats stdlib log records as JSON lines
+    # so Papertrail / log aggregators can search + filter on fields
+    # rather than parsing text. Zero-API-change: existing
+    # `_logger.info("event", extra={...})` calls emit the extras as
+    # top-level JSON keys automatically.
+    "python-json-logger>=3.1",
 ]
 
 [project.urls]

@@ -14,8 +14,9 @@ Engines are constructed once at startup via `make_engine()` and held on
 the `sessionmaker` and disposed inside an async context manager.
 
 Note: startup runs `create_schema()` (a `Base.metadata.create_all`) — sync
-DDL inside the async lifespan. Acceptable because startup is the only
-serial moment in the request lifecycle; all subsequent I/O is async.
+DDL inside the async lifespan. The same helper also powers the explicit
+`make db-init` bootstrap command so local dev and first-run deploys share
+one schema-initialization path.
 """
 
 from __future__ import annotations
@@ -84,9 +85,9 @@ async def session_scope(
 async def create_schema(engine: AsyncEngine) -> None:
     """First-run schema creation via `Base.metadata.create_all`.
 
-    Sufficient for v0.1 alpha — users install fresh and the wizard runs once.
-    The first schema CHANGE will introduce alembic; until then, the migration
-    surface is zero.
+    Sufficient for the current schema bootstrap path — the app/worker startup
+    and `make db-init` both call the same helper so the initial schema story
+    stays explicit and consistent.
     """
     from openbot.infrastructure.persistence.models import Base
 
