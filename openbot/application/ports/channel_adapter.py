@@ -70,3 +70,14 @@ class ChannelAdapterPort(Protocol):
             The updated check run object.
         """
         ...
+
+    async def fetch_repo_file(
+        self,
+        event: UnifiedEvent,
+        path: str,
+    ) -> bytes | None:
+        """Fetch a file from the repo at `path`. Returns None if not found (404).
+
+        Raises on other HTTP errors (auth failures, server errors).
+        """
+        ...

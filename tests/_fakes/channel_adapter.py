@@ -52,3 +52,6 @@ class FakeChannelAdapter:
         output: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {"ok": True, "id": check_run_id}
+
+    async def fetch_repo_file(self, event: UnifiedEvent, path: str) -> bytes | None:
+        return None  # no config file by default in tests

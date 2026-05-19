@@ -18,6 +18,7 @@ out to the API.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from collections.abc import Mapping
@@ -383,6 +384,41 @@ class GitHubAdapter(ChannelAdapter):
         if output:
             body["output"] = output
         return await self._authed_json("PATCH", url, event, json_body=body)
+
+    async def fetch_repo_file(
+        self,
+        event: UnifiedEvent,
+        path: str,
+    ) -> bytes | None:
+        """Fetch raw file bytes from the repo via the GitHub Contents API.
+
+        Returns None on 404 (file absent). Raises on other HTTP errors.
+        The caller is responsible for any decoding (e.g. UTF-8, YAML).
+        """
+        token = await self._installation_token(event)
+        url = f"{self._api_base}/repos/{event.repo}/contents/{path}"
+        headers = self._headers(token.token)
+        response = await self._get_http().get(url, headers=headers)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError:
+            _logger.warning(
+                "fetch_repo_file_response_not_json",
+                extra={"repo": event.repo, "path": path, "status": response.status_code},
+            )
+            raise
+        encoded = payload.get("content") or ""
+        encoding = payload.get("encoding") or "base64"
+        if encoding != "base64":
+            _logger.warning(
+                "fetch_repo_file_unexpected_encoding",
+                extra={"repo": event.repo, "path": path, "encoding": encoding},
+            )
+            raise ValueError(f"Unexpected encoding from GitHub Contents API: {encoding!r}")
+        return base64.b64decode(encoded, validate=False)
 
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:
