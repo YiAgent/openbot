@@ -93,7 +93,14 @@ async def complete(
     when content extraction raises — the vendor has already billed us and we
     must not lose that fact.
     """
+    from openbot.core.settings import get_settings
+
+    settings = get_settings()
     model = primary_model_for(feature)
+
+    # Honor custom base URL for Anthropic models (e.g. GLM proxy)
+    if "anthropic/" in model and settings.anthropic_api_base:
+        litellm_kwargs.setdefault("api_base", settings.anthropic_api_base)
 
     response = await litellm.acompletion(
         model=model,

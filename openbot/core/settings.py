@@ -138,6 +138,16 @@ class Settings(BaseSettings):
             "documented no-op — local dev and CI keep working unchanged."
         ),
     )
+
+    # ─── LLM ───
+    # LiteLLM / Anthropic base URL. When set, routes all Anthropic model
+    # calls to this endpoint (e.g. GLM or other proxies).
+    # Mirrored from CLAUDE_SWITCH_GLM_BASE_URL if present.
+    anthropic_api_base: str | None = Field(
+        default=None,
+        alias="CLAUDE_SWITCH_GLM_BASE_URL",
+        description="Base URL for Anthropic-compatible models (e.g. GLM proxy).",
+    )
     # Tags every Sentry event so prod errors don't mix with dev / preview.
     # Heroku sets this via `heroku config:set OPENBOT_ENVIRONMENT=production`.
     environment: str = Field(
