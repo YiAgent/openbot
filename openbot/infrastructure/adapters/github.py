@@ -8,8 +8,8 @@ PRD §4.8 trust boundary: nothing downstream may touch the payload until
 
 Two responsibilities split inside one class:
   - **Receive**: verify_signature + parse_event  (no auth needed)
-  - **Write**:   reply / add_label / remove_label / get_actor_role
-                (requires GitHubAppAuth — installation token minting)
+  - **Write**:   key methods include reply / add_label / remove_label / get_actor_role
+                (all write methods require GitHubAppAuth — installation token minting)
 
 Write methods raise `RuntimeError` if the adapter was constructed without
 a `GitHubAppAuth`, so a webhook-only deployment never accidentally calls
@@ -297,6 +297,10 @@ class GitHubAdapter(ChannelAdapter):
             data = await self._authed_json("GET", url, event)
             return str(data.get("permission") or "none") if isinstance(data, dict) else "none"
         except Exception:
+            _logger.exception(
+                "get_actor_role_failed",
+                extra={"repo": event.repo, "login": target},
+            )
             return "none"
 
     async def get_issue_labels(self, event: UnifiedEvent, number: int) -> frozenset[str]:
