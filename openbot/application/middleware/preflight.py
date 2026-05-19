@@ -32,7 +32,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from openbot.domain.events import UnifiedEvent
-from openbot.infrastructure.persistence.models import WorkflowPhase
+from openbot.domain.workflows import WorkflowPhase
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable

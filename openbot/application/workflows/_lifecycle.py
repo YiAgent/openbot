@@ -26,7 +26,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from openbot.infrastructure.persistence.models import Workflow, WorkflowPhase
+from openbot.domain.workflows import Workflow, WorkflowPhase
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

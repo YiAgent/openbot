@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Final
 from openbot.core.settings import get_settings
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.identifiers import derive_run_id, derive_task_id
-from openbot.infrastructure.llm.model_router import Feature
+from openbot.domain.workflows import Feature
 
 if TYPE_CHECKING:
     # Avoid the import-cycle: workflows import middleware → middleware

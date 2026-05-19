@@ -41,7 +41,7 @@ from openbot.application.middleware.preflight import (
     MiddlewareResult,
     PreflightContext,
 )
-from openbot.infrastructure.persistence.models import WorkflowPhase
+from openbot.domain.workflows import WorkflowPhase
 from openbot.infrastructure.persistence.repository import CostMeterRepo, rolling_month_window
 
 _logger = logging.getLogger(__name__)
