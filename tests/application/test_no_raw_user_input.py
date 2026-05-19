@@ -50,7 +50,7 @@ from pathlib import Path
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SCAN_DIRS: tuple[Path, ...] = (
     # Phase-1 restructure: real code moved to application/workflows/.
     # Keep old path so any future files there are also scanned.

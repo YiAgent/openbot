@@ -12,7 +12,7 @@ from openbot.application.middleware.budget import BudgetMiddleware, _effective_g
 from openbot.infrastructure.llm.model_router import Feature
 from openbot.infrastructure.persistence import Base, make_session_factory
 from openbot.infrastructure.persistence.models import CostMeter, CostStatus, WorkflowPhase
-from tests.middleware.conftest import make_ctx, make_event
+from tests.application.middleware.conftest import make_ctx, make_event
 
 # ───── helpers: in-memory SQLite session factory + seeding ─────
 

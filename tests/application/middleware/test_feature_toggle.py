@@ -11,7 +11,7 @@ from openbot.application.middleware.feature_toggle import FeatureToggleMiddlewar
 from openbot.infrastructure.config_loader import baked_in_defaults
 from openbot.infrastructure.llm.model_router import Feature
 from openbot.infrastructure.persistence.models import WorkflowPhase
-from tests.middleware.conftest import make_ctx
+from tests.application.middleware.conftest import make_ctx
 
 
 def _config_with(*, triage=True, review=True, fix=True, chat=True):

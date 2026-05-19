@@ -21,7 +21,7 @@ from openbot.application.middleware import MiddlewareResult
 from openbot.application.middleware.audit import AUDIT_STARTED_CACHE_KEY, AuditStartMiddleware
 from openbot.infrastructure.persistence.models import Base, Workflow, WorkflowPhase
 from openbot.infrastructure.persistence.repository import AuditLogRepo
-from tests.middleware.conftest import make_ctx
+from tests.application.middleware.conftest import make_ctx
 
 
 @pytest.fixture
