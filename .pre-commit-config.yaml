@@ -97,12 +97,21 @@ repos:
           - revert
 
   # ─────────────────────────────────────────────────────────────
-  # 5. 测试 gate（pre-push）
+  # 5. 测试与架构 gate（pre-push）
   #    PRD §8.3：unit + integration + middleware + security
+  #    PRD §8.4：hexagonal architecture enforcement
   #    eval 不进，留给 CI / cron
   # ─────────────────────────────────────────────────────────────
   - repo: local
     hooks:
+      - id: import-linter-pre-push
+        name: import-linter (hexagonal layers)
+        entry: scripts/hooks/import-linter.sh
+        language: script
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
       - id: pytest-pre-push
         name: pytest (unit + integration, skip eval)
         # tests/ 不存在时静默跳过（项目刚起步阶段）

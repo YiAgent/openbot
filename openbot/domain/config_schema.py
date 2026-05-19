@@ -7,9 +7,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Literal
 
-# Leaf-enum exception: domain → infrastructure layer violation, documented
-# and deferred to Task 1.10's import-linter contract design.
-from openbot.infrastructure.llm.model_router import Feature
+from openbot.domain.workflows import Feature
 
 SeverityThreshold = Literal["critical", "high", "medium", "low"]
 

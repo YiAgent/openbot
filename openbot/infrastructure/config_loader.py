@@ -29,7 +29,6 @@ Failure modes (none raise out of this module — fall-back to defaults):
 
 from __future__ import annotations
 
-import base64
 import binascii
 import logging
 import time
@@ -37,9 +36,9 @@ from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
 import yaml
 
+from openbot.application.ports.channel_adapter import ChannelAdapterPort
 from openbot.domain.config_schema import (
     BudgetConfig,
     CancelConfig,
@@ -144,13 +143,11 @@ def clear_cache() -> None:
     _cache.clear()
 
 
-async def load_for_repo(adapter: Any, event: UnifiedEvent) -> EffectiveConfig:
+async def load_for_repo(adapter: ChannelAdapterPort, event: UnifiedEvent) -> EffectiveConfig:
     """Load `.openbot/config.yaml` for `event.repo` (with 60s in-memory cache).
 
-    `adapter` is duck-typed against `GitHubAdapter`: we need
-    `_installation_token(event)`, `_headers(token)`, `_http`, and `_api_base`.
-    Importing the concrete class would create a circular dep (adapters
-    don't yet know about config).
+    `adapter` must implement `ChannelAdapterPort.fetch_repo_file` so the
+    config loader never touches adapter internals.
 
     Never raises — every failure path returns `baked_in_defaults()` and
     logs a structured warning so ops can spot config drift in audit.
@@ -164,7 +161,7 @@ async def load_for_repo(adapter: Any, event: UnifiedEvent) -> EffectiveConfig:
     return cfg
 
 
-async def _fetch_and_parse(adapter: Any, event: UnifiedEvent) -> EffectiveConfig:
+async def _fetch_and_parse(adapter: ChannelAdapterPort, event: UnifiedEvent) -> EffectiveConfig:
     raw_yaml = await _fetch_yaml(adapter, event)
     if raw_yaml is None:
         return baked_in_defaults()
@@ -185,8 +182,8 @@ async def _fetch_and_parse(adapter: Any, event: UnifiedEvent) -> EffectiveConfig
     return _coerce(parsed, repo=event.repo)
 
 
-async def _fetch_yaml(adapter: Any, event: UnifiedEvent) -> str | None:
-    """Pull `.openbot/config.yaml` over the Contents API.
+async def _fetch_yaml(adapter: ChannelAdapterPort, event: UnifiedEvent) -> str | None:
+    """Pull `.openbot/config.yaml` via the adapter's `fetch_repo_file` port.
 
     Returns:
         UTF-8 decoded text on success, `None` on 404 / auth error / 5xx.
@@ -198,54 +195,20 @@ async def _fetch_yaml(adapter: Any, event: UnifiedEvent) -> str | None:
         )
         return None
     try:
-        token = await adapter._installation_token(event)
-    except Exception:
-        _logger.exception(
-            "config_installation_token_failed",
-            extra={"repo": event.repo},
-        )
-        return None
-
-    url = f"{adapter._api_base}/repos/{event.repo}/contents/.openbot/config.yaml"
-    headers = adapter._headers(token.token)
-    try:
-        response = await adapter._http_client.get(url, headers=headers)
-    except httpx.HTTPError as exc:
+        raw_bytes = await adapter.fetch_repo_file(event, ".openbot/config.yaml")
+    except Exception as exc:
         _logger.warning(
             "config_fetch_http_error",
             extra={"repo": event.repo, "reason": f"{type(exc).__name__}: {exc}"},
         )
         return None
 
-    if response.status_code == 404:
+    if raw_bytes is None:
         _logger.info("config_yaml_absent", extra={"repo": event.repo})
         return None
-    if response.status_code >= 400:
-        _logger.warning(
-            "config_yaml_fetch_failed",
-            extra={"repo": event.repo, "status": response.status_code},
-        )
-        return None
 
     try:
-        payload = response.json()
-    except ValueError:
-        _logger.warning(
-            "config_yaml_response_not_json",
-            extra={"repo": event.repo, "status": response.status_code},
-        )
-        return None
-
-    encoded = payload.get("content") or ""
-    encoding = payload.get("encoding") or "base64"
-    if encoding != "base64":
-        _logger.warning(
-            "config_yaml_unexpected_encoding",
-            extra={"repo": event.repo, "encoding": encoding},
-        )
-        return None
-    try:
-        return base64.b64decode(encoded, validate=False).decode("utf-8")
+        return raw_bytes.decode("utf-8")
     except (binascii.Error, UnicodeDecodeError) as exc:
         _logger.warning(
             "config_yaml_decode_failed",
@@ -498,7 +461,9 @@ class YamlConfigLoader:
     the module-level ``load_for_repo`` function above.
     """
 
-    async def load_for_repo(self, adapter: Any, event: UnifiedEvent) -> EffectiveConfig:
+    async def load_for_repo(
+        self, adapter: ChannelAdapterPort, event: UnifiedEvent
+    ) -> EffectiveConfig:
         return await load_for_repo(adapter, event)
 
 

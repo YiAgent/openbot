@@ -113,12 +113,11 @@ class Settings(BaseSettings):
 
     # ─── Debug echo (state-machine slice) ───
     # Routes every classified webhook to the debug echo handler — see
-    # ``openbot.application.handlers.debug_echo``. Default ``True`` so the
-    # initial state-machine slice has visible end-to-end output before
-    # real workflow logic lands. Flip to ``False`` once triage/review/fix/
-    # chat handlers are wired through real LLM calls (PRD section 4.1 to 4.4).
+    # ``openbot.application.handlers.debug_echo``. Default ``False`` now that
+    # the real workflow path is the intended primary path; operators can still
+    # opt back into the debug echo explicitly when tracing the pipeline.
     debug_echo_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "When True, all classified webhooks are routed to the "
             "debug_echo handler instead of the real workflow stubs. "

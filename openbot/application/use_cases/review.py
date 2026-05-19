@@ -18,8 +18,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from openbot.application.workflows._lifecycle import audit_lifecycle
-from openbot.infrastructure.persistence.models import Workflow
+from openbot.application.use_cases._lifecycle import audit_lifecycle
+from openbot.application.use_cases._tracing import traceable as _traceable
+from openbot.domain.workflows import Workflow
 
 if TYPE_CHECKING:
     from openbot.application.middleware.preflight import PreflightContext
@@ -34,6 +35,7 @@ _ACK_TEMPLATE = (
 )
 
 
+@_traceable(run_type="chain", name="review")
 async def maybe_run_review(ctx: PreflightContext) -> None:
     """Post the PR-review ACK + audit-log the run.
 

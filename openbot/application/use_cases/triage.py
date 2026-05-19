@@ -21,14 +21,15 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from openbot.application.workflows._lifecycle import audit_lifecycle
+from openbot.application.use_cases._lifecycle import audit_lifecycle
+from openbot.application.use_cases._tracing import traceable as _traceable
 from openbot.domain.events import EventKind
-from openbot.infrastructure.persistence.models import Workflow
+from openbot.domain.workflows import Workflow
 
 if TYPE_CHECKING:
     from openbot.application.middleware.preflight import PreflightContext
 
-_logger = logging.getLogger("openbot.application.workflows.triage")
+_logger = logging.getLogger("openbot.application.use_cases.triage")
 
 _ACK_TEMPLATE = (
     ":robot: Hi @{actor} — OpenBot received this issue and will triage shortly.\n\n"
@@ -37,6 +38,7 @@ _ACK_TEMPLATE = (
 )
 
 
+@_traceable(run_type="chain", name="triage")
 async def maybe_run_triage(ctx: PreflightContext) -> None:
     event = ctx.event
     if event.kind is not EventKind.ISSUE_OPENED:

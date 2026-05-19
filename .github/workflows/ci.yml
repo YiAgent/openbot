@@ -29,6 +29,8 @@ jobs:
         run: uv run ruff check .
       - name: Run Ruff Format Check
         run: uv run ruff format --check .
+      - name: Run Import Linter
+        run: uv run lint-imports
 
   test:
     name: Test (Pytest)
@@ -45,3 +47,13 @@ jobs:
       - name: Run Tests
         # Excludes evals/ per PRD §8.4
         run: uv run pytest -q --ignore=evals
+
+  container:
+    name: Container Build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build image
+        run: docker build -t openbot:test .
+      - name: Import smoke inside image
+        run: docker run --rm openbot:test uv run python -c "import openbot; print(openbot.__version__)"

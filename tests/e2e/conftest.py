@@ -100,11 +100,24 @@ class RecordingGitHubAdapter(GitHubAdapter):
     async def remove_label(self, event: UnifiedEvent, label: str) -> None:
         self.labels_removed.append((event.repo, label))
 
-    async def get_actor_role(self, event: UnifiedEvent) -> str:
+    async def get_actor_role(self, event: UnifiedEvent, login: str | None = None) -> str:
         # Default "admin" so happy-path demos that don't set roles still
         # PROCEED past the fix/chat actor-role gate. Tests that exercise
         # the negative path explicitly assign ``actor_roles[actor]``.
-        return self.actor_roles.get(event.actor, "admin")
+        target = login if login is not None else event.actor
+        return self.actor_roles.get(target, "admin")
+
+    async def get_issue_labels(self, event: UnifiedEvent, number: int) -> frozenset[str]:
+        """Return label names from the test-controlled labels_response."""
+        return frozenset(
+            str(item["name"])
+            for item in self.labels_response
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        )
+
+    async def get_pr_comments(self, event: UnifiedEvent, pr_number: int) -> list[dict[str, Any]]:
+        """Return the test-controlled comments list."""
+        return list(self.comments_response)
 
     async def _installation_token(self, event: UnifiedEvent) -> Any:
         """Bypass App auth — return a minimal object whose ``.token`` is read."""
@@ -257,6 +270,14 @@ async def webhook_harness(
         return harness.config
 
     monkeypatch.setattr("openbot.application.dispatcher.load_for_repo", _fake_load_for_repo)
+
+    async def _fake_chat_reply(*, event: UnifiedEvent, user_request: str) -> str:
+        return f"DeepAgents test reply: {user_request}"
+
+    monkeypatch.setattr(
+        "openbot.application.use_cases.chat._generate_freeform_reply",
+        _fake_chat_reply,
+    )
 
     try:
         yield harness

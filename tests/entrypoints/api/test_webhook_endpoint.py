@@ -69,6 +69,7 @@ def test_webhook_accepts_valid_signature(client: TestClient) -> None:
     assert data["relevant"] is True
     assert data["feature"] == "triage"
     assert len(data["task_id"]) == 32  # sha256-hex truncated (spec §9.1)
+    assert response.headers["x-request-id"] == "deliv-1"
 
 
 def test_webhook_accepts_but_marks_irrelevant_unknown_event(client: TestClient) -> None:
@@ -81,6 +82,14 @@ def test_webhook_accepts_but_marks_irrelevant_unknown_event(client: TestClient) 
     payload = response.json()
     assert payload["status"] == "ignored"
     assert payload["relevant"] is False
+
+
+def test_webhook_reuses_delivery_id_as_request_id_on_rejection(client: TestClient) -> None:
+    headers = _sign(b'{"action":"opened"}') | {"x-github-delivery": "rejected-delivery"}
+    response = client.post("/webhook/github", content=b'{"action":"closed"}', headers=headers)
+
+    assert response.status_code == 401
+    assert response.headers["x-request-id"] == "rejected-delivery"
 
 
 def test_webhook_503_when_secret_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

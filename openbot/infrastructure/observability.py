@@ -1,9 +1,11 @@
-"""Observability bootstrap — Sentry init shared by webapp + worker.
+"""Observability bootstrap — Sentry + LangSmith init shared by webapp + worker.
 
 Two entry processes (``openbot.entrypoints.api.app:app`` and ``openbot.infrastructure.queue.runner``)
-both need Sentry attached. Centralising the init here keeps the contract
-in one place:
+both need Sentry and LangSmith attached. Centralising the init here keeps
+the contract in one place:
 
+Sentry
+------
   - DSN unset → ``sentry_sdk.init(dsn=None)`` is a documented no-op
     (https://docs.sentry.io/platforms/python/configuration/options/#dsn).
     Local ``make dev`` and CI runs therefore never need a Sentry project.
@@ -11,6 +13,9 @@ in one place:
     Postgres ``audit_log``. Sentry only sees uncaught exceptions and
     httpx 5xx — that boundary matches PRD §9.4 (audit_log is the
     product-facing ledger; Sentry is the on-call tool).
+  - Metrics: ``sentry_sdk.metrics`` is enabled by default in 2.x. We
+    record business signals (workflow outcomes, LLM costs) there so
+    ops has a unified dashboard without needing a Prometheus server.
   - ``send_default_pii=False`` is the default in sentry-sdk 2.x; we keep
     it explicit so a future bump can't quietly start exfiltrating
     request bodies (which may carry webhook payloads).
@@ -23,6 +28,17 @@ gates *performance* spans.
 The ``init_sentry`` call is idempotent: calling it twice with the same
 DSN re-uses the existing hub. The worker process imports this module
 and calls init from ``runner._main`` before any other work.
+
+LangSmith
+---------
+  - Reads ``LANGSMITH_API_KEY`` + ``LANGSMITH_PROJECT`` from the environment
+    directly (LangSmith's own env-var convention; no OPENBOT_ prefix).
+  - ``LANGSMITH_TRACING=true`` (or ``LANGCHAIN_TRACING_V2=true``) must be
+    set to enable trace submission; without it the ``@traceable`` decorators
+    are transparent pass-throughs with zero overhead.
+  - ``init_langsmith`` just checks + logs whether tracing is active so the
+    startup log line makes the status visible.  The actual tracing machinery
+    is wired by ``@traceable`` decorators on the use-case functions.
 """
 
 from __future__ import annotations
@@ -83,4 +99,53 @@ def init_sentry(settings: Settings, *, component: str) -> None:
         )
 
 
-__all__ = ["init_sentry"]
+def init_langsmith() -> None:
+    """Log whether LangSmith tracing is active at startup.
+
+    LangSmith configures itself from env vars; this function exists solely
+    to emit a structured startup log so operators know whether tracing is
+    on or off — useful when tracing was expected but the env var was missed.
+
+    Active when ALL of the following are present:
+      - ``LANGSMITH_API_KEY`` (or ``LANGCHAIN_API_KEY``) — authentication
+      - ``LANGSMITH_TRACING=true`` or ``LANGCHAIN_TRACING_V2=true`` — opt-in flag
+
+    The function does NOT fail if langsmith is missing — same graceful
+    degradation as Sentry.
+    """
+    import os
+
+    try:
+        import langsmith  # noqa: F401 — existence check only
+    except ImportError:
+        _logger.warning("langsmith_not_installed_tracing_disabled")
+        return
+
+    api_key = os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")
+    tracing_enabled = os.environ.get("LANGSMITH_TRACING", "").lower() in {"true", "1"} or (
+        os.environ.get("LANGCHAIN_TRACING_V2", "").lower() in {"true", "1"}
+    )
+
+    if api_key and tracing_enabled:
+        project = os.environ.get("LANGSMITH_PROJECT") or os.environ.get(
+            "LANGCHAIN_PROJECT", "default"
+        )
+        _logger.info(
+            "langsmith_tracing_active",
+            extra={"project": project},
+        )
+    elif api_key and not tracing_enabled:
+        _logger.info(
+            "langsmith_key_present_tracing_off",
+            extra={
+                "hint": (
+                    "Set LANGSMITH_TRACING=true to enable trace submission. "
+                    "Current state: key present, tracing flag absent."
+                )
+            },
+        )
+    else:
+        _logger.info("langsmith_tracing_disabled_no_key")
+
+
+__all__ = ["init_langsmith", "init_sentry"]

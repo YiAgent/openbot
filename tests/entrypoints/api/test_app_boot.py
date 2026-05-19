@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 
@@ -16,7 +18,67 @@ def test_app_routes_present() -> None:
 
     routes = {r.path for r in app.routes if hasattr(r, "path")}
     assert "/health" in routes
+    assert "/ready" in routes
     assert "/webhook/github" in routes
+
+
+def test_health_response_gets_generated_request_id() -> None:
+    from fastapi.testclient import TestClient
+
+    from openbot.entrypoints.api.app import app
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    request_id = response.headers.get("x-request-id")
+    assert request_id is not None
+    assert request_id != ""
+
+
+def test_health_rejects_untrusted_host() -> None:
+    from fastapi.testclient import TestClient
+
+    from openbot.entrypoints.api.app import app
+
+    with TestClient(app, base_url="http://evil.example") as client:
+        response = client.get("/health")
+
+    assert response.status_code == 400
+
+
+def test_health_allows_heroku_host() -> None:
+    from fastapi.testclient import TestClient
+
+    from openbot.entrypoints.api.app import app
+
+    with TestClient(app, base_url="https://openbot-ac02d94253df.herokuapp.com") as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+
+
+def test_health_request_is_logged_with_request_id(caplog: pytest.LogCaptureFixture) -> None:
+    from fastapi.testclient import TestClient
+
+    from openbot.entrypoints.api.app import app
+
+    with (
+        caplog.at_level(logging.INFO, logger="openbot.entrypoints.api.app"),
+        TestClient(app) as client,
+    ):
+        response = client.get("/health", headers={"x-request-id": "req-health-1"})
+
+    assert response.status_code == 200
+    record = next(
+        r
+        for r in caplog.records
+        if r.name == "openbot.entrypoints.api.app" and r.msg == "http_request_completed"
+    )
+    assert record.method == "GET"
+    assert record.path == "/health"
+    assert record.status_code == 200
+    assert record.request_id == "req-health-1"
 
 
 @pytest.mark.asyncio

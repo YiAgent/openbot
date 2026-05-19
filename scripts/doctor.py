@@ -203,7 +203,7 @@ async def check_schema(postgres_url: str) -> bool:
         await engine.dispose()
 
     if missing:
-        _fail(f"schema: missing tables: {', '.join(missing)} — run `alembic upgrade head`")
+        _fail(f"schema: missing tables: {', '.join(missing)} — run `make db-init`")
         return False
     _ok("schema: audit_log + cost_meter present")
     return True

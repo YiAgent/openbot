@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import base64
-from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
 from unittest.mock import AsyncMock
 
-import httpx
 import pytest
 
 from openbot.domain.events import EventKind, UnifiedEvent
@@ -36,47 +32,27 @@ def _event(repo: str = "org/r", installation_id: int | None = 5) -> UnifiedEvent
     )
 
 
-@dataclass
-class _Token:
-    token: str = "stub-token"
+def _make_adapter(
+    file_bytes: bytes | None,
+    *,
+    raises: Exception | None = None,
+) -> AsyncMock:
+    """Build an adapter mock exposing only `fetch_repo_file` (the ChannelAdapterPort method).
 
-
-def _fake_response(
-    *, status_code: int, json_payload: dict[str, Any] | None = None
-) -> httpx.Response:
-    return httpx.Response(
-        status_code=status_code,
-        json=json_payload,
-        request=httpx.Request("GET", "https://api.github.com/x"),
-    )
-
-
-def _make_adapter(response: httpx.Response, *, token_raises: Exception | None = None) -> Any:
-    """Build a duck-typed adapter exposing only what load_for_repo needs."""
+    Args:
+        file_bytes: The raw bytes that `fetch_repo_file` returns. Pass None to simulate 404.
+        raises: If set, `fetch_repo_file` raises this exception instead.
+    """
     adapter = AsyncMock()
-    adapter._api_base = "https://api.github.com"
-    adapter._headers = lambda token: {"Authorization": f"token {token}"}
-    if token_raises is None:
-        adapter._installation_token = AsyncMock(return_value=_Token())
+    if raises is not None:
+        adapter.fetch_repo_file = AsyncMock(side_effect=raises)
     else:
-        adapter._installation_token = AsyncMock(side_effect=token_raises)
-    adapter._http = AsyncMock()
-    adapter._http.get = AsyncMock(return_value=response)
-    # Property mocks are tricky: we need to mock the type, or the instance's __class__.
-    # Simplest for this test: make _http a real-ish property or just mock the helper.
-    adapter._get_http = lambda: adapter._http
-    type(adapter)._http_client = property(lambda self: self._get_http())
+        adapter.fetch_repo_file = AsyncMock(return_value=file_bytes)
     return adapter
 
 
-def _yaml_response(yaml_text: str) -> httpx.Response:
-    return _fake_response(
-        status_code=200,
-        json_payload={
-            "content": base64.b64encode(yaml_text.encode()).decode(),
-            "encoding": "base64",
-        },
-    )
+def _yaml_bytes(yaml_text: str) -> bytes:
+    return yaml_text.encode("utf-8")
 
 
 @pytest.fixture(autouse=True)
@@ -111,49 +87,57 @@ def test_baked_in_defaults_are_frozen() -> None:
 
 
 async def test_returns_defaults_on_404() -> None:
-    adapter = _make_adapter(_fake_response(status_code=404))
+    adapter = _make_adapter(None)  # fetch_repo_file returns None → 404
     cfg = await load_for_repo(adapter, _event())
     assert cfg == baked_in_defaults()
 
 
 async def test_returns_defaults_on_5xx() -> None:
-    adapter = _make_adapter(_fake_response(status_code=502))
+    import httpx
+
+    adapter = _make_adapter(
+        None,
+        raises=httpx.HTTPStatusError(
+            "502", request=httpx.Request("GET", "https://x"), response=httpx.Response(502)
+        ),
+    )
     cfg = await load_for_repo(adapter, _event())
     assert cfg == baked_in_defaults()
 
 
 async def test_returns_defaults_when_installation_id_missing() -> None:
-    adapter = _make_adapter(_fake_response(status_code=200))
+    adapter = _make_adapter(_yaml_bytes("cancel:\n  label: x\n"))
     cfg = await load_for_repo(adapter, _event(installation_id=None))
     assert cfg == baked_in_defaults()
-    adapter._installation_token.assert_not_called()
+    adapter.fetch_repo_file.assert_not_called()
 
 
 async def test_returns_defaults_on_token_error() -> None:
     adapter = _make_adapter(
-        _fake_response(status_code=200),
-        token_raises=RuntimeError("App auth not configured"),
+        None,
+        raises=RuntimeError("App auth not configured"),
     )
     cfg = await load_for_repo(adapter, _event())
     assert cfg == baked_in_defaults()
 
 
 async def test_returns_defaults_on_http_error() -> None:
-    adapter = _make_adapter(_fake_response(status_code=200))
-    adapter._http.get = AsyncMock(side_effect=httpx.ConnectError("no route"))
+    import httpx
+
+    adapter = _make_adapter(None, raises=httpx.ConnectError("no route"))
     cfg = await load_for_repo(adapter, _event())
     assert cfg == baked_in_defaults()
 
 
 async def test_returns_defaults_on_invalid_yaml() -> None:
     # Tabs at column 0 + unmatched bracket — guaranteed YAMLError.
-    adapter = _make_adapter(_yaml_response("budget: [unclosed"))
+    adapter = _make_adapter(_yaml_bytes("budget: [unclosed"))
     cfg = await load_for_repo(adapter, _event())
     assert cfg == baked_in_defaults()
 
 
 async def test_returns_defaults_when_yaml_root_is_list() -> None:
-    adapter = _make_adapter(_yaml_response("- a\n- b\n"))
+    adapter = _make_adapter(_yaml_bytes("- a\n- b\n"))
     cfg = await load_for_repo(adapter, _event())
     assert cfg == baked_in_defaults()
 
@@ -170,7 +154,7 @@ budget:
   monthly_soft_cap_usd: 250
   global_hard_kill_usd: 999
 """
-    adapter = _make_adapter(_yaml_response(yaml_text))
+    adapter = _make_adapter(_yaml_bytes(yaml_text))
     cfg = await load_for_repo(adapter, _event())
     assert cfg.budget.per_task[Feature.FIX] == Decimal("5.00")
     assert cfg.budget.per_task[Feature.TRIAGE] == Decimal("0.10")
@@ -186,7 +170,7 @@ cancel:
   label: halt-bot
   comment_keywords: [halt, abort]
 """
-    adapter = _make_adapter(_yaml_response(yaml_text))
+    adapter = _make_adapter(_yaml_bytes(yaml_text))
     cfg = await load_for_repo(adapter, _event())
     assert cfg.cancel.label == "halt-bot"
     assert cfg.cancel.comment_keywords == ("halt", "abort")
@@ -194,7 +178,7 @@ cancel:
 
 async def test_severity_threshold_validated_against_enum() -> None:
     yaml_text = "review:\n  severity_threshold: bogus\n"
-    adapter = _make_adapter(_yaml_response(yaml_text))
+    adapter = _make_adapter(_yaml_bytes(yaml_text))
     cfg = await load_for_repo(adapter, _event())
     # Unknown value falls back to default rather than crashing.
     assert cfg.severity_threshold == "medium"
@@ -217,7 +201,7 @@ chat:
     per_repo_per_hour: 0
     cost_cap_per_task: 0
 """
-    adapter = _make_adapter(_yaml_response(yaml_text))
+    adapter = _make_adapter(_yaml_bytes(yaml_text))
     cfg = await load_for_repo(adapter, _event())
     assert cfg.budget.monthly_soft_cap_usd == Decimal("0")
     assert cfg.budget.global_hard_kill_usd == Decimal("0")
@@ -233,7 +217,7 @@ budget:
   per_task:
     fix: not-a-number
 """
-    adapter = _make_adapter(_yaml_response(yaml_text))
+    adapter = _make_adapter(_yaml_bytes(yaml_text))
     cfg = await load_for_repo(adapter, _event())
     # Bad fix value → default; rest of budget untouched.
     assert cfg.budget.per_task[Feature.FIX] == Decimal("3.00")
@@ -243,17 +227,17 @@ budget:
 
 
 async def test_cache_coalesces_repeated_calls() -> None:
-    adapter = _make_adapter(_yaml_response("cancel:\n  label: x\n"))
+    adapter = _make_adapter(_yaml_bytes("cancel:\n  label: x\n"))
     for _ in range(10):
         await load_for_repo(adapter, _event())
-    assert adapter._http.get.await_count == 1
+    assert adapter.fetch_repo_file.await_count == 1
 
 
 async def test_cache_is_keyed_per_repo() -> None:
-    adapter = _make_adapter(_yaml_response("cancel:\n  label: y\n"))
+    adapter = _make_adapter(_yaml_bytes("cancel:\n  label: y\n"))
     await load_for_repo(adapter, _event(repo="org/a"))
     await load_for_repo(adapter, _event(repo="org/b"))
-    assert adapter._http.get.await_count == 2
+    assert adapter.fetch_repo_file.await_count == 2
 
 
 # ───── safety guarantees ─────

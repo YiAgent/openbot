@@ -52,7 +52,7 @@ from openbot.application.middleware.preflight import (
     MiddlewareResult,
     PreflightContext,
 )
-from openbot.infrastructure.persistence.models import WorkflowPhase
+from openbot.domain.workflows import WorkflowPhase
 
 if TYPE_CHECKING:
     from openbot.domain.events import UnifiedEvent

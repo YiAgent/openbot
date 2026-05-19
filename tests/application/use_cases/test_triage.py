@@ -10,7 +10,7 @@ import pytest
 
 from openbot.application.middleware import PreflightContext
 from openbot.application.router import Dispatch, derive_task_id
-from openbot.application.workflows.triage import maybe_run_triage
+from openbot.application.use_cases.triage import maybe_run_triage
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.infrastructure.config_loader import baked_in_defaults
 from openbot.infrastructure.llm.model_router import Feature
@@ -143,7 +143,7 @@ async def test_does_not_ack_bot_authored_issue(
     bot_event = _event(actor="dependabot[bot]", actor_type="Bot")
     assert bot_event.is_from_bot is True  # sanity
 
-    with caplog.at_level(logging.INFO, logger="openbot.application.workflows.triage"):
+    with caplog.at_level(logging.INFO, logger="openbot.application.use_cases.triage"):
         await maybe_run_triage(_ctx(adapter, bot_event))
 
     adapter.reply.assert_not_awaited()

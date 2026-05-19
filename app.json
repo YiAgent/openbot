@@ -13,8 +13,8 @@
   },
   "addons": [
     "papertrail:choklad",
-    "logtail:free",
     "rediscloud:30",
+    "redismonitor:free",
     "sentry:free",
     "betteruptime:test"
   ],
@@ -32,7 +32,7 @@
       "required": false
     },
     "OPENBOT_REDIS_URL": {
-      "description": "Upstash Redis URL (rediss://...). Used for webhook dedup, rate limit, and the workflow queue.",
+      "description": "Redis connection URL used for webhook dedup, rate limit, and the workflow queue. In Heroku production we currently mirror the add-on's REDISCLOUD_URL into OPENBOT_REDIS_URL.",
       "required": true
     },
     "OPENBOT_POSTGRES_URL": {

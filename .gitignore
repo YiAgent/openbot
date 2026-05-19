@@ -100,3 +100,4 @@ docker-compose.override.yml
 # lazily materialized at task load time (evals/tasks/review_martian.py).
 evals/datasets/martian_2026w20.jsonl
 .smoke/
+.worktrees/

@@ -8,8 +8,8 @@ PRD §4.8 trust boundary: nothing downstream may touch the payload until
 
 Two responsibilities split inside one class:
   - **Receive**: verify_signature + parse_event  (no auth needed)
-  - **Write**:   reply / add_label / remove_label / get_actor_role
-                (requires GitHubAppAuth — installation token minting)
+  - **Write**:   key methods include reply / add_label / remove_label / get_actor_role
+                (all write methods require GitHubAppAuth — installation token minting)
 
 Write methods raise `RuntimeError` if the adapter was constructed without
 a `GitHubAppAuth`, so a webhook-only deployment never accidentally calls
@@ -18,6 +18,7 @@ out to the API.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from collections.abc import Mapping
@@ -284,15 +285,57 @@ class GitHubAdapter(ChannelAdapter):
             return  # idempotent: removing an absent label is fine
         response.raise_for_status()
 
-    async def get_actor_role(self, event: UnifiedEvent) -> str:
-        """Return the actor's permission level on the repo.
+    async def get_actor_role(self, event: UnifiedEvent, login: str | None = None) -> str:
+        """Return the permission level of `login` (or event.actor) on the repo.
 
         One of: 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none'.
         Drives PRD §4.3 `fix.allowed_actors` and §4.6 `rate_limit.exempt_roles`.
+        Returns 'none' on failure.
         """
-        url = f"{self._api_base}/repos/{event.repo}/collaborators/{event.actor}/permission"
-        data = await self._authed_json("GET", url, event)
-        return str(data.get("permission") or "none")
+        target = login if login is not None else event.actor
+        url = f"{self._api_base}/repos/{event.repo}/collaborators/{target}/permission"
+        try:
+            data = await self._authed_json("GET", url, event)
+            return str(data.get("permission") or "none") if isinstance(data, dict) else "none"
+        except Exception:
+            _logger.exception(
+                "get_actor_role_failed",
+                extra={"repo": event.repo, "login": target},
+            )
+            return "none"
+
+    async def get_issue_labels(self, event: UnifiedEvent, number: int) -> frozenset[str]:
+        """Return the set of label names on the given issue/PR number.
+
+        Returns an empty frozenset on failure.
+        """
+        url = f"{self._api_base}/repos/{event.repo}/issues/{number}/labels"
+        try:
+            data = await self._authed_json("GET", url, event)
+            return frozenset(
+                str(item["name"])
+                for item in (data or [])
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            )
+        except Exception:
+            _logger.exception(
+                "get_issue_labels_failed",
+                extra={"repo": event.repo, "number": number},
+            )
+            return frozenset()
+
+    async def get_pr_comments(self, event: UnifiedEvent, pr_number: int) -> list[dict[str, Any]]:
+        """Return PR comments (up to 100). Returns [] on failure."""
+        url = f"{self._api_base}/repos/{event.repo}/issues/{pr_number}/comments?per_page=100"
+        try:
+            data = await self._authed_json("GET", url, event)
+            return list(data) if isinstance(data, list) else []
+        except Exception:
+            _logger.exception(
+                "get_pr_comments_failed",
+                extra={"repo": event.repo, "pr_number": pr_number},
+            )
+            return []
 
     async def create_check_run(
         self,
@@ -341,6 +384,41 @@ class GitHubAdapter(ChannelAdapter):
         if output:
             body["output"] = output
         return await self._authed_json("PATCH", url, event, json_body=body)
+
+    async def fetch_repo_file(
+        self,
+        event: UnifiedEvent,
+        path: str,
+    ) -> bytes | None:
+        """Fetch raw file bytes from the repo via the GitHub Contents API.
+
+        Returns None on 404 (file absent). Raises on other HTTP errors.
+        The caller is responsible for any decoding (e.g. UTF-8, YAML).
+        """
+        token = await self._installation_token(event)
+        url = f"{self._api_base}/repos/{event.repo}/contents/{path}"
+        headers = self._headers(token.token)
+        response = await self._get_http().get(url, headers=headers)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError:
+            _logger.warning(
+                "fetch_repo_file_response_not_json",
+                extra={"repo": event.repo, "path": path, "status": response.status_code},
+            )
+            raise
+        encoded = payload.get("content") or ""
+        encoding = payload.get("encoding") or "base64"
+        if encoding != "base64":
+            _logger.warning(
+                "fetch_repo_file_unexpected_encoding",
+                extra={"repo": event.repo, "path": path, "encoding": encoding},
+            )
+            raise ValueError(f"Unexpected encoding from GitHub Contents API: {encoding!r}")
+        return base64.b64decode(encoded, validate=False)
 
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:
