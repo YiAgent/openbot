@@ -18,6 +18,8 @@ from __future__ import annotations
 import logging
 from unittest.mock import patch
 
+from sentry_sdk.integrations.logging import LoggingIntegration
+
 from openbot.core.settings import Settings
 from openbot.infrastructure.observability import init_sentry
 
@@ -59,6 +61,12 @@ def test_init_sentry_passes_settings_through_when_dsn_set() -> None:
     # captured in audit_log, no need to duplicate into Sentry.
     assert kwargs["send_default_pii"] is False
     mock_tag.assert_called_once_with("component", "webapp")
+    # Sentry Logs product must be enabled.
+    assert kwargs["enable_logs"] is True
+    # LoggingIntegration must be present with WARNING+ level so INFO lines
+    # (e.g. http_request_completed) don't flood Sentry Logs.
+    integrations = kwargs["integrations"]
+    assert any(isinstance(i, LoggingIntegration) for i in integrations)
 
 
 def test_init_sentry_survives_missing_sdk(monkeypatch) -> None:  # type: ignore[no-untyped-def]
