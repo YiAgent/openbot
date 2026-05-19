@@ -18,18 +18,12 @@ of truth.
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Final
 
+# Re-exported from openbot.domain.workflows — kept for backward compat
+from openbot.domain.workflows import Feature
 
-class Feature(StrEnum):
-    """The four MVP workflows. PRD §4 enumerates them."""
-
-    TRIAGE = "triage"
-    REVIEW = "review"
-    FIX = "fix"
-    CHAT = "chat"
-
+__all__ = ["Feature", "fallback_model", "primary_model_for"]
 
 # Frozen mapping — never mutate at runtime. Override via config overlay.
 _PRIMARY: Final[dict[Feature, str]] = {

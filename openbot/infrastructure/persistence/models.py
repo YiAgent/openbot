@@ -46,9 +46,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 # ``openbot.domain.intents`` — this is just an alias for ergonomics.
 from openbot.domain.intents import Intent, State
 
-# Re-export Feature so models can reference the enum without a circular
-# import via openbot.infrastructure.llm. The Feature StrEnum lives in openbot.infrastructure.llm.model_router.
-from openbot.infrastructure.llm.model_router import Feature
+# Re-exported from openbot.domain.workflows — kept for backward compat
+from openbot.domain.workflows import Feature, Workflow, WorkflowPhase
 
 __all__ = [
     "AuditLog",
@@ -92,25 +91,6 @@ class CostStatus(StrEnum):
     EXTRACTION_FAILED = "extraction_failed"
     """`_extract_content` raised AFTER the upstream vendor already billed.
     Cost was best-effort computed; the call's result is not in `content`."""
-
-
-class Workflow(StrEnum):
-    """Workflow identity for `audit_log.workflow` and joined queries."""
-
-    TRIAGE = "triage"
-    REVIEW = "review"
-    FIX = "fix"
-    CHAT = "chat"
-
-
-class WorkflowPhase(StrEnum):
-    """Lifecycle position for one workflow run."""
-
-    STARTED = "started"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-    REJECTED = "rejected"  # signature mismatch / unauthorized
 
 
 class Base(DeclarativeBase):

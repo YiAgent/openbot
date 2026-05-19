@@ -46,8 +46,7 @@ from openbot.application.middleware.preflight import (
     PreflightContext,
 )
 from openbot.domain.events import EventKind
-from openbot.infrastructure.llm.model_router import Feature
-from openbot.infrastructure.persistence.models import WorkflowPhase
+from openbot.domain.workflows import Feature, WorkflowPhase
 
 if TYPE_CHECKING:
     pass
@@ -164,18 +163,7 @@ class CancelLabelMiddleware:
         cached = ctx.cache.get(_LABELS_CACHE_KEY)
         if cached is not None:
             return cached
-        # `_authed_json` (private on GitHubAdapter) is the shortest path
-        # to "GET this URL with a fresh installation token". Re-using
-        # the adapter's existing machinery keeps the http/token plumbing
-        # in one place; if/when ForkPRGate also needs labels (slice C),
-        # it reads the same cache key.
-        url = f"{ctx.adapter._api_base}/repos/{ctx.event.repo}/issues/{number}/labels"
-        data = await ctx.adapter._authed_json("GET", url, ctx.event)
-        names = frozenset(
-            str(item["name"])
-            for item in (data or [])
-            if isinstance(item, dict) and isinstance(item.get("name"), str)
-        )
+        names = await ctx.adapter.get_issue_labels(ctx.event, number)
         ctx.cache[_LABELS_CACHE_KEY] = names
         return names
 

@@ -42,7 +42,7 @@ from openbot.application.middleware.preflight import (
     MiddlewareDecision,
     PreflightContext,
 )
-from openbot.infrastructure.persistence.models import WorkflowPhase
+from openbot.domain.workflows import WorkflowPhase
 
 _logger = logging.getLogger(__name__)
 

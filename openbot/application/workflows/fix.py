@@ -14,7 +14,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from openbot.application.workflows._lifecycle import audit_lifecycle
-from openbot.infrastructure.persistence.models import Workflow
+from openbot.domain.workflows import Workflow
 
 if TYPE_CHECKING:
     from openbot.application.middleware.preflight import PreflightContext

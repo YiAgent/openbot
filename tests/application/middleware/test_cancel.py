@@ -52,19 +52,17 @@ async def test_kill_switch_proceeds_on_non_true_value(monkeypatch: pytest.Monkey
 
 async def test_cancel_label_blocks_when_label_present() -> None:
     adapter = AsyncMock()
-    adapter._api_base = "https://api.github.com"
-    adapter._authed_json = AsyncMock(return_value=[{"name": "bug"}, {"name": "cancel-openbot"}])
+    adapter.get_issue_labels = AsyncMock(return_value=frozenset({"bug", "cancel-openbot"}))
     decision = await CancelLabelMiddleware()(make_ctx(adapter=adapter))
     assert decision.result is MiddlewareResult.BLOCKED
     assert decision.reason == "cancel_label"
     assert decision.comment is None  # user already signaled intent
-    adapter._authed_json.assert_awaited_once()
+    adapter.get_issue_labels.assert_awaited_once()
 
 
 async def test_cancel_label_proceeds_when_label_absent() -> None:
     adapter = AsyncMock()
-    adapter._api_base = "https://api.github.com"
-    adapter._authed_json = AsyncMock(return_value=[{"name": "bug"}])
+    adapter.get_issue_labels = AsyncMock(return_value=frozenset({"bug"}))
     decision = await CancelLabelMiddleware()(make_ctx(adapter=adapter))
     assert decision.result is MiddlewareResult.PROCEED
 
@@ -72,20 +70,18 @@ async def test_cancel_label_proceeds_when_label_absent() -> None:
 async def test_cancel_label_caches_labels_on_ctx() -> None:
     """Second call within same request reuses the labels list."""
     adapter = AsyncMock()
-    adapter._api_base = "https://api.github.com"
-    adapter._authed_json = AsyncMock(return_value=[{"name": "bug"}])
+    adapter.get_issue_labels = AsyncMock(return_value=frozenset({"bug"}))
     ctx = make_ctx(adapter=adapter)
     await CancelLabelMiddleware()(ctx)
     await CancelLabelMiddleware()(ctx)
     # Even two passes → one API call. Cache hit on second.
-    adapter._authed_json.assert_awaited_once()
+    adapter.get_issue_labels.assert_awaited_once()
 
 
 async def test_cancel_label_fall_open_on_api_error() -> None:
     """A 502 from GitHub must NOT block all webhooks indefinitely."""
     adapter = AsyncMock()
-    adapter._api_base = "https://api.github.com"
-    adapter._authed_json = AsyncMock(side_effect=RuntimeError("502"))
+    adapter.get_issue_labels = AsyncMock(side_effect=RuntimeError("502"))
     decision = await CancelLabelMiddleware()(make_ctx(adapter=adapter))
     assert decision.result is MiddlewareResult.PROCEED
 

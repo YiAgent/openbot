@@ -27,6 +27,9 @@ from openbot.infrastructure.queue.payload import MAX_STREAM_LEN, STREAM_NAME, Qu
 if TYPE_CHECKING:
     import redis.asyncio as redis_async
 
+    from openbot.domain.events import UnifiedEvent
+    from openbot.domain.workflows import Feature
+
 _logger = logging.getLogger(__name__)
 
 
@@ -68,7 +71,31 @@ class RedisStreamQueue:
     def __init__(self, redis: redis_async.Redis) -> None:
         self._redis = redis
 
-    async def enqueue(self, payload: QueuePayload) -> str:
+    async def enqueue(
+        self,
+        event: UnifiedEvent,
+        *,
+        feature: Feature,
+        task_id: str,
+        check_run_id: int | None = None,
+        intent: str | None = None,
+        run_id: str | None = None,
+        prev_run_id: str | None = None,
+        resource_key: str | None = None,
+        event_seq: int = 0,
+    ) -> str:
+        """Build QueuePayload from logical params and XADD to the stream."""
+        payload = QueuePayload.from_event(
+            event,
+            feature=feature,
+            task_id=task_id,
+            check_run_id=check_run_id,
+            intent=intent,
+            run_id=run_id,
+            prev_run_id=prev_run_id,
+            resource_key=resource_key,
+            event_seq=event_seq,
+        )
         return await enqueue(self._redis, payload)
 
 

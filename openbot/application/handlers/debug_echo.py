@@ -36,7 +36,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from openbot.application.state.cancellation import RunCancelledError, checkpoint
-from openbot.infrastructure.persistence.models import Workflow, WorkflowPhase
+from openbot.domain.workflows import Workflow, WorkflowPhase
 from openbot.infrastructure.persistence.repository import AuditLogRepo
 
 if TYPE_CHECKING:
