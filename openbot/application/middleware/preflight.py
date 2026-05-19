@@ -41,10 +41,10 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from openbot.application.ports.audit_log import AuditLogPort
+    from openbot.application.ports.channel_adapter import ChannelAdapterPort
     from openbot.application.ports.rate_limiter import RateLimiterPort
     from openbot.application.router import Dispatch
     from openbot.domain.config_schema import EffectiveConfig
-    from openbot.infrastructure.adapters.github import GitHubAdapter
 
 _logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ class PreflightContext:
     event: UnifiedEvent
     dispatch: Dispatch
     config: EffectiveConfig
-    adapter: GitHubAdapter
+    adapter: ChannelAdapterPort
     session_factory: async_sessionmaker[AsyncSession] | None
     redis: redis_async.Redis | None
     # GitHub check_run_id — when present, the workflow handler may update

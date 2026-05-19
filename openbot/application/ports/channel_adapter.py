@@ -27,3 +27,22 @@ class ChannelAdapterPort(Protocol):
     async def reply(self, event: UnifiedEvent, message: str) -> dict[str, Any]:
         """Post a reply on the originating thread."""
         ...
+
+    async def get_issue_labels(self, event: UnifiedEvent, number: int) -> frozenset[str]:
+        """Return the set of label names on the given issue/PR number.
+
+        Returns an empty frozenset on failure.
+        """
+        ...
+
+    async def get_pr_comments(self, event: UnifiedEvent, pr_number: int) -> list[dict[str, Any]]:
+        """Return PR comments (up to 100). Returns [] on failure."""
+        ...
+
+    async def get_actor_role(self, event: UnifiedEvent, login: str | None = None) -> str:
+        """Return the repo permission role of `login` (or event.actor if None).
+
+        One of: 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none'.
+        Returns 'none' on failure.
+        """
+        ...

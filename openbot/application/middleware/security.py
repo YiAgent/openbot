@@ -223,30 +223,13 @@ class ForkPRGateMiddleware:
             return cached
         if ctx.event.pr_number is None:
             return []
-        url = (
-            f"{ctx.adapter._api_base}/repos/{ctx.event.repo}/issues/"
-            f"{ctx.event.pr_number}/comments?per_page=100"
-        )
-        try:
-            data = await ctx.adapter._authed_json("GET", url, ctx.event)
-        except Exception:
-            _logger.exception(
-                "fork_pr_comments_fetch_failed",
-                extra={"delivery_id": ctx.event.delivery_id, "repo": ctx.event.repo},
-            )
-            return []
-        result = list(data) if isinstance(data, list) else []
+        result = await ctx.adapter.get_pr_comments(ctx.event, ctx.event.pr_number)
         ctx.cache[cache_key] = result
         return result
 
     async def _role_for(self, ctx: PreflightContext, *, login: str) -> str:
         """Look up *another* actor's role on the repo (not the event actor)."""
-        url = f"{ctx.adapter._api_base}/repos/{ctx.event.repo}/collaborators/{login}/permission"
-        try:
-            data = await ctx.adapter._authed_json("GET", url, ctx.event)
-        except Exception:
-            return "none"
-        return str(data.get("permission") or "none") if isinstance(data, dict) else "none"
+        return await ctx.adapter.get_actor_role(ctx.event, login)
 
 
 # ───────────────────────── Actor role gate ─────────────────────────

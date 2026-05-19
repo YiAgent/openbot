@@ -284,15 +284,53 @@ class GitHubAdapter(ChannelAdapter):
             return  # idempotent: removing an absent label is fine
         response.raise_for_status()
 
-    async def get_actor_role(self, event: UnifiedEvent) -> str:
-        """Return the actor's permission level on the repo.
+    async def get_actor_role(self, event: UnifiedEvent, login: str | None = None) -> str:
+        """Return the permission level of `login` (or event.actor) on the repo.
 
         One of: 'admin' | 'maintain' | 'write' | 'triage' | 'read' | 'none'.
         Drives PRD §4.3 `fix.allowed_actors` and §4.6 `rate_limit.exempt_roles`.
+        Returns 'none' on failure.
         """
-        url = f"{self._api_base}/repos/{event.repo}/collaborators/{event.actor}/permission"
-        data = await self._authed_json("GET", url, event)
-        return str(data.get("permission") or "none")
+        target = login if login is not None else event.actor
+        url = f"{self._api_base}/repos/{event.repo}/collaborators/{target}/permission"
+        try:
+            data = await self._authed_json("GET", url, event)
+            return str(data.get("permission") or "none") if isinstance(data, dict) else "none"
+        except Exception:
+            return "none"
+
+    async def get_issue_labels(self, event: UnifiedEvent, number: int) -> frozenset[str]:
+        """Return the set of label names on the given issue/PR number.
+
+        Returns an empty frozenset on failure.
+        """
+        url = f"{self._api_base}/repos/{event.repo}/issues/{number}/labels"
+        try:
+            data = await self._authed_json("GET", url, event)
+            return frozenset(
+                str(item["name"])
+                for item in (data or [])
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            )
+        except Exception:
+            _logger.exception(
+                "get_issue_labels_failed",
+                extra={"repo": event.repo, "number": number},
+            )
+            return frozenset()
+
+    async def get_pr_comments(self, event: UnifiedEvent, pr_number: int) -> list[dict[str, Any]]:
+        """Return PR comments (up to 100). Returns [] on failure."""
+        url = f"{self._api_base}/repos/{event.repo}/issues/{pr_number}/comments?per_page=100"
+        try:
+            data = await self._authed_json("GET", url, event)
+            return list(data) if isinstance(data, list) else []
+        except Exception:
+            _logger.exception(
+                "get_pr_comments_failed",
+                extra={"repo": event.repo, "pr_number": pr_number},
+            )
+            return []
 
     async def create_check_run(
         self,

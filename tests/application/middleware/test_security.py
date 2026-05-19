@@ -19,8 +19,8 @@ from tests.application.middleware.conftest import make_ctx, make_event
 
 def _adapter_with_role(role: str = "none") -> AsyncMock:
     adapter = AsyncMock()
-    adapter._api_base = "https://api.github.com"
     adapter.get_actor_role = AsyncMock(return_value=role)
+    adapter.get_pr_comments = AsyncMock(return_value=[])
     return adapter
 
 
@@ -59,16 +59,15 @@ async def test_fork_pr_passes_when_head_matches_base() -> None:
         make_ctx(event=event, feature=Feature.REVIEW, adapter=adapter)
     )
     assert decision.result is MiddlewareResult.PROCEED
-    # No need to fetch labels / comments for same-repo PRs.
-    adapter._authed_json.assert_not_called()
+    # No need to fetch comments for same-repo PRs.
+    adapter.get_pr_comments.assert_not_called()
 
 
 async def test_fork_pr_blocks_without_ok_to_test() -> None:
     """Fork PR + no maintainer comment → BLOCKED + announce_key dedup."""
     event = _pr_event()
     adapter = _adapter_with_role()
-    # No comments on the PR.
-    adapter._authed_json = AsyncMock(return_value=[])
+    # No comments on the PR (already default in _adapter_with_role).
     decision = await ForkPRGateMiddleware()(
         make_ctx(event=event, feature=Feature.REVIEW, adapter=adapter)
     )
@@ -83,22 +82,13 @@ async def test_fork_pr_allows_when_maintainer_writes_ok_to_test() -> None:
     """A maintainer comment with the opt-in phrase → PROCEED."""
     event = _pr_event()
     adapter = _adapter_with_role()
-    # Two API calls happen here:
-    #   1) GET /issues/{n}/comments → list of comments
-    #   2) GET /collaborators/{author}/permission → role
-    # AsyncMock returns the same value for every call by default, so
-    # we use side_effect to give different responses per URL pattern.
-
-    async def _stub_authed_json(method: str, url: str, _event: Any, *, json_body=None):
-        if "/comments" in url:
-            return [
-                {"body": "/ok-to-test please run", "user": {"login": "maintainer"}},
-            ]
-        if "/permission" in url:
-            return {"permission": "maintain"}
-        return None
-
-    adapter._authed_json = AsyncMock(side_effect=_stub_authed_json)
+    # Two port-method calls happen here:
+    #   1) get_pr_comments → list of comments
+    #   2) get_actor_role(event, login="maintainer") → role
+    adapter.get_pr_comments = AsyncMock(
+        return_value=[{"body": "/ok-to-test please run", "user": {"login": "maintainer"}}]
+    )
+    adapter.get_actor_role = AsyncMock(return_value="maintain")
     decision = await ForkPRGateMiddleware()(
         make_ctx(event=event, feature=Feature.REVIEW, adapter=adapter)
     )
@@ -109,17 +99,10 @@ async def test_fork_pr_rejects_ok_to_test_from_non_maintainer() -> None:
     """Outside contributor can't self-greenlight their own fork PR."""
     event = _pr_event()
     adapter = _adapter_with_role()
-
-    async def _stub(method: str, url: str, _event: Any, *, json_body=None):
-        if "/comments" in url:
-            return [
-                {"body": "/ok-to-test", "user": {"login": "random-user"}},
-            ]
-        if "/permission" in url:
-            return {"permission": "read"}  # NOT maintainer-equivalent
-        return None
-
-    adapter._authed_json = AsyncMock(side_effect=_stub)
+    adapter.get_pr_comments = AsyncMock(
+        return_value=[{"body": "/ok-to-test", "user": {"login": "random-user"}}]
+    )
+    adapter.get_actor_role = AsyncMock(return_value="read")  # NOT maintainer-equivalent
     decision = await ForkPRGateMiddleware()(
         make_ctx(event=event, feature=Feature.REVIEW, adapter=adapter)
     )
@@ -148,7 +131,7 @@ async def test_fork_pr_detects_fork_via_full_name_diff_only() -> None:
     """`head.repo.fork` may be absent; full_name mismatch alone is enough."""
     event = _pr_event(head_full="other-org/openbot", head_fork=None)
     adapter = _adapter_with_role()
-    adapter._authed_json = AsyncMock(return_value=[])
+    # No comments → no ok-to-test → BLOCKED (already default in _adapter_with_role).
     decision = await ForkPRGateMiddleware()(
         make_ctx(event=event, feature=Feature.REVIEW, adapter=adapter)
     )
