@@ -63,7 +63,7 @@ export SMEE_CHANNEL=https://smee.io/<your-channel-id>
 uv run python scripts/smee_relay.py $SMEE_CHANNEL -v
 
 # Terminal 4 — worker (optional: test queue processing)
-uv run python -m openbot.worker
+uv run python -m openbot.entrypoints.worker
 ```
 
 ### 1.3 `.env` minimum for L4

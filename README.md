@@ -190,7 +190,7 @@ Daily:
 
 ```bash
 doppler run -- uvicorn openbot.entrypoints.api.app:app --reload        # local dev
-doppler run --config prd -- python -m openbot.worker      # worker (when implemented)
+doppler run --config prd -- python -m openbot.entrypoints.worker      # worker (when implemented)
 ```
 
 Offline fallback:
