@@ -24,11 +24,15 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 
 from openbot import __version__
+from openbot.application.ports.channel_adapter import ChannelAdapterPort
+from openbot.application.ports.dedup import DedupPort
+from openbot.application.ports.queue import QueuePort
 from openbot.core.settings import Settings, get_settings
 from openbot.entrypoints.api.routes.github_webhook import router as _webhook_router
 from openbot.entrypoints.api.routes.health import router as _health_router
 from openbot.infrastructure.adapters.github import GitHubAdapter
 from openbot.infrastructure.adapters.github_auth import GitHubAppAuth
+from openbot.infrastructure.config_loader import YamlConfigLoader
 from openbot.infrastructure.observability import init_sentry
 from openbot.infrastructure.persistence import (
     WebhookDedup,
@@ -37,6 +41,10 @@ from openbot.infrastructure.persistence import (
     make_engine,
     make_session_factory,
 )
+from openbot.infrastructure.persistence.cancellation_redis import RedisCancellation
+from openbot.infrastructure.persistence.rate_limiter_redis import RedisRateLimiter
+from openbot.infrastructure.persistence.resource_lock_redis import RedisResourceLock
+from openbot.infrastructure.queue.enqueue import RedisStreamQueue
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -99,7 +107,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         make_client(settings.redis_url) if settings.redis_url else None
     )
     app.state.redis = redis_client
-    app.state.dedup = WebhookDedup(redis_client)
+    app.state.cancellation = RedisCancellation(redis_client)
+    app.state.resource_lock = RedisResourceLock(redis_client)
+    dedup: DedupPort = WebhookDedup(redis_client)
+    app.state.dedup = dedup
+    queue: QueuePort = RedisStreamQueue(redis_client)
+    app.state.queue = queue
+    rate_limiter = RedisRateLimiter(redis_client)
+    app.state.rate_limiter = rate_limiter
+    config_loader = YamlConfigLoader()
+    app.state.config_loader = config_loader
 
     db_engine: AsyncEngine | None = None
     db_session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -112,8 +129,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.db_engine = db_engine
     app.state.db_session_factory = db_session_factory
 
+    from openbot.infrastructure.persistence.audit_log_impl import SqlAuditLog
+    from openbot.infrastructure.persistence.runs_repo_impl import SqlRunsRepo
+
+    if db_session_factory is not None:
+        app.state.runs_repo = SqlRunsRepo(db_session_factory)
+        app.state.audit = SqlAuditLog(db_session_factory)
+    else:
+        app.state.runs_repo = None
+        app.state.audit = None
+
     app.state.github_auth = auth
-    app.state.github_adapter = (
+    github_adapter: ChannelAdapterPort | None = (
         GitHubAdapter(
             webhook_secret=settings.github_webhook_secret.get_secret_value(),
             auth=auth,
@@ -121,6 +148,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if settings.github_webhook_secret is not None
         else None
     )
+    app.state.github_adapter = github_adapter
     _logger.info(
         "openbot_startup",
         extra={

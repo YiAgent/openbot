@@ -35,7 +35,7 @@ import logging
 import time
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 import yaml
@@ -483,3 +483,24 @@ def _to_int(value: Any, *, repo: str, field: str) -> int | None:
             extra={"repo": repo, "field": field, "raw": str(value)[:64]},
         )
         return None
+
+
+# ───────────────────────── Port implementation ─────────────────────────
+
+if TYPE_CHECKING:
+    from openbot.application.ports.config_loader import ConfigLoaderPort
+
+
+class YamlConfigLoader:
+    """ConfigLoaderPort impl backed by the module-level YAML loader.
+
+    Thin wrapper — all caching, fallback, and error handling are in
+    the module-level ``load_for_repo`` function above.
+    """
+
+    async def load_for_repo(self, adapter: Any, event: UnifiedEvent) -> EffectiveConfig:
+        return await load_for_repo(adapter, event)
+
+
+if TYPE_CHECKING:
+    _witness: ConfigLoaderPort = YamlConfigLoader()

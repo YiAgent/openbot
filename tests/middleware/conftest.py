@@ -2,7 +2,7 @@
 
 `make_ctx` builds a PreflightContext with sensible defaults; tests
 override the bits they care about (feature, redis, session_factory,
-adapter mock surface).
+adapter mock surface, rate_limiter).
 """
 
 from __future__ import annotations
@@ -18,6 +18,9 @@ from openbot.application.workflows import maybe_run_chat, maybe_run_triage
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.infrastructure.config_loader import baked_in_defaults
 from openbot.infrastructure.llm.model_router import Feature
+from openbot.infrastructure.persistence.rate_limiter_redis import RedisRateLimiter
+
+_SENTINEL = object()
 
 
 def make_event(
@@ -56,10 +59,18 @@ def make_ctx(
     redis: Any | None = None,
     session_factory: Any | None = None,
     config: Any = None,
+    rate_limiter: Any = _SENTINEL,
 ) -> PreflightContext:
-    """Build a PreflightContext with a default adapter mock."""
+    """Build a PreflightContext with a default adapter mock.
+
+    `rate_limiter` defaults to a `RedisRateLimiter` wrapping whatever
+    `redis` was passed (so existing tests that supply a fakeredis instance
+    continue to exercise the full INCR path). Pass an explicit
+    `FakeRateLimiter` or `None` to override.
+    """
     event = event or make_event()
     handler = maybe_run_chat if feature is Feature.CHAT else maybe_run_triage
+    resolved_rate_limiter = RedisRateLimiter(redis) if rate_limiter is _SENTINEL else rate_limiter
     return PreflightContext(
         event=event,
         dispatch=Dispatch(feature, handler, derive_task_id(event)),
@@ -67,6 +78,7 @@ def make_ctx(
         adapter=adapter or AsyncMock(),
         session_factory=session_factory,
         redis=redis,
+        rate_limiter=resolved_rate_limiter,
     )
 
 

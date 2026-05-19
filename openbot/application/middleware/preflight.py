@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     import redis.asyncio as redis_async
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from openbot.application.ports.audit_log import AuditLogPort
+    from openbot.application.ports.rate_limiter import RateLimiterPort
     from openbot.application.router import Dispatch
     from openbot.domain.config_schema import EffectiveConfig
     from openbot.infrastructure.adapters.github import GitHubAdapter
@@ -109,6 +111,13 @@ class PreflightContext:
     # GitHub check_run_id — when present, the workflow handler may update
     # it with detailed logs or status changes.
     check_run_id: int | None = None
+    # AuditLogPort adapter — when set, preferred over session_factory for
+    # writing audit rows. Falls back to session_factory when None so
+    # tests that pre-date the Port continue to work unchanged.
+    audit: AuditLogPort | None = None
+    # RateLimiterPort adapter — when set, used by RateLimitMiddleware instead
+    # of calling Redis directly. Falls open when None (same as no-Redis).
+    rate_limiter: RateLimiterPort | None = None
     # Reserved for slice B+: middlewares may stash cached lookups
     # (actor role, cancel set membership) keyed by their middleware name.
     # Frozen at construction; slice A leaves it empty.
@@ -211,18 +220,43 @@ async def _write_block_audit(
     *,
     middleware_name: str | None,
 ) -> None:
-    if ctx.session_factory is None:
-        # No Postgres configured — drop, the dev environment already logs.
-        return
-    # Local import: keeps the module importable in unit tests that
-    # don't pull in SQLAlchemy.
-    from openbot.infrastructure.persistence.repository import AuditLogRepo
-
     workflow_value = ctx.dispatch.feature.value
     details = {
         "middleware": middleware_name,
         "kind": ctx.event.kind.value,
     }
+
+    # Prefer the Port if wired; fall back to session_factory for backward compat.
+    if ctx.audit is not None:
+        try:
+            await ctx.audit.write(
+                phase=decision.audit_phase.value,
+                delivery_id=ctx.event.delivery_id or None,
+                repo=ctx.event.repo or None,
+                actor=ctx.event.actor or None,
+                workflow=workflow_value,
+                outcome=decision.reason,
+                details=details,
+            )
+        except Exception:
+            _logger.exception(
+                "preflight_audit_write_failed",
+                extra={
+                    "delivery_id": ctx.event.delivery_id,
+                    "repo": ctx.event.repo,
+                    "middleware": middleware_name,
+                },
+            )
+        return
+
+    # Backward-compat path — used when no DB is configured or in tests
+    # that pre-date the Port.
+    if ctx.session_factory is None:
+        return
+    # Local import: keeps the module importable in unit tests that
+    # don't pull in SQLAlchemy.
+    from openbot.infrastructure.persistence.repository import AuditLogRepo
+
     try:
         async with ctx.session_factory() as session:
             await AuditLogRepo(session).write(

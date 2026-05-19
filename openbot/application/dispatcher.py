@@ -45,6 +45,9 @@ if TYPE_CHECKING:
     import redis.asyncio as redis_async
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from openbot.application.ports.audit_log import AuditLogPort
+    from openbot.application.ports.config_loader import ConfigLoaderPort
+    from openbot.application.ports.rate_limiter import RateLimiterPort
     from openbot.application.router import Dispatch
     from openbot.domain.events import UnifiedEvent
     from openbot.infrastructure.adapters.github import GitHubAdapter
@@ -106,6 +109,9 @@ async def run_dispatch(
     session_factory: async_sessionmaker[AsyncSession] | None,
     redis: redis_async.Redis | None,
     check_run_id: int | None = None,
+    audit: AuditLogPort | None = None,
+    rate_limiter: RateLimiterPort | None = None,
+    config_loader: ConfigLoaderPort | None = None,
 ) -> None:
     """Load config → pre-flight → handler.
 
@@ -113,15 +119,17 @@ async def run_dispatch(
     and the worker has already (or will) XACK.
     """
     try:
-        # Respect monkeypatching of ``openbot.application.dispatcher.load_for_repo``
-        # (the pre-move canonical path used by test fixtures).  At call
-        # time all modules are fully loaded, so the sys.modules lookup is
-        # safe even though openbot.application.dispatcher imports this module.
-        _dispatch_shim = _sys.modules.get("openbot.application.dispatcher")
-        _loader = (
-            getattr(_dispatch_shim, "load_for_repo", None) if _dispatch_shim is not None else None
-        ) or load_for_repo
-        config = await _loader(adapter, event)
+        if config_loader is not None:
+            config = await config_loader.load_for_repo(adapter, event)
+        else:
+            # Legacy path: respect monkeypatching for tests that pre-date the Port.
+            _dispatch_shim = _sys.modules.get("openbot.application.dispatcher")
+            _loader = (
+                getattr(_dispatch_shim, "load_for_repo", None)
+                if _dispatch_shim is not None
+                else None
+            ) or load_for_repo
+            config = await _loader(adapter, event)
     except Exception:
         _logger.exception(
             "preflight_config_load_failed",
@@ -151,6 +159,8 @@ async def run_dispatch(
         session_factory=session_factory,
         redis=redis,
         check_run_id=check_run_id,
+        audit=audit,
+        rate_limiter=rate_limiter,
     )
 
     try:

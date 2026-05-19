@@ -31,7 +31,11 @@ from openbot.infrastructure.persistence import (
     make_engine,
     make_session_factory,
 )
+from openbot.infrastructure.persistence.cancellation_redis import RedisCancellation
 from openbot.infrastructure.persistence.models import State, TaskRun
+from openbot.infrastructure.persistence.resource_lock_redis import RedisResourceLock
+from openbot.infrastructure.persistence.runs_repo_impl import SqlRunsRepo
+from openbot.infrastructure.queue.enqueue import RedisStreamQueue
 
 # Use the same secret and payloads as the L2 state-machine tests so
 # assertions on delivery IDs and resource keys are compatible.
@@ -93,9 +97,13 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     from openbot.entrypoints.api.app import app
 
     app.state.redis = redis_fake
+    app.state.cancellation = RedisCancellation(redis_fake)
+    app.state.resource_lock = RedisResourceLock(redis_fake)
     app.state.dedup = WebhookDedup(redis_fake)
+    app.state.queue = RedisStreamQueue(redis_fake)
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
+    app.state.runs_repo = SqlRunsRepo(session_factory)
     app.state.github_auth = None
     app.state.github_adapter = GitHubAdapter(webhook_secret=_SM_SECRET, auth=None)
 
