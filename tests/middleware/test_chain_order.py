@@ -8,7 +8,7 @@ fires before the change merges.
 
 from __future__ import annotations
 
-from openbot.dispatch import build_preflight_chain
+from openbot.application.dispatcher import build_preflight_chain
 
 # The locked order. Adding a middleware means amending spec §3 M3 + this
 # tuple in one PR. Hardcoded explicit string list (not derived) so the

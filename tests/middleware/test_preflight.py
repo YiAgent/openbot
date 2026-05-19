@@ -12,19 +12,19 @@ from unittest.mock import AsyncMock
 import fakeredis.aioredis
 import pytest
 
-from openbot.config_repo import baked_in_defaults
-from openbot.events import EventKind, UnifiedEvent
-from openbot.llm.router import Feature
-from openbot.middleware import (
+from openbot.application.middleware import (
     MiddlewareDecision,
     MiddlewareResult,
     PreflightContext,
     announce_once,
     run_preflight,
 )
-from openbot.persistence.models import WorkflowPhase
-from openbot.router import Dispatch, derive_task_id
-from openbot.workflows import maybe_run_triage
+from openbot.application.router import Dispatch, derive_task_id
+from openbot.application.workflows import maybe_run_triage
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.config_loader import baked_in_defaults
+from openbot.infrastructure.llm.model_router import Feature
+from openbot.infrastructure.persistence.models import WorkflowPhase
 
 
 def _event() -> UnifiedEvent:

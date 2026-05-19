@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from openbot.webapp import app
+from openbot.entrypoints.api.app import app
 
 
 def test_metrics_endpoint_returns_200() -> None:

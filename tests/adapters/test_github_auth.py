@@ -17,7 +17,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 
-from openbot.adapters.github_auth import GitHubAppAuth, InstallationToken
+from openbot.infrastructure.adapters.github_auth import GitHubAppAuth, InstallationToken
 
 _APP_ID = 42_424_242
 

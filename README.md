@@ -189,7 +189,7 @@ doppler setup --project openbot --config dev      # bind repo to dev config
 Daily:
 
 ```bash
-doppler run -- uvicorn openbot.webapp:app --reload        # local dev
+doppler run -- uvicorn openbot.entrypoints.api.app:app --reload        # local dev
 doppler run --config prd -- python -m openbot.worker      # worker (when implemented)
 ```
 

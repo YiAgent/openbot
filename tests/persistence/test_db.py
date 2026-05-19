@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from openbot.persistence import (
+from openbot.infrastructure.persistence import (
     AuditLog,
     Base,
     CostMeter,

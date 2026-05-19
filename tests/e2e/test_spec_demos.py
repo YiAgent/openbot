@@ -22,15 +22,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from openbot.config_repo import RateLimitConfig
-from openbot.events import EventKind
-from openbot.llm.router import Feature
-from openbot.persistence.models import Workflow, WorkflowPhase
-from openbot.queue import worker as queue_worker
-from openbot.queue.enqueue import enqueue
-from openbot.queue.payload import QueuePayload
-from openbot.queue.worker import consume_loop, ensure_consumer_group
-from openbot.router import derive_task_id
+from openbot.application.router import derive_task_id
+from openbot.domain.events import EventKind
+from openbot.infrastructure.config_loader import RateLimitConfig
+from openbot.infrastructure.llm.model_router import Feature
+from openbot.infrastructure.persistence.models import Workflow, WorkflowPhase
+from openbot.infrastructure.queue import worker as queue_worker
+from openbot.infrastructure.queue.enqueue import enqueue
+from openbot.infrastructure.queue.payload import QueuePayload
+from openbot.infrastructure.queue.worker import consume_loop, ensure_consumer_group
 
 if TYPE_CHECKING:
     from tests.e2e.conftest import WebhookHarness

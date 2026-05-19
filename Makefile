@@ -13,14 +13,14 @@ RUFF     ?= $(PY) ruff
 PYTEST   ?= $(PY) pytest
 UVICORN  ?= $(PY) uvicorn
 
-APP      ?= openbot.webapp:app
+APP      ?= openbot.entrypoints.api.app:app
 PORT     ?= 8080
 HOST     ?= 127.0.0.1
 TARGET_URL := http://$(HOST):$(PORT)/webhook/github
 # Read smee channel from .env; falls back to empty so `make dev` errors clearly.
 SMEE_URL := $(shell sed -n 's/^OPENBOT_GITHUB_WEBHOOK_PROXY_URL=\(.*\)$$/\1/p' .env 2>/dev/null)
 
-.PHONY: help install sync hooks test test-fast lint lint-fix fmt fmt-check check \
+.PHONY: help install sync hooks test test-fast lint lint-fix lint-imports fmt fmt-check check \
         dev dev-server dev-smee run smoke setup secret-scan doctor \
         compose-up compose-down compose-logs compose-ps clean distclean
 
@@ -51,13 +51,16 @@ lint: ## ruff lint
 lint-fix: ## ruff lint with autofix
 	$(RUFF) check --fix .
 
+lint-imports: ## Verify hexagonal layer rules
+	uv run lint-imports
+
 test: ## Run pytest (excludes evals/ per PRD §8.3)
 	$(PYTEST) --ignore=evals
 
 test-fast: ## pytest, fail fast, quiet
 	$(PYTEST) -q -x --ignore=evals
 
-check: fmt-check lint test ## Full verification (fmt-check + lint + test) — required after any Python change
+check: fmt-check lint lint-imports test ## Full local CI gate
 
 # ─── Live dev loop ────────────────────────────────────────────────
 dev: ## uvicorn + smee-client concurrently (Ctrl-C kills both)
@@ -85,13 +88,13 @@ run: ## Run FastAPI app (production-style, no reload)
 	$(UVICORN) $(APP) --host $(HOST) --port $(PORT)
 
 worker: ## Run the Redis Stream worker (slice D — consumes openbot:workflows)
-	uv run python -m openbot.queue.runner
+	uv run python -m openbot.entrypoints.worker
 
 smoke: ## Hit /health to verify server is up
 	@curl -sf "http://$(HOST):$(PORT)/health" && echo
 
 setup: ## Interactive GitHub App + .env wizard (manifest flow)
-	uv run python -m openbot.setup_wizard
+	uv run python -m openbot.entrypoints.cli.setup_wizard
 
 doctor: ## First-run self-check (ENV / Postgres / Redis / schema / webhook round-trip)
 	$(PY) python scripts/doctor.py

@@ -14,9 +14,9 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from openbot.llm import Feature
-from openbot.llm.complete import CompletionResult, complete
-from openbot.persistence import (
+from openbot.infrastructure.llm import Feature
+from openbot.infrastructure.llm.complete import CompletionResult, complete
+from openbot.infrastructure.persistence import (
     CostMeterRepo,
     create_schema,
     make_engine,
@@ -62,7 +62,7 @@ def _patch_litellm(
     def fake_cost(*, completion_response: Any) -> float:
         return cost
 
-    import openbot.llm.complete as mod
+    import openbot.infrastructure.llm.complete as mod
 
     monkeypatch.setattr(mod.litellm, "acompletion", fake_acompletion)
     monkeypatch.setattr(mod.litellm, "completion_cost", fake_cost)
@@ -147,14 +147,14 @@ async def test_missing_usage_flags_row_and_warns(
     """When response.usage is missing, tokens default to 0 BUT the cost row
     is flagged USAGE_MISSING + a WARNING is logged. BudgetEnforcement can
     then distinguish "real zero" from "we don't know"."""
-    from openbot.persistence import CostMeter, CostStatus
+    from openbot.infrastructure.persistence import CostMeter, CostStatus
 
     response_without_usage = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))]
     )
     _patch_litellm(monkeypatch, response=response_without_usage, cost=0.0)
 
-    with caplog.at_level(logging.WARNING, logger="openbot.llm.complete"):
+    with caplog.at_level(logging.WARNING, logger="openbot.infrastructure.llm.complete"):
         async with session_scope(factory) as session:
             result = await complete(
                 Feature.TRIAGE,
@@ -188,11 +188,11 @@ async def test_none_cost_flags_priced_zero(
     Previously this would crash with `Decimal(str(None))` → InvalidOperation;
     review caught that real bug.
     """
-    from openbot.persistence import CostStatus
+    from openbot.infrastructure.persistence import CostStatus
 
     _patch_litellm(monkeypatch, cost=None)
 
-    with caplog.at_level(logging.WARNING, logger="openbot.llm.complete"):
+    with caplog.at_level(logging.WARNING, logger="openbot.infrastructure.llm.complete"):
         async with session_scope(factory) as session:
             result = await complete(
                 Feature.TRIAGE,
@@ -217,7 +217,7 @@ async def test_unexpected_cost_exception_propagates(
     if LiteLLM's API drifts. Defending against that explicitly: only the
     known pricing-error types are caught.
     """
-    import openbot.llm.complete as mod
+    import openbot.infrastructure.llm.complete as mod
 
     async def fake_acompletion(**_: Any) -> Any:
         return _fake_response()
@@ -241,7 +241,7 @@ async def test_unexpected_cost_exception_propagates(
 
 async def test_completion_result_rejects_negative_cost() -> None:
     """CompletionResult guards against negative values via __post_init__."""
-    from openbot.persistence import CostStatus
+    from openbot.infrastructure.persistence import CostStatus
 
     with pytest.raises(ValueError, match="cost_usd"):
         CompletionResult(
@@ -255,7 +255,7 @@ async def test_completion_result_rejects_negative_cost() -> None:
 
 
 async def test_completion_result_rejects_negative_tokens() -> None:
-    from openbot.persistence import CostStatus
+    from openbot.infrastructure.persistence import CostStatus
 
     with pytest.raises(ValueError, match="token"):
         CompletionResult(
@@ -275,7 +275,7 @@ async def test_missing_choices_raises_value_error_after_recording_cost(
     """Content extraction failure raises, but cost row is recorded first
     (vendor has billed regardless). Row carries cost_status=EXTRACTION_FAILED.
     """
-    from openbot.persistence import CostStatus
+    from openbot.infrastructure.persistence import CostStatus
 
     bad = SimpleNamespace(choices=[], usage=SimpleNamespace(prompt_tokens=20, completion_tokens=0))
     _patch_litellm(monkeypatch, response=bad, cost=0.001)
@@ -293,7 +293,7 @@ async def test_missing_choices_raises_value_error_after_recording_cost(
     # Cost row WAS persisted — extraction failed AFTER vendor billed.
     from sqlalchemy import select
 
-    from openbot.persistence import CostMeter
+    from openbot.infrastructure.persistence import CostMeter
 
     async with session_scope(factory) as session:
         result = await session.execute(
@@ -317,8 +317,8 @@ async def test_expected_pricing_error_persists_zero_with_status(
     (because cost is unknown not zero), but the row's existence is preserved
     so the call is auditable.
     """
-    import openbot.llm.complete as mod
-    from openbot.persistence import CostStatus
+    import openbot.infrastructure.llm.complete as mod
+    from openbot.infrastructure.persistence import CostStatus
 
     async def fake_acompletion(**_: Any) -> Any:
         return _fake_response()
@@ -330,7 +330,7 @@ async def test_expected_pricing_error_persists_zero_with_status(
     monkeypatch.setattr(mod.litellm, "acompletion", fake_acompletion)
     monkeypatch.setattr(mod.litellm, "completion_cost", boom)
 
-    with caplog.at_level(logging.ERROR, logger="openbot.llm.complete"):
+    with caplog.at_level(logging.ERROR, logger="openbot.infrastructure.llm.complete"):
         async with session_scope(factory) as session:
             result = await complete(
                 Feature.TRIAGE,

@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from openbot.config import get_settings
-from openbot.webapp import app
+from openbot.core.settings import get_settings
+from openbot.entrypoints.api.app import app
 
 _SECRET = "test-secret"
 
@@ -137,18 +137,18 @@ def test_webhook_dedup_fallback_open_when_redis_unset(
 async def test_webhook_enqueues_when_redis_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """With Redis wired, the webhook XADDs to openbot:workflows instead of
+    """With Redis wired, the webhook XADDs to openbot.application.workflows instead of
     invoking the in-process BackgroundTask path. Slice D behavior."""
     import fakeredis.aioredis  # local import: dev-only dep
 
-    from openbot.queue.payload import STREAM_NAME, deserialize_payload
+    from openbot.infrastructure.queue.payload import STREAM_NAME, deserialize_payload
 
     monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SECRET)
     get_settings.cache_clear()
 
     fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
     monkeypatch.setenv("OPENBOT_REDIS_URL", "redis://fake")
-    monkeypatch.setattr("openbot.webapp.make_client", lambda url: fake)
+    monkeypatch.setattr("openbot.entrypoints.api.app.make_client", lambda url: fake)
 
     body = json.dumps(
         {
@@ -200,7 +200,7 @@ def test_webhook_dedup_drops_workflow_when_redis_marks_duplicate(
     # Patch make_client so the lifespan wires fakeredis instead of real redis.
     fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
     monkeypatch.setenv("OPENBOT_REDIS_URL", "redis://fake")  # any truthy value
-    monkeypatch.setattr("openbot.webapp.make_client", lambda url: fake)
+    monkeypatch.setattr("openbot.entrypoints.api.app.make_client", lambda url: fake)
 
     try:
         body = json.dumps(

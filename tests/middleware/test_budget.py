@@ -7,11 +7,11 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from openbot.llm.router import Feature
-from openbot.middleware import MiddlewareResult
-from openbot.middleware.budget import BudgetMiddleware, _effective_global_cap
-from openbot.persistence import Base, make_session_factory
-from openbot.persistence.models import CostMeter, CostStatus, WorkflowPhase
+from openbot.application.middleware import MiddlewareResult
+from openbot.application.middleware.budget import BudgetMiddleware, _effective_global_cap
+from openbot.infrastructure.llm.model_router import Feature
+from openbot.infrastructure.persistence import Base, make_session_factory
+from openbot.infrastructure.persistence.models import CostMeter, CostStatus, WorkflowPhase
 from tests.middleware.conftest import make_ctx, make_event
 
 # ───── helpers: in-memory SQLite session factory + seeding ─────

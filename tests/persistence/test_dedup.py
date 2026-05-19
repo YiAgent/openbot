@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock
 import fakeredis.aioredis
 import pytest
 
-from openbot.persistence.dedup import DedupOutcome, WebhookDedup
+from openbot.infrastructure.persistence.dedup import DedupOutcome, WebhookDedup
 
 
 @pytest.fixture
@@ -130,7 +130,7 @@ async def test_no_redis_returns_fallback_open(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     dedup = WebhookDedup(redis=None)
-    with caplog.at_level(logging.WARNING, logger="openbot.persistence.dedup"):
+    with caplog.at_level(logging.WARNING, logger="openbot.infrastructure.persistence.dedup"):
         outcome = await dedup.check_and_mark("github", "deliv-1")
     assert outcome is DedupOutcome.FALLBACK_OPEN
     assert any(r.message == "dedup_skipped_no_redis" for r in caplog.records)
@@ -143,7 +143,7 @@ async def test_redis_error_falls_open_and_logs_exception(
     broken.set = AsyncMock(side_effect=ConnectionError("Connection refused"))
 
     dedup = WebhookDedup(broken)
-    with caplog.at_level(logging.ERROR, logger="openbot.persistence.dedup"):
+    with caplog.at_level(logging.ERROR, logger="openbot.infrastructure.persistence.dedup"):
         outcome = await dedup.check_and_mark("github", "deliv-1")
 
     assert outcome is DedupOutcome.FALLBACK_OPEN

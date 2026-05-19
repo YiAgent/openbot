@@ -6,13 +6,13 @@ import logging
 
 import pytest
 
-from openbot.events import EventKind
-from openbot.middleware import MiddlewareResult
-from openbot.middleware.sanitize import (
+from openbot.application.middleware import MiddlewareResult
+from openbot.application.middleware.sanitize import (
     SanitizeInputsMiddleware,
     sanitized_event,
 )
-from openbot.persistence.models import WorkflowPhase
+from openbot.domain.events import EventKind
+from openbot.infrastructure.persistence.models import WorkflowPhase
 from tests.middleware.conftest import make_ctx, make_event
 
 # ───── invisible-byte stripping ─────
@@ -112,7 +112,7 @@ async def test_single_field_truncated_logs_field_name(
     body = "x" * 9_000
     event = make_event(kind=EventKind.ISSUE_COMMENT_CREATED, comment_body=body)
     ctx = make_ctx(event=event)
-    with caplog.at_level(logging.INFO, logger="openbot.middleware.sanitize"):
+    with caplog.at_level(logging.INFO, logger="openbot.application.middleware.sanitize"):
         decision = await SanitizeInputsMiddleware()(ctx)
     assert decision.result is MiddlewareResult.PROCEED
     cleaned = sanitized_event(ctx).comment_body

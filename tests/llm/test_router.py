@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from openbot.llm import Feature, fallback_model, primary_model_for
+from openbot.infrastructure.llm import Feature, fallback_model, primary_model_for
 
 
 @pytest.mark.parametrize(

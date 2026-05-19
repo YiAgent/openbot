@@ -5,15 +5,15 @@ description = "Open-source, self-hosted, BYO-API-key GitHub maintenance bot for 
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [{ name = "Yi Wang" }]
 keywords = ["github", "bot", "agent", "llm", "code-review", "triage"]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Bug Tracking",
 ]
 dependencies = [
@@ -108,6 +108,7 @@ dev = [
     "httpx>=0.28.1",            # FastAPI TestClient runtime
     "fakeredis>=2.26",          # in-memory Redis for unit tests (async-compatible)
     "aiosqlite>=0.20",          # in-memory SQLite via SQLAlchemy for unit tests
+    "import-linter>=2.0",       # hexagonal layer boundary enforcement
 ]
 
 [build-system]
@@ -120,7 +121,7 @@ packages = ["openbot"]
 # ─────── ruff (PRD §8.4 / Open SWE convention) ───────
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 extend-exclude = [
     ".venv",
     "build",
@@ -150,6 +151,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011"]  # asserts are the whole point
+# Evals predate PEP 695. Migrating to `class Foo[T]:` / `def f[T](...)` is
+# tangential to the openbot/ restructure and would touch stable tracing code.
+# Re-enable per file once each eval module is intentionally modernized.
+"evals/common/structured_finalizer.py" = ["UP046", "UP047"]
 
 [tool.ruff.format]
 quote-style = "double"

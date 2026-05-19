@@ -39,15 +39,15 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from openbot.adapters.github import GitHubAdapter
-from openbot.config_repo import EffectiveConfig, baked_in_defaults
-from openbot.dispatch import run_dispatch
-from openbot.events import EventKind, UnifiedEvent
-from openbot.persistence.models import AuditLog, Base
-from openbot.router import dispatch_for
+from openbot.application.dispatcher import run_dispatch
+from openbot.application.router import dispatch_for
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.adapters.github import GitHubAdapter
+from openbot.infrastructure.config_loader import EffectiveConfig, baked_in_defaults
+from openbot.infrastructure.persistence.models import AuditLog, Base
 
 if TYPE_CHECKING:
-    from openbot.router import Dispatch
+    from openbot.application.router import Dispatch
 
 # Test-only webhook secret — only used inside RecordingGitHubAdapter so
 # the parent class' constructor doesn't reject an empty string.
@@ -222,11 +222,22 @@ async def webhook_harness(
 ) -> AsyncIterator[WebhookHarness]:
     """Composes adapter + fakeredis + sqlite-memory for one test.
 
-    Patches ``openbot.dispatch.load_for_repo`` so each dispatch reads
+    Patches ``openbot.application.dispatcher.load_for_repo`` so each dispatch reads
     ``harness.config`` instead of hitting api.github.com for the YAML
     file. Tests override fields via ``dataclasses.replace`` on the
     frozen ``EffectiveConfig``.
+
+    Demos 1-9 assert against the real workflow handlers
+    (``maybe_run_triage`` / ``_review`` / ``_fix`` / ``_chat``); the
+    process-wide default ``OPENBOT_DEBUG_ECHO=1`` would route them to
+    the debug-echo handler instead. Disable here so the demos see
+    the workflow callables they originally targeted.
     """
+    from openbot.core.settings import get_settings
+
+    monkeypatch.setenv("OPENBOT_DEBUG_ECHO_ENABLED", "false")
+    get_settings.cache_clear()
+
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -243,7 +254,7 @@ async def webhook_harness(
     async def _fake_load_for_repo(_adapter: Any, _event: UnifiedEvent) -> EffectiveConfig:
         return harness.config
 
-    monkeypatch.setattr("openbot.dispatch.load_for_repo", _fake_load_for_repo)
+    monkeypatch.setattr("openbot.application.dispatcher.load_for_repo", _fake_load_for_repo)
 
     try:
         yield harness

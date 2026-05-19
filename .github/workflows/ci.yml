@@ -1,44 +1,20 @@
-name: CI
+name: CI Pipeline
 
 on:
   push:
     branches: [main]
   pull_request:
 
-# 节省 CI 分钟：同分支新 push 自动取消旧 run
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  # Guard：检测是否已有 Python 代码 / pyproject.toml
-  # 没有代码时只输出 placeholder，让 PR 不会因 CI 失败而 block
-  detect:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    outputs:
-      has_python: ${{ steps.check.outputs.has_python }}
-      has_tests: ${{ steps.check.outputs.has_tests }}
-    steps:
-      - uses: actions/checkout@v6
-      - id: check
-        run: |
-          if [ -f pyproject.toml ]; then
-            echo "has_python=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_python=false" >> "$GITHUB_OUTPUT"
-          fi
-          if [ -d tests ]; then
-            echo "has_tests=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_tests=false" >> "$GITHUB_OUTPUT"
-          fi
-
   lint:
-    needs: detect
-    if: needs.detect.outputs.has_python == 'true'
+    name: Lint (Ruff)
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
@@ -46,17 +22,16 @@ jobs:
         with:
           enable-cache: true
       - name: Setup Python
-        run: uv python install 3.11
-      - name: Install dev deps
+        run: uv python install 3.12
+      - name: Install dependencies
         run: uv sync --all-extras --dev
-      - name: ruff lint
+      - name: Run Ruff Check
         run: uv run ruff check .
-      - name: ruff format --check
+      - name: Run Ruff Format Check
         run: uv run ruff format --check .
 
   test:
-    needs: detect
-    if: needs.detect.outputs.has_python == 'true' && needs.detect.outputs.has_tests == 'true'
+    name: Test (Pytest)
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
@@ -64,17 +39,9 @@ jobs:
         with:
           enable-cache: true
       - name: Setup Python
-        run: uv python install 3.11
-      - name: Install
+        run: uv python install 3.12
+      - name: Install dependencies
         run: uv sync --all-extras --dev
-      - name: pytest
-        # 与 scripts/hooks/pytest-pre-push.sh 对齐；PRD §8.4: eval 不进 CI
+      - name: Run Tests
+        # Excludes evals/ per PRD §8.4
         run: uv run pytest -q --ignore=evals
-
-  # 没代码时给 PR 一个 always-green 状态，避免 "no checks have run" 卡死 branch protection
-  placeholder:
-    needs: detect
-    if: needs.detect.outputs.has_python == 'false'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - run: echo "No Python sources yet — CI lint/test will activate once pyproject.toml lands."

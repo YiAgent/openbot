@@ -59,7 +59,7 @@ def _isolate_openbot_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Ite
     # (env reads are stable for the life of an eval run). Tests mutate
     # env via monkeypatch.setenv mid-test, so we clear before AND after
     # to guarantee no cross-test pollution either direction. Mirrors
-    # the openbot.config.get_settings.cache_clear() pattern.
+    # the openbot.core.settings.get_settings.cache_clear() pattern.
     try:
         from evals.common.config import get_eval_config
 

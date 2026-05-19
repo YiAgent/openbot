@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from openbot.workflows.chat_parser import ChatCommand, parse
+from openbot.application.workflows.chat_parser import ChatCommand, parse
 
 # ───── happy paths ─────
 

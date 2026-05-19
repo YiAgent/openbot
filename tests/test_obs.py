@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from openbot.config import Settings
-from openbot.obs import init_sentry
+from openbot.core.settings import Settings
+from openbot.infrastructure.observability import init_sentry
 
 
 def test_init_sentry_is_noop_without_dsn() -> None:

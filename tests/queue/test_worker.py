@@ -14,15 +14,15 @@ from unittest.mock import AsyncMock, patch
 import fakeredis.aioredis
 import pytest
 
-from openbot.events import EventKind, UnifiedEvent
-from openbot.llm.router import Feature
-from openbot.queue import (
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.llm.model_router import Feature
+from openbot.infrastructure.queue import (
     QueuePayload,
     consume_loop,
     enqueue,
     ensure_consumer_group,
 )
-from openbot.queue.payload import DEAD_STREAM, GROUP_NAME, STREAM_NAME
+from openbot.infrastructure.queue.payload import DEAD_STREAM, GROUP_NAME, STREAM_NAME
 
 
 def _payload(delivery_id: str = "d-1") -> QueuePayload:
@@ -71,7 +71,9 @@ async def test_consumer_acks_after_successful_dispatch() -> None:
 
     # Stub run_dispatch so we don't need a real adapter / DB.
     adapter = AsyncMock()
-    with patch("openbot.queue.worker.run_dispatch", new=AsyncMock(return_value=None)):
+    with patch(
+        "openbot.infrastructure.queue.worker.run_dispatch", new=AsyncMock(return_value=None)
+    ):
         await _run_one_iteration(redis, adapter=adapter, session_factory=None)
 
     # Stream still has the entry (XACK doesn't delete) but PEL is empty.
@@ -92,7 +94,9 @@ async def test_consumer_skips_unrouted_payload() -> None:
     await redis.xadd(STREAM_NAME, {"json": tampered})
 
     adapter = AsyncMock()
-    with patch("openbot.queue.worker.run_dispatch", new=AsyncMock()) as mock_dispatch:
+    with patch(
+        "openbot.infrastructure.queue.worker.run_dispatch", new=AsyncMock()
+    ) as mock_dispatch:
         await _run_one_iteration(redis, adapter=adapter, session_factory=None)
 
     mock_dispatch.assert_not_called()  # never reached the handler
@@ -125,7 +129,9 @@ async def test_retry_counter_incremented_per_attempt() -> None:
     await enqueue(redis, _payload())
 
     adapter = AsyncMock()
-    with patch("openbot.queue.worker.run_dispatch", new=AsyncMock(return_value=None)):
+    with patch(
+        "openbot.infrastructure.queue.worker.run_dispatch", new=AsyncMock(return_value=None)
+    ):
         await _run_one_iteration(redis, adapter=adapter, session_factory=None)
 
     # Find the entry's retry counter.

@@ -11,15 +11,15 @@ A developer writing one of these into a workflow / LLM module:
 
 Each of the above feeds raw user-controlled text directly into a
 prompt context, bypassing the HTML-escape + tagged-block wrapping
-provided by ``openbot.llm.sanitize.wrap_user_input``. The wrapper
+provided by ``openbot.infrastructure.llm.sanitize.wrap_user_input``. The wrapper
 exists so the model treats user content as data, not as instructions.
 
 Heuristic
 =========
 
 For every ``event.{comment_body|title|body}`` attribute access or
-``event.raw[...]`` subscript inside files under ``openbot/workflows/``
-or ``openbot/llm/``, we flag if it appears inside one of three
+``event.raw[...]`` subscript inside files under ``openbot/application/workflows/``
+or ``openbot/infrastructure/llm/``, we flag if it appears inside one of three
 "prompt-construction shapes":
 
   1. an f-string (``ast.JoinedStr``),
@@ -52,8 +52,11 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCAN_DIRS: tuple[Path, ...] = (
+    # Phase-1 restructure: real code moved to application/workflows/.
+    # Keep old path so any future files there are also scanned.
     _REPO_ROOT / "openbot" / "workflows",
-    _REPO_ROOT / "openbot" / "llm",
+    _REPO_ROOT / "openbot" / "application" / "workflows",
+    _REPO_ROOT / "openbot" / "infrastructure" / "llm",
 )
 
 # Fields on ``UnifiedEvent`` that carry user-controlled text (PRD §4.8
@@ -170,11 +173,12 @@ def test_scan_actually_runs_on_known_files() -> None:
     # must be in scope. If this set shrinks, the test is no longer
     # protecting what its docstring claims.
     must_include = {
-        "openbot/workflows/chat.py",
-        "openbot/workflows/triage.py",
-        "openbot/workflows/review.py",
-        "openbot/workflows/fix.py",
-        "openbot/llm/sanitize.py",
+        # Phase-1 restructure: real code moved to application/workflows/.
+        "openbot/application/workflows/chat.py",
+        "openbot/application/workflows/triage.py",
+        "openbot/application/workflows/review.py",
+        "openbot/application/workflows/fix.py",
+        "openbot/infrastructure/llm/sanitize.py",
     }
     missing = must_include - rel
     assert not missing, f"AST lint scan missed expected files: {missing}"

@@ -1,7 +1,7 @@
 """Inspect solver wrapping the durable `deepagents_baseline` review provider.
 
 PRD §4.1 reserves a future `openbot_prod` provider that will call
-`openbot.workflows.review.run(...)` once the production workflow exists. This
+`openbot.application.workflows.review.run(...)` once the production workflow exists. This
 module intentionally keeps the deepagents path as a long-lived comparator so
 future evals can show where OpenBot itself beats a credible baseline.
 

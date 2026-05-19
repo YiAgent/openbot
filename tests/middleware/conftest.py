@@ -12,12 +12,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openbot.config_repo import baked_in_defaults
-from openbot.events import EventKind, UnifiedEvent
-from openbot.llm.router import Feature
-from openbot.middleware import PreflightContext
-from openbot.router import Dispatch, derive_task_id
-from openbot.workflows import maybe_run_chat, maybe_run_triage
+from openbot.application.middleware import PreflightContext
+from openbot.application.router import Dispatch, derive_task_id
+from openbot.application.workflows import maybe_run_chat, maybe_run_triage
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.config_loader import baked_in_defaults
+from openbot.infrastructure.llm.model_router import Feature
 
 
 def make_event(

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import fakeredis.aioredis
 
-from openbot.events import EventKind, UnifiedEvent
-from openbot.llm.router import Feature
-from openbot.queue import QueuePayload, deserialize_payload, enqueue
-from openbot.queue.payload import STREAM_NAME
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.llm.model_router import Feature
+from openbot.infrastructure.queue import QueuePayload, deserialize_payload, enqueue
+from openbot.infrastructure.queue.payload import STREAM_NAME
 
 
 def _payload() -> QueuePayload:
@@ -50,7 +50,7 @@ async def test_enqueued_payload_round_trips() -> None:
 
 async def test_enqueue_bounded_by_maxlen() -> None:
     """MAXLEN ~ N keeps Redis from OOMing under a stuck worker."""
-    from openbot.queue.payload import MAX_STREAM_LEN
+    from openbot.infrastructure.queue.payload import MAX_STREAM_LEN
 
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     # We can't realistically push 10_001 in a unit test, but we CAN

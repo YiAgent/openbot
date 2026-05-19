@@ -5,15 +5,38 @@ OpenBot v0.1 在 Heroku 上的部署形状：
 | 进程  | Dyno   | 价格    | 行为                                                |
 |------|--------|--------|----------------------------------------------------|
 | web   | Basic  | $7/mo  | 永不休眠，HMAC 验签 → Redis dedup → 入队 → 返回 202 |
-| worker| Eco    | $5/mo  | `python -m openbot.queue.runner`，消费 Stream      |
+| worker| Eco    | $5/mo  | `python -m openbot.entrypoints.worker`，消费 Stream      |
 
 外部依赖（不走 Heroku addons）：
 
 - **Postgres**：Neon（`sslmode=require`，asyncpg 驱动）
-- **Redis**：Upstash（`rediss://`）
+- **Redis**：Redis Cloud Addon（`redis://`）
 - **Sandbox**：Daytona（`OPENBOT_SANDBOX_BACKEND=daytona`）
 
 LLM provider key、LangSmith key 等通用密钥由 `scripts/doppler-bootstrap-shared.sh` 从 `infra/prd` 同步过来，已在 `openbot/prd` 里。
+
+---
+
+## 监控与日志
+
+OpenBot 预置了以下监控工具：
+
+| 工具 | 用途 | 查看方式 |
+|------|------|----------|
+| **Papertrail** | 实时日志流 & 搜索 | `heroku addons:open papertrail` |
+| **Better Stack** | Uptime 监控 | `heroku addons:open betteruptime` |
+| **Sentry** | 异常上报 | `heroku addons:open sentry` |
+
+### Papertrail 使用建议
+
+Papertrail 默认会接收所有 Heroku logs。你可以通过以下命令在 CLI 查看：
+```bash
+heroku logs --tail -a openbot
+```
+或者打开 Web UI 进行搜索和过滤：
+```bash
+heroku addons:open papertrail
+```
 
 ---
 
@@ -34,7 +57,7 @@ bash scripts/heroku-doppler-bootstrap.sh
 1. 旧 key 重命名：
    - `POSTGRES_URL` → `OPENBOT_POSTGRES_URL`
    - `REDIS_URL` → `OPENBOT_REDIS_URL`
-   - `OPENBOT_GITHUB_APP_PRIVATE_KEY_BASE64` → `OPENBOT_GITHUB_APP_PRIVATE_KEY_PEM`（新方案，配合 `openbot/config.py` 的 `github_app_private_key_pem`）
+   - `OPENBOT_GITHUB_APP_PRIVATE_KEY_BASE64` → `OPENBOT_GITHUB_APP_PRIVATE_KEY_PEM`（新方案，配合 `openbot.core.settings.py` 的 `github_app_private_key_pem`）
 2. 常量写入：`OPENBOT_SANDBOX_BACKEND=daytona` / `PYTHONUNBUFFERED=1` / `OPENBOT_WORKER_CONCURRENCY=4`
 3. 扫描空值并打印仍缺什么
 
