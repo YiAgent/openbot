@@ -11,7 +11,7 @@ from openbot.application.middleware import MiddlewareResult
 from openbot.application.middleware.rate_limit import RateLimitMiddleware
 from openbot.domain.events import EventKind
 from openbot.infrastructure.llm.model_router import Feature
-from tests.middleware.conftest import make_ctx, make_event
+from tests.application.middleware.conftest import make_ctx, make_event
 
 
 def _chat_event(*, comment_body: str = "@openbot help", actor: str = "alice") -> object:

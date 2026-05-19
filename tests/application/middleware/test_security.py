@@ -14,7 +14,7 @@ from openbot.application.middleware.security import (
 )
 from openbot.domain.events import EventKind
 from openbot.infrastructure.llm.model_router import Feature
-from tests.middleware.conftest import make_ctx, make_event
+from tests.application.middleware.conftest import make_ctx, make_event
 
 
 def _adapter_with_role(role: str = "none") -> AsyncMock:

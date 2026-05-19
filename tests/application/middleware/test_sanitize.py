@@ -13,7 +13,7 @@ from openbot.application.middleware.sanitize import (
 )
 from openbot.domain.events import EventKind
 from openbot.infrastructure.persistence.models import WorkflowPhase
-from tests.middleware.conftest import make_ctx, make_event
+from tests.application.middleware.conftest import make_ctx, make_event
 
 # ───── invisible-byte stripping ─────
 
