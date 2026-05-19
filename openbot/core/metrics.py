@@ -97,7 +97,7 @@ try:
 
         def inc(self, amount: float = 1) -> None:
             _workflow_total.labels(**self._kwargs).inc(amount)
-            from openbot.infrastructure.metrics import metrics
+            from openbot.core.sentry_metrics import metrics
 
             metrics.incr("workflow_total", amount, tags=self._kwargs)
 
@@ -108,14 +108,14 @@ try:
 
         def inc(self, amount: float = 1) -> None:
             _llm_cost_usd_total.labels(**self._kwargs).inc(amount)
-            from openbot.infrastructure.metrics import metrics
+            from openbot.core.sentry_metrics import metrics
 
             metrics.incr("llm_cost_usd", amount, tags=self._kwargs)
 
     class QueueGauge:
         def set(self, value: float) -> None:
             _queue_depth.set(value)
-            from openbot.infrastructure.metrics import metrics
+            from openbot.core.sentry_metrics import metrics
 
             metrics.gauge("queue_depth", value)
 
@@ -131,7 +131,7 @@ try:
 
 except ImportError:
     _logger.warning("prometheus_client_not_installed_metrics_disabled")
-    from openbot.infrastructure.metrics import metrics
+    from openbot.core.sentry_metrics import metrics
 
     class SentryOnlyWorkflowCounter:
         def labels(self, **kwargs: Any) -> SentryOnlyWorkflowCounter:

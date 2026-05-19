@@ -16,8 +16,8 @@ ignore_imports =
     # AuditLogRepo: concrete fallback when AuditLogPort not injected (composition root exception)
     openbot.application.middleware.audit -> openbot.infrastructure.persistence.repository
     openbot.application.middleware.preflight -> openbot.infrastructure.persistence.repository
-    openbot.application.workflows._lifecycle -> openbot.infrastructure.persistence.repository
-    openbot.application.handlers.debug_echo -> openbot.infrastructure.persistence.repository
+    openbot.application.use_cases._lifecycle -> openbot.infrastructure.persistence.repository
+    openbot.application.use_cases.debug_echo -> openbot.infrastructure.persistence.repository
 
     # CostMeterRepo: concrete fallback for budget enforcement
     openbot.application.middleware.budget -> openbot.infrastructure.persistence.repository

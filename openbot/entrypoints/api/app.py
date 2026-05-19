@@ -240,7 +240,7 @@ async def log_http_request(
         },
     )
     # Record Sentry metrics for high-level visibility without Prometheus
-    from openbot.infrastructure.metrics import metrics
+    from openbot.core.sentry_metrics import metrics
 
     metrics.incr(
         "http.request.count",
