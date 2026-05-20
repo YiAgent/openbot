@@ -192,6 +192,7 @@ async def test_pr_event_gets_incremental_fields() -> None:
     # With last_reviewed_sha=None (v0.1 default) → first review, not incremental
     assert len(queue.task_specs) == 1
     spec = queue.task_specs[0]
+    assert spec.is_incremental is False
     assert spec.is_force_push is False
 
 
