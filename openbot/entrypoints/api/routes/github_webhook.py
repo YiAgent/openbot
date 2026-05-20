@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 
-from openbot.application.dispatcher import run_dispatch
 from openbot.application.use_cases.ingest_webhook import ingest_webhook
+from openbot.dispatcher import decide_and_enqueue
 from openbot.entrypoints.api.deps import verified_github_event
 from openbot.infrastructure.adapters.github import GitHubAdapter
 
@@ -66,7 +66,7 @@ async def github_webhook(
     if result.background_dispatch is not None:
         bd = result.background_dispatch
         background.add_task(
-            _run_dispatch,
+            _decide_and_enqueue_bg,
             request.app,
             adapter,
             bd.event,
@@ -78,7 +78,7 @@ async def github_webhook(
     return result.to_response()
 
 
-async def _run_dispatch(
+async def _decide_and_enqueue_bg(
     app_instance: object,
     adapter: GitHubAdapter,
     event: UnifiedEvent,
@@ -86,25 +86,21 @@ async def _run_dispatch(
     check_run_id: int | None = None,
     audit: object | None = None,
 ) -> None:
-    """In-process dispatch — used as the fallback when Redis is absent.
+    """Webhook async segment — runs preflight then enqueues TaskSpec v3.
 
-    Production runs through the Redis queue worker (``openbot.infrastructure.queue.runner``)
-    instead; this path exists so `make dev` without docker-compose still
-    delivers a working bot and so unit tests don't need fakeredis just
-    to exercise the webhook flow.
-
-    The actual middleware chain + handler invocation lives in
-    ``openbot.application.dispatcher.run_dispatch`` so the worker and the webapp can't
-    drift apart.
+    Falls back to in-process execution when Redis is absent (dev / CI).
+    Production: preflight runs here, handler runs in the queue worker.
     """
-    await run_dispatch(
+    state = app_instance.state
+    await decide_and_enqueue(
         adapter=adapter,
         event=event,
         dispatch=dispatch,
-        session_factory=getattr(app_instance.state, "db_session_factory", None),
-        redis=getattr(app_instance.state, "redis", None),
+        config_loader=getattr(state, "config_loader", None),
+        queue=getattr(state, "queue", None),
+        session_factory=getattr(state, "db_session_factory", None),
+        redis=getattr(state, "redis", None),
         check_run_id=check_run_id,
         audit=audit,
-        rate_limiter=getattr(app_instance.state, "rate_limiter", None),
-        config_loader=getattr(app_instance.state, "config_loader", None),
+        rate_limiter=getattr(state, "rate_limiter", None),
     )

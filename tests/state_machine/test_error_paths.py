@@ -3,11 +3,11 @@
 Plan IDs reference ``docs/plans/webhook-worker-test-plan.md``.
 
 I-32 note: when ``enqueue`` raises, the webapp falls through to
-``BackgroundTasks.add_task(_run_dispatch, ...)``. With ``ASGITransport``,
+``BackgroundTasks.add_task(_decide_and_enqueue_bg, ...)``. With ``ASGITransport``,
 background tasks ARE executed (Starlette runs them as part of the response
-lifecycle). We patch ``openbot.entrypoints.api.app.run_dispatch`` to a no-op so no real
-GitHub API or LLM calls occur — we only assert the HTTP layer degrades
-gracefully.
+lifecycle). We patch ``openbot.entrypoints.api.routes.github_webhook.decide_and_enqueue``
+to a no-op so no real GitHub API or LLM calls occur — we only assert the HTTP
+layer degrades gracefully.
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ async def test_redis_enqueue_failure_graceful(
 
     monkeypatch.setattr(_app.state.queue, "enqueue", _raise_on_enqueue)
     monkeypatch.setattr(
-        "openbot.entrypoints.api.routes.github_webhook.run_dispatch", _noop_dispatch
+        "openbot.entrypoints.api.routes.github_webhook.decide_and_enqueue", _noop_dispatch
     )
 
     body = issue_body("opened", number=42)
