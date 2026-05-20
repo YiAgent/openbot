@@ -1,4 +1,5 @@
-"""FakeQueue — in-memory QueuePort. Each enqueue() returns a monotonic id."""
+# tests/_fakes/queue.py
+"""FakeQueue — in-memory QueuePort."""
 
 from __future__ import annotations
 
@@ -8,11 +9,13 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from openbot.domain.events import UnifiedEvent
     from openbot.domain.workflows import Feature
+    from openbot.infrastructure.queue.task_spec import TaskSpec
 
 
 @dataclass
 class FakeQueue:
     calls: list[dict[str, Any]] = field(default_factory=list)
+    task_specs: list[Any] = field(default_factory=list)  # list[TaskSpec]
     next_id: int = 0
 
     async def enqueue(
@@ -41,6 +44,12 @@ class FakeQueue:
                 "event_seq": event_seq,
             }
         )
+        sid = f"0-{self.next_id}"
+        self.next_id += 1
+        return sid
+
+    async def enqueue_task_spec(self, spec: TaskSpec) -> str:
+        self.task_specs.append(spec)
         sid = f"0-{self.next_id}"
         self.next_id += 1
         return sid

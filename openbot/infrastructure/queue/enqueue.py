@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
     from openbot.domain.events import UnifiedEvent
     from openbot.domain.workflows import Feature
+    from openbot.infrastructure.queue.task_spec import TaskSpec
 
 _logger = logging.getLogger(__name__)
 
@@ -59,6 +60,33 @@ async def enqueue(redis: redis_async.Redis, payload: QueuePayload) -> str:
             "repo": payload.repo,
             "feature": payload.feature,
             "task_id": payload.task_id,
+            "entry_id": entry_id,
+        },
+    )
+    return entry_id
+
+
+async def enqueue_task_spec(redis: redis_async.Redis, spec: TaskSpec) -> str:
+    """XADD a TaskSpec v3 JSON blob to the work stream.
+
+    Uses the same {"json": <blob>} field layout as QueuePayload.
+    The worker discriminates by peeking at spec_version before deserializing.
+    """
+    entry_id = await redis.xadd(
+        STREAM_NAME,
+        {"json": spec.to_json()},
+        maxlen=MAX_STREAM_LEN,
+        approximate=True,
+    )
+    if isinstance(entry_id, (bytes, bytearray)):
+        entry_id = entry_id.decode("ascii", errors="replace")
+    _logger.info(
+        "task_spec_enqueued",
+        extra={
+            "delivery_id": spec.delivery_id,
+            "repo": spec.repo,
+            "scenario": spec.scenario,
+            "task_id": spec.task_id,
             "entry_id": entry_id,
         },
     )
@@ -97,6 +125,12 @@ class RedisStreamQueue:
             event_seq=event_seq,
         )
         return await enqueue(self._redis, payload)
+
+    async def enqueue_task_spec(self, spec: object) -> str:
+        from openbot.infrastructure.queue.task_spec import TaskSpec as _T
+
+        assert isinstance(spec, _T)
+        return await enqueue_task_spec(self._redis, spec)
 
 
 if TYPE_CHECKING:
