@@ -7,6 +7,7 @@ Determines whether a PR synchronize event can be reviewed incrementally
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +30,7 @@ class DiffScope:
 
 
 def compute_diff_scope(
-    raw: dict[str, object],
+    raw: dict[str, Any],
     *,
     last_reviewed_sha: str | None,
 ) -> DiffScope:
@@ -67,7 +68,7 @@ def compute_diff_scope(
             last_reviewed_sha=None,
         )
 
-    before_sha = raw.get("before") if isinstance(raw, dict) else None
+    before_sha = raw.get("before")
 
     if before_sha != last_reviewed_sha:
         # 'before' absent or mismatched → force push; history may be rewritten.
