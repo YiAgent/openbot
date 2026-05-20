@@ -1,8 +1,28 @@
 # Webhook-Worker 测试计划
 
-> **状态**: Draft — v0.1 设计阶段  
-> **范围**: `openbot/` webhook 入口 → Redis dispatch → worker workflow  
-> **依赖文档**: `docs/prd/openbot-prd.md` §3, §4, §8; `openbot.application.dispatcher.py` middleware chain
+> **状态**: Archived — Phase 1 完成（2026-05-20）；Phase 2 部分完成；Phase 3 显式推后到 v0.2。
+> **归档原因**: Phase 1 MVP 已落地（733 tests passing），测试 ID 映射保留在测试文件 docstring 中（见下方"实测落地"）。剩余 Phase 2/3 在 v0.2 评审时重启。
+> **范围**: `openbot/` webhook 入口 → Redis dispatch → worker workflow
+> **依赖文档**: `docs/prd/openbot-prd.md` §3, §4, §8; `openbot/application/dispatcher.py` middleware chain
+
+## 实测落地（Phase 1 / v0.1 MVP）
+
+| 测试 ID | 落地文件 |
+|---|---|
+| I-01, I-02, I-03, I-05x2, I-09, I-11, I-23, M-31 | `tests/state_machine/test_issue_lifecycle.py` |
+| P-01, P-02x2, P-03, P-05 | `tests/state_machine/test_pr_lifecycle.py` |
+| I-30, I-31x2, I-32, X-01 | `tests/state_machine/test_error_paths.py` |
+| I-24 Redis 写顺序、I-20 supersede、I-33 worker 恢复 | `tests/integration/{test_redis_ordering,test_concurrent_supersede,test_worker_recovery}.py` |
+| P-20..P-23 fork-PR 安全门 | `tests/application/middleware/test_security.py`（13 cases；plan-ID map 见该文件 docstring） |
+| 取消/超时/budget 边界 | `tests/state/test_cancellation.py`、`tests/application/middleware/test_budget.py` |
+
+## 未落地（v0.2 评审时重启）
+
+- **Phase 2 剩余**: I-21（worker 中途 supersede 优雅退出）、I-25/26（pickup-check + cancel-check 时序）、P-52..P-57（多 commit 细节、force-push、base 更新）、M-20..M-23（chat stream 隔离）、X-02 budget cap / X-04 stream TTL。
+- **Phase 3（v0.2）**: 增量 review（P-60..P-64）、fix workflow 细节（P-10..P-13）、评论反馈循环（M-40..M-43）、dashboard/LangSmith/token-cache 观测（X-05..X-07）。
+- 当前路由 `dispatch_for` 不路由 ISSUE_CLOSED / PR_CLOSED / PR_MERGED → I-04 / P-04 取消路径需先扩展路由。
+
+---
 
 ---
 

@@ -1,4 +1,23 @@
-"""Security middlewares — Fork PR gate + Actor role gate."""
+"""Security middlewares — Fork PR gate + Actor role gate.
+
+Plan-ID coverage map (``docs/_archive/webhook-worker/webhook-worker-test-plan.md`` Phase 1):
+
+  P-20  Fork PR triggers review → only static analysis (no sandbox).
+        ``test_fork_pr_blocks_without_ok_to_test`` — the gate is what
+        stops sandbox-bound work; review then runs against payload diff.
+
+  P-21  Fork PR triggers fix → entrance rejected.
+        ``test_fork_pr_skips_non_review_features`` — only REVIEW is the
+        gated PR-event feature here, and FIX in the v0.1 router is
+        routed only from ISSUE_ASSIGNED, which a fork PR never produces.
+
+  P-22  Fork PR @mention → routes through chat, not fix.
+        ``test_fork_pr_skips_non_review_features`` + the chat workflow's
+        own tool-allowlist (sandbox/git-write excluded).
+
+  P-23  Fork PR sandbox env vars — sandbox isn't wired in v0.1; ADR
+        defers to v0.2. The gate above is the primary defense.
+"""
 
 from __future__ import annotations
 

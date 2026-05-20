@@ -1,9 +1,13 @@
 # OpenBot · Slice E — Input-Side Completeness
 
-> Status: **Draft · 1.0** · 起草日期：2026-05-17
-> 上游：[`../prd/openbot-harness-spec.md`](../prd/openbot-harness-spec.md)（slice A–D 已 land）
-> 配套：[`../prd/openbot-prd.md`](../prd/openbot-prd.md) §4 / §5 / §8.4 / §13
-> 目标：**关闭 spec slice A–D 之后剩下的 input-side gap**，让"agent 输入之前"完全收口；不引入新业务面。
+> Status: **Archived — 已完成（2026-05-20）**
+> 实现 commit: `5b34158 feat(middleware): input-side G1-G4 (sanitize/audit/feature_toggle, dispatch chain order)`
+> 验证: `build_preflight_chain()` 输出与 spec §3 M3 + §5 amendments 一致：
+> `sanitize_inputs → kill_switch → feature_toggle → cancel_label → cancel_comment → fork_pr_gate → actor_role → rate_limit → budget → audit_start`
+> 起草日期：2026-05-17
+> 上游：[`../../prd/openbot-harness-spec.md`](../../prd/openbot-harness-spec.md)（slice A–D 已 land）
+> 配套：[`../../prd/openbot-prd.md`](../../prd/openbot-prd.md) §4 / §5 / §8.4 / §13
+> 目标（原）：**关闭 spec slice A–D 之后剩下的 input-side gap**，让"agent 输入之前"完全收口；不引入新业务面。
 
 ---
 
