@@ -81,7 +81,7 @@ async def test_worker_routes_v3_to_execute_handler(monkeypatch) -> None:
     await redis.xadd(STREAM_NAME, {"json": spec.to_json()})
 
     shutdown = asyncio.Event()
-    asyncio.get_event_loop().call_later(0.15, shutdown.set)
+    asyncio.get_running_loop().call_later(0.15, shutdown.set)
     await consume_loop(
         redis=redis,
         adapter=AsyncMock(),
@@ -121,7 +121,7 @@ async def test_worker_v3_cancel_openbot_quick_exit(monkeypatch) -> None:
     await redis.xadd(STREAM_NAME, {"json": spec.to_json()})
 
     shutdown = asyncio.Event()
-    asyncio.get_event_loop().call_later(0.15, shutdown.set)
+    asyncio.get_running_loop().call_later(0.15, shutdown.set)
     await consume_loop(
         redis=redis,
         adapter=AsyncMock(),
@@ -166,7 +166,7 @@ async def test_worker_legacy_v2_payload_still_works(monkeypatch) -> None:
     await redis.xadd(STREAM_NAME, {"json": payload.to_json()})
 
     shutdown = asyncio.Event()
-    asyncio.get_event_loop().call_later(0.15, shutdown.set)
+    asyncio.get_running_loop().call_later(0.15, shutdown.set)
     await consume_loop(
         redis=redis,
         adapter=AsyncMock(),

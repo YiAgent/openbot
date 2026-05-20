@@ -167,7 +167,9 @@ async def _execute_task_spec(
         await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
         return
 
-    # Carry state-machine fields from the spec into Dispatch.
+    # Carry state-machine fields forward only for non-start intents.
+    # "start" entries need no upgrade; v2 path differs because QueuePayload.intent
+    # is nullable (None serves as the start sentinel there).
     if spec.resource_key is not None and spec.intent not in (None, "start"):
         new_dispatch = upgrade_dispatch(
             new_dispatch,
@@ -204,6 +206,7 @@ async def _execute_task_spec(
             )
             if attempts >= _MAX_ATTEMPTS:
                 await _ack_and_dlq(redis, entry_id, reason="max_attempts_v3")
+            # Don't XACK — let the next reclaim cycle pick it up.
             return
     finally:
         cancellation_deregister(active_run_id)
