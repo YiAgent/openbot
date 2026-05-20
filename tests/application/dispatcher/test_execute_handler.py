@@ -11,7 +11,7 @@ from tests.application.middleware.conftest import make_event
 
 
 @pytest.mark.asyncio
-async def test_execute_handler_calls_handler(monkeypatch) -> None:
+async def test_execute_handler_calls_handler() -> None:
     event = make_event()
     from openbot.application.router import dispatch_for
 
@@ -48,7 +48,7 @@ async def test_execute_handler_never_raises() -> None:
     assert dispatch is not None
     config = await FakeConfigLoader().load_for_repo(None, event)
 
-    async def crashing(ctx) -> None:
+    async def crashing(_ctx) -> None:
         raise RuntimeError("boom")
 
     from dataclasses import replace
