@@ -86,6 +86,20 @@ def test_fix_with_none_returns_empty() -> None:
     assert stages_from_classifier(Feature.FIX, None) == []
 
 
+def test_fix_with_output_returns_full_pipeline() -> None:
+    """FIX with any output (shouldn't happen in practice) → full pipeline."""
+    # classify_event always returns None for FIX, but stages_from_classifier
+    # can be called directly — verify the FIX branch returns the full pipeline.
+    out = TriageClassifierOutput(
+        type="bug",
+        severity_guess="high",
+        has_reproduction_info=False,
+        looks_like_spam=False,
+    )
+    # FIX branch doesn't use the output type, so any non-None works
+    assert stages_from_classifier(Feature.FIX, out) == ["plan", "read", "patch", "test", "self_fix"]
+
+
 # ── classify_event — I/O mocked ───────────────────────────────────────────
 
 

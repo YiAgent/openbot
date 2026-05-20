@@ -12,7 +12,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from openbot.domain.workflows import Feature
 
@@ -52,6 +52,8 @@ ClassifierOutput = TriageClassifierOutput | ReviewClassifierOutput | ChatClassif
 
 def _cache_key(feature: Feature, body: str) -> str:
     digest = hashlib.sha256(
+        # Truncate to 2000 chars: classification is dominated by the preamble;
+        # long bodies with identical first 2000 chars share a cache key intentionally.
         f"{feature.value}|{body[:2000]}|{_CLASSIFIER_VERSION}".encode()
     ).hexdigest()[:32]
     return f"openbot:classifier:{feature.value}:{digest}"
@@ -154,6 +156,7 @@ async def classify_event(
                 pass  # corrupt cache entry; fall through to LLM
 
     try:
+        # Deferred import: fail-open if litellm is not installed.
         import litellm
 
         response = await litellm.acompletion(
@@ -188,19 +191,19 @@ def stages_from_classifier(
         return []
 
     if feature is Feature.TRIAGE:
-        assert isinstance(output, TriageClassifierOutput)
+        triage = cast(TriageClassifierOutput, output)
         stages = ["classify_labels", "summarize"]
-        if output.has_reproduction_info and output.type == "bug":
+        if triage.has_reproduction_info and triage.type == "bug":
             stages.insert(1, "reproduce")
         return stages
 
     if feature is Feature.REVIEW:
-        assert isinstance(output, ReviewClassifierOutput)
-        return list(output.suggested_subagents) if output.suggested_subagents else ["correctness"]
+        review = cast(ReviewClassifierOutput, output)
+        return list(review.suggested_subagents) if review.suggested_subagents else ["correctness"]
 
     if feature is Feature.CHAT:
-        assert isinstance(output, ChatClassifierOutput)
-        return ["readonly_qa"] if output.intent == "readonly_qa" else []
+        chat = cast(ChatClassifierOutput, output)
+        return ["readonly_qa"] if chat.intent == "readonly_qa" else []
 
     if feature is Feature.FIX:
         return ["plan", "read", "patch", "test", "self_fix"]
