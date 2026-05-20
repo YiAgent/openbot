@@ -11,17 +11,21 @@ Never raises out — callers (BackgroundTask, tests) expect fire-and-forget.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
+from dataclasses import asdict as _dataclass_asdict
 from typing import TYPE_CHECKING
 
 from openbot.application.dispatcher import build_preflight_chain, execute_handler
 from openbot.application.middleware import MiddlewareResult, PreflightContext, run_preflight
+from openbot.dispatcher.classifier import classify_event, stages_from_classifier
 from openbot.dispatcher.context import extract_event_context
 from openbot.dispatcher.direct_actions import (
     check_issue_completeness,
     check_mention_clarity,
     check_pr_size,
 )
+from openbot.dispatcher.incremental import compute_diff_scope
 from openbot.domain.workflows import Feature
 from openbot.infrastructure.queue.task_spec import TaskSpec
 
@@ -142,6 +146,24 @@ async def decide_and_enqueue(
 
         initial_labels = _extract_initial_labels(event.raw)
 
+        # D13: Classify event (D10) and compute incremental scope for PRs.
+        _body = (
+            event.comment_body
+            or (event.raw.get("issue") or {}).get("body")
+            or (event.raw.get("pull_request") or {}).get("body")
+            or ""
+        )
+        classifier_result = await classify_event(
+            feature=dispatch.feature,
+            body=_body,
+            redis=redis,
+        )
+        classifier_output = (
+            _dataclass_asdict(classifier_result) if classifier_result is not None else None
+        )
+        stages = stages_from_classifier(dispatch.feature, classifier_result)
+        diff_scope = compute_diff_scope(event.raw, last_reviewed_sha=None)
+
         if queue is not None:
             spec = TaskSpec.from_event_and_dispatch(
                 event,
@@ -149,7 +171,11 @@ async def decide_and_enqueue(
                 check_run_id=check_run_id,
                 decision_trace=[],
                 initial_labels=initial_labels,
+                classifier_output=classifier_output,
+                is_incremental=diff_scope.is_incremental,
+                is_force_push=diff_scope.is_force_push,
             )
+            spec = dataclasses.replace(spec, stages_to_run=stages)
             await queue.enqueue_task_spec(spec)
             _logger.info(
                 "decide_and_enqueue_queued",
@@ -158,6 +184,9 @@ async def decide_and_enqueue(
                     "repo": event.repo,
                     "scenario": spec.scenario,
                     "task_id": spec.task_id,
+                    "classifier_skipped": spec.classifier_skipped,
+                    "stages_to_run": spec.stages_to_run,
+                    "is_incremental": spec.is_incremental,
                 },
             )
         else:
