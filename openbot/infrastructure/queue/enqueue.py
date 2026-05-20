@@ -126,10 +126,8 @@ class RedisStreamQueue:
         )
         return await enqueue(self._redis, payload)
 
-    async def enqueue_task_spec(self, spec: object) -> str:
-        from openbot.infrastructure.queue.task_spec import TaskSpec as _T
-
-        assert isinstance(spec, _T)
+    async def enqueue_task_spec(self, spec: TaskSpec) -> str:
+        """Enqueue a pre-built TaskSpec v3."""
         return await enqueue_task_spec(self._redis, spec)
 
 
