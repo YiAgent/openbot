@@ -211,6 +211,23 @@ async def _execute_task_spec(
     finally:
         cancellation_deregister(active_run_id)
 
+    # W9: For completed PR review runs, persist the head SHA so future
+    # PR_SYNCHRONIZED events can compute DiffScope.is_incremental correctly.
+    if spec.scenario == "review" and session_factory is not None and spec.resource_key is not None:
+        head_sha = ((spec.raw.get("pull_request") or {}).get("head") or {}).get("sha")
+        if head_sha:
+            from openbot.application.state.runs_repo import store_reviewed_sha
+            from openbot.infrastructure.persistence.db import session_scope
+
+            try:
+                async with session_scope(session_factory) as _session:
+                    await store_reviewed_sha(_session, spec.resource_key, str(head_sha))
+            except Exception:
+                _logger.exception(
+                    "queue_v3_store_reviewed_sha_failed",
+                    extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
+                )
+
     await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
     _logger.info(
         "queue_v3_entry_dispatched",

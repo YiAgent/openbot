@@ -162,7 +162,25 @@ async def decide_and_enqueue(
             _dataclass_asdict(classifier_result) if classifier_result is not None else None
         )
         stages = stages_from_classifier(dispatch.feature, classifier_result)
-        diff_scope = compute_diff_scope(event.raw, last_reviewed_sha=None)
+
+        # D13b: For PR review events, fetch the SHA from the last completed
+        # review so DiffScope can decide if this push is incremental.
+        # Use event.resource_key (always computed from channel:repo:pr:N)
+        # rather than dispatch.resource_key (only populated by the state-
+        # machine receive path, None in unit tests and dev mode).
+        last_reviewed_sha: str | None = None
+        if (
+            dispatch.feature is Feature.REVIEW
+            and session_factory is not None
+            and event.resource_key is not None
+        ):
+            from openbot.application.state.runs_repo import get_last_reviewed_sha
+            from openbot.infrastructure.persistence.db import session_scope
+
+            async with session_scope(session_factory) as _session:
+                last_reviewed_sha = await get_last_reviewed_sha(_session, event.resource_key)
+
+        diff_scope = compute_diff_scope(event.raw, last_reviewed_sha=last_reviewed_sha)
 
         if queue is not None:
             spec = TaskSpec.from_event_and_dispatch(

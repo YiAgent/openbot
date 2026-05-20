@@ -1,4 +1,4 @@
-"""``runs_repo.transition`` against in-memory SQLite.
+"""``runs_repo.transition`` + ``last_reviewed_sha`` helpers against in-memory SQLite.
 
 Coverage:
 
@@ -10,6 +10,8 @@ Coverage:
   CAS retry recovers from.
 * ``IGNORE`` intents that advance ``last_event_seq`` still write (the
   high-water mark must move so a later stale delivery is rejected).
+* ``get_last_reviewed_sha`` returns None on missing row or unset column.
+* ``store_reviewed_sha`` writes SHA; subsequent get returns it.
 """
 
 from __future__ import annotations
@@ -19,7 +21,12 @@ from collections.abc import AsyncIterator
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from openbot.application.state.runs_repo import get_state, transition
+from openbot.application.state.runs_repo import (
+    get_last_reviewed_sha,
+    get_state,
+    store_reviewed_sha,
+    transition,
+)
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.intents import Intent, State
 from openbot.infrastructure.persistence import (
@@ -238,3 +245,86 @@ async def test_row_version_bumps_on_each_write(
     assert row is not None
     # Initial insert sets version=1; one update bumps it to 2.
     assert row.row_version == 2
+
+
+# ── last_reviewed_sha helpers ─────────────────────────────────────────────────
+
+
+async def test_get_last_reviewed_sha_returns_none_when_row_absent(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Missing resource_key → None (no DB row means no prior review)."""
+    async with factory() as session:
+        sha = await get_last_reviewed_sha(session, "github:acme/openbot:pr:99")
+    assert sha is None
+
+
+async def test_get_last_reviewed_sha_returns_none_before_first_review(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Row exists but last_reviewed_sha is still NULL (no review completed yet)."""
+    async with factory() as session:
+        await transition(session, event=_opened(event_seq=1_000), new_run_id="run-1")
+        await session.commit()
+
+    async with factory() as session:
+        sha = await get_last_reviewed_sha(session, "github:acme/openbot:pr:42")
+    assert sha is None
+
+
+async def test_store_and_get_last_reviewed_sha(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """store_reviewed_sha persists; get_last_reviewed_sha returns the stored value."""
+    resource_key = "github:acme/openbot:pr:42"
+
+    # Ensure the row exists first (transition creates it).
+    async with factory() as session:
+        await transition(session, event=_opened(event_seq=1_000), new_run_id="run-1")
+        await session.commit()
+
+    # Store the head SHA after a (simulated) review completion.
+    async with factory() as session:
+        await store_reviewed_sha(session, resource_key, "abc1234def5678")
+        await session.commit()
+
+    async with factory() as session:
+        sha = await get_last_reviewed_sha(session, resource_key)
+    assert sha == "abc1234def5678"
+
+
+async def test_store_reviewed_sha_noop_when_row_absent(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """store_reviewed_sha on a non-existent key is a silent no-op (no crash)."""
+    async with factory() as session:
+        # Should not raise even though the row does not exist.
+        await store_reviewed_sha(session, "github:no/such:pr:0", "sha-xyz")
+        await session.commit()
+
+    async with factory() as session:
+        sha = await get_last_reviewed_sha(session, "github:no/such:pr:0")
+    assert sha is None
+
+
+async def test_store_reviewed_sha_overwrites_previous(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Successive reviews overwrite the SHA (only the latest matters)."""
+    resource_key = "github:acme/openbot:pr:42"
+
+    async with factory() as session:
+        await transition(session, event=_opened(event_seq=1_000), new_run_id="run-1")
+        await session.commit()
+
+    async with factory() as session:
+        await store_reviewed_sha(session, resource_key, "first-sha")
+        await session.commit()
+
+    async with factory() as session:
+        await store_reviewed_sha(session, resource_key, "second-sha")
+        await session.commit()
+
+    async with factory() as session:
+        sha = await get_last_reviewed_sha(session, resource_key)
+    assert sha == "second-sha"
