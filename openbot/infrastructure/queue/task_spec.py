@@ -64,7 +64,7 @@ class TaskSpec:
     check_run_id: int | None
     # decision proof
     decision_trace: list[dict[str, Any]]
-    classifier_skipped: bool  # True in F1
+    classifier_skipped: bool  # True when classifier_output is None
     stages_to_run: list[str]  # [] = all stages (F1 default)
     # cancel quick-check
     initial_labels: list[str]  # label snapshot at spec-build time
