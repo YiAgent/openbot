@@ -65,10 +65,10 @@ class TaskSpec:
     # decision proof
     decision_trace: list[dict[str, Any]]
     classifier_skipped: bool  # True when classifier_output is None
-    stages_to_run: list[str]  # [] = all stages (F1 default)
+    stages_to_run: list[str]  # [] = run all stages
     # cancel quick-check
     initial_labels: list[str]  # label snapshot at spec-build time
-    # F3 fields — optional with defaults (backward-compat with old v3 JSON)
+    # Optional with defaults — backward-compat with older v3 JSON payloads.
     classifier_output: dict[str, Any] | None = None
     is_incremental: bool = False
     is_force_push: bool = False
@@ -110,6 +110,7 @@ class TaskSpec:
         decision_trace: list[dict[str, Any]] | None = None,
         initial_labels: list[str] | None = None,
         classifier_output: dict[str, Any] | None = None,
+        stages_to_run: list[str] | None = None,
         is_incremental: bool = False,
         is_force_push: bool = False,
     ) -> TaskSpec:
@@ -139,7 +140,7 @@ class TaskSpec:
             check_run_id=check_run_id,
             decision_trace=decision_trace or [],
             classifier_skipped=(classifier_output is None),
-            stages_to_run=[],
+            stages_to_run=stages_to_run or [],
             initial_labels=initial_labels or [],
             classifier_output=classifier_output,
             is_incremental=is_incremental,

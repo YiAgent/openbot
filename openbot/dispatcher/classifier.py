@@ -1,5 +1,5 @@
 # openbot/dispatcher/classifier.py
-"""D10 LLM classifier — one-shot claude-sonnet-4-6 with Redis TTL cache.
+"""One-shot LLM classifier — claude-sonnet-4-6 with Redis TTL cache.
 
 Fail-open: any exception returns None so callers set classifier_skipped=True.
 Uses litellm directly (not the complete() wrapper) — no DB session required.
@@ -12,7 +12,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from openbot.domain.workflows import Feature
 
@@ -20,21 +20,28 @@ if TYPE_CHECKING:
     import redis.asyncio as redis_async
 
 _logger = logging.getLogger(__name__)
-_CACHE_TTL: int = 3600  # seconds
-_CLASSIFIER_VERSION: str = "v1"
+_CACHE_TTL: Final[int] = 3600  # seconds
+_CLASSIFIER_VERSION: Final[str] = "v1"
+_LLM_TIMEOUT_S: Final[float] = 10.0
+_BODY_MAX_CHARS: Final[int] = 2000
+
+TriageType = Literal["bug", "feature", "question", "spam", "other"]
+SeverityGuess = Literal["critical", "high", "medium", "low"]
+ChangeSizeClass = Literal["xs", "s", "m", "l", "xl"]
+ChatIntent = Literal["readonly_qa", "draft_pr", "unclear", "out_of_scope"]
 
 
 @dataclass(frozen=True, slots=True)
 class TriageClassifierOutput:
-    type: str  # "bug" | "feature" | "question" | "spam" | "other"
-    severity_guess: str  # "critical" | "high" | "medium" | "low"
+    type: TriageType
+    severity_guess: SeverityGuess
     has_reproduction_info: bool
     looks_like_spam: bool
 
 
 @dataclass(frozen=True, slots=True)
 class ReviewClassifierOutput:
-    change_size_class: str  # "xs" | "s" | "m" | "l" | "xl"
+    change_size_class: ChangeSizeClass
     touches_security_paths: bool
     is_breaking: bool
     suggested_subagents: tuple[str, ...]  # subset of correctness/security/arch/docs/tests
@@ -42,7 +49,7 @@ class ReviewClassifierOutput:
 
 @dataclass(frozen=True, slots=True)
 class ChatClassifierOutput:
-    intent: str  # "readonly_qa" | "draft_pr" | "unclear" | "out_of_scope"
+    intent: ChatIntent
     needs_clarification: bool
     scope_hint: str | None
 
@@ -51,10 +58,10 @@ ClassifierOutput = TriageClassifierOutput | ReviewClassifierOutput | ChatClassif
 
 
 def _cache_key(feature: Feature, body: str) -> str:
+    # Truncate body: classification is dominated by the preamble; long bodies
+    # with identical leading chars share a cache key intentionally.
     digest = hashlib.sha256(
-        # Truncate to 2000 chars: classification is dominated by the preamble;
-        # long bodies with identical first 2000 chars share a cache key intentionally.
-        f"{feature.value}|{body[:2000]}|{_CLASSIFIER_VERSION}".encode()
+        f"{feature.value}|{body[:_BODY_MAX_CHARS]}|{_CLASSIFIER_VERSION}".encode()
     ).hexdigest()[:32]
     return f"openbot:classifier:{feature.value}:{digest}"
 
@@ -65,17 +72,27 @@ async def _get_cached(redis: redis_async.Redis, key: str) -> dict[str, Any] | No
         if value is not None:
             return json.loads(value)  # type: ignore[no-any-return]
     except Exception:
-        pass
+        _logger.warning("classifier_cache_get_failed", extra={"key": key}, exc_info=True)
     return None
 
 
 async def _set_cached(redis: redis_async.Redis, key: str, data: dict[str, Any]) -> None:
-    with contextlib.suppress(Exception):
+    try:
         await redis.setex(key, _CACHE_TTL, json.dumps(data, ensure_ascii=False))
+    except Exception:
+        _logger.warning("classifier_cache_set_failed", extra={"key": key}, exc_info=True)
+
+
+_TRIAGE_TYPES: Final[frozenset[str]] = frozenset(("bug", "feature", "question", "spam", "other"))
+_SEVERITY_VALUES: Final[frozenset[str]] = frozenset(("critical", "high", "medium", "low"))
+_CHANGE_SIZE_VALUES: Final[frozenset[str]] = frozenset(("xs", "s", "m", "l", "xl"))
+_CHAT_INTENTS: Final[frozenset[str]] = frozenset(
+    ("readonly_qa", "draft_pr", "unclear", "out_of_scope")
+)
 
 
 def _build_prompt(feature: Feature, body: str) -> str:
-    body = body[:2000]
+    body = body[:_BODY_MAX_CHARS]
     if feature is Feature.TRIAGE:
         return (
             "Classify this GitHub issue. Reply with valid JSON only, no markdown:\n"
@@ -106,9 +123,13 @@ def _build_prompt(feature: Feature, body: str) -> str:
 
 def _parse_output(feature: Feature, data: dict[str, Any]) -> ClassifierOutput:
     if feature is Feature.TRIAGE:
+        triage_type = data.get("type")
+        severity = data.get("severity_guess")
         return TriageClassifierOutput(
-            type=str(data.get("type", "other")),
-            severity_guess=str(data.get("severity_guess", "medium")),
+            type=cast("TriageType", triage_type) if triage_type in _TRIAGE_TYPES else "other",
+            severity_guess=(
+                cast("SeverityGuess", severity) if severity in _SEVERITY_VALUES else "medium"
+            ),
             has_reproduction_info=bool(data.get("has_reproduction_info", False)),
             looks_like_spam=bool(data.get("looks_like_spam", False)),
         )
@@ -117,16 +138,20 @@ def _parse_output(feature: Feature, data: dict[str, Any]) -> ClassifierOutput:
         agents: tuple[str, ...] = (
             tuple(str(s) for s in raw_agents) if isinstance(raw_agents, list) else ("correctness",)
         )
+        size = data.get("change_size_class")
         return ReviewClassifierOutput(
-            change_size_class=str(data.get("change_size_class", "m")),
+            change_size_class=(
+                cast("ChangeSizeClass", size) if size in _CHANGE_SIZE_VALUES else "m"
+            ),
             touches_security_paths=bool(data.get("touches_security_paths", False)),
             is_breaking=bool(data.get("is_breaking", False)),
             suggested_subagents=agents,
         )
     # Feature.CHAT
+    intent = data.get("intent")
     scope = data.get("scope_hint")
     return ChatClassifierOutput(
-        intent=str(data.get("intent", "unclear")),
+        intent=cast("ChatIntent", intent) if intent in _CHAT_INTENTS else "unclear",
         needs_clarification=bool(data.get("needs_clarification", True)),
         scope_hint=str(scope) if isinstance(scope, str) else None,
     )
@@ -153,7 +178,10 @@ async def classify_event(
             try:
                 return _parse_output(feature, cached)
             except Exception:
-                pass  # corrupt cache entry; fall through to LLM
+                # Corrupt cache entry; delete so a fresh result repopulates it.
+                _logger.warning("classifier_cache_corrupt", extra={"key": key}, exc_info=True)
+                with contextlib.suppress(Exception):
+                    await redis.delete(key)
 
     try:
         # Deferred import: fail-open if litellm is not installed.
@@ -164,6 +192,7 @@ async def classify_event(
             messages=[{"role": "user", "content": _build_prompt(feature, body)}],
             max_tokens=500,
             temperature=0,
+            timeout=_LLM_TIMEOUT_S,
         )
         content: str = response.choices[0].message.content or ""
         data: dict[str, Any] = json.loads(content.strip())
