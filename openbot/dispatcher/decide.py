@@ -16,6 +16,13 @@ from typing import TYPE_CHECKING
 
 from openbot.application.dispatcher import build_preflight_chain, execute_handler
 from openbot.application.middleware import MiddlewareResult, PreflightContext, run_preflight
+from openbot.dispatcher.context import extract_event_context
+from openbot.dispatcher.direct_actions import (
+    check_issue_completeness,
+    check_mention_clarity,
+    check_pr_size,
+)
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.queue.task_spec import TaskSpec
 
 if TYPE_CHECKING:
@@ -96,6 +103,41 @@ async def decide_and_enqueue(
         decision = await run_preflight(ctx, chain)
 
         if decision.result is not MiddlewareResult.PROCEED:
+            return
+
+        # D11: Extract structured context from raw payload (pure, no I/O).
+        ev_ctx = extract_event_context(event)
+        feature = dispatch.feature
+        direct_action = (
+            check_issue_completeness(ev_ctx)
+            if feature is Feature.TRIAGE
+            else check_pr_size(ev_ctx)
+            if feature is Feature.REVIEW
+            else check_mention_clarity(ev_ctx)
+            if feature is Feature.CHAT
+            else None
+        )
+
+        # D12: Short-circuit — reply and return without enqueuing.
+        if direct_action is not None:
+            try:
+                await adapter.reply(event, direct_action.message)
+                if direct_action.labels_to_add:
+                    await adapter.add_label(event, *direct_action.labels_to_add)
+            except Exception:
+                _logger.exception(
+                    "direct_action_reply_failed",
+                    extra={"delivery_id": event.delivery_id, "repo": event.repo},
+                )
+            _logger.info(
+                "decide_and_enqueue_direct_action",
+                extra={
+                    "delivery_id": event.delivery_id,
+                    "repo": event.repo,
+                    "feature": str(feature),
+                    "labels_added": direct_action.labels_to_add,
+                },
+            )
             return
 
         initial_labels = _extract_initial_labels(event.raw)
