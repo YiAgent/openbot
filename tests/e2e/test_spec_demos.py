@@ -1,6 +1,7 @@
 """Spec §7 demos — end-to-end acceptance tests.
 
-These nine tests cover docs/prd/openbot-harness-spec.md §7 demos 1-9.
+These nine tests cover docs/_archive/webhook-worker/openbot-harness-spec.md
+§7 demos 1-9 (spec archived 2026-05-20; all demos green).
 Each runs the full pre-flight chain + workflow handler against an
 in-memory stack (sqlite + fakeredis + RecordingGitHubAdapter) via the
 ``webhook_harness`` fixture in ``conftest.py``.
