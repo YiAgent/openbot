@@ -5,12 +5,17 @@ without the rest of the app needing to import ``sentry_sdk`` directly.
 
 Example::
 
-    from openbot.infrastructure.metrics import metrics
+    from openbot.core.sentry_metrics import metrics
 
     metrics.incr("workflow_started", tags={"type": "triage"})
+    metrics.distribution("llm_latency_ms", 340.0, unit="millisecond")
+    metrics.gauge("queue_depth", 7.0)
 
 If Sentry is not initialised (e.g. local dev without DSN), these calls
-become no-ops.
+become silent no-ops.
+
+Note: sentry_sdk ≥ 2.x dropped the ``set`` metric type from its public
+API. Use ``distribution()`` for approximate unique-count approximations.
 """
 
 from __future__ import annotations
@@ -64,23 +69,6 @@ class Metrics:
             from sentry_sdk import metrics
 
             metrics.gauge(key, value, unit=unit, attributes=tags or {})
-        except (ImportError, RuntimeError, AttributeError):
-            pass
-
-    def set(
-        self,
-        key: str,
-        value: Any,
-        unit: str = "none",
-        tags: dict[str, Any] | None = None,
-    ) -> None:
-        """Record a set (unique counts, e.g. user_id)."""
-        try:
-            from sentry_sdk import metrics
-
-            # If 'set' is not available, we skip it.
-            if hasattr(metrics, "set"):
-                metrics.set(key, value, unit=unit, attributes=tags or {})
         except (ImportError, RuntimeError, AttributeError):
             pass
 

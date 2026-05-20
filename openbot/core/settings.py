@@ -6,6 +6,8 @@ Secrets are wrapped in `SecretStr` so they never leak into logs or repr.
 
 from __future__ import annotations
 
+import ipaddress
+import urllib.parse
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -138,20 +140,39 @@ class Settings(BaseSettings):
             "documented no-op — local dev and CI keep working unchanged."
         ),
     )
+
+    # ─── LLM ───
+    # LiteLLM / Anthropic base URL. When set, routes Anthropic model calls
+    # to this endpoint (e.g. GLM proxy). Reads from env var
+    # CLAUDE_SWITCH_GLM_BASE_URL (bypasses the OPENBOT_ prefix via alias).
+    anthropic_api_base: str | None = Field(
+        default=None,
+        alias="CLAUDE_SWITCH_GLM_BASE_URL",
+        description="Base URL for Anthropic-compatible models (e.g. GLM proxy).",
+    )
+
+    # ─── Sentry ───
     # Tags every Sentry event so prod errors don't mix with dev / preview.
     # Heroku sets this via `heroku config:set OPENBOT_ENVIRONMENT=production`.
     environment: str = Field(
         default="development",
         description="Environment tag attached to Sentry events.",
     )
-    # 0.0 = error-only (cheapest tier). Bump to 0.05-0.2 once you have
-    # the Sentry Performance budget to spare. Keep <1.0 or you'll burn
-    # the free-tier event budget on the first traffic spike.
+    # 0.1 = 10% of transactions (standard production starting point).
+    # Bump to 1.0 during active debugging or if traffic is very low.
     sentry_traces_sample_rate: float = Field(
-        default=0.0,
+        default=0.1,
         ge=0.0,
         le=1.0,
         description="Fraction of transactions sent to Sentry Performance.",
+    )
+    # Continuous profiling — always-on, low overhead, does not require
+    # traces_sample_rate > 0. 1.0 = profile every session (recommended).
+    sentry_profile_session_sample_rate: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of sessions profiled continuously (sentry-sdk 2.24+).",
     )
 
     # ── Coerce "" → None for optional non-string fields ──
@@ -161,8 +182,43 @@ class Settings(BaseSettings):
         "github_app_private_key_path",
         "redis_url",
         "postgres_url",
+        "anthropic_api_base",
         mode="before",
     )(staticmethod(_blank_to_none))
+
+    @field_validator("anthropic_api_base", mode="after")
+    @classmethod
+    def _validate_proxy_url(cls, v: str | None) -> str | None:
+        """Reject non-HTTPS and private-network URLs to prevent SSRF.
+
+        CLAUDE_SWITCH_GLM_BASE_URL is passed directly to litellm as
+        ``api_base``. Without validation, any value (file://, internal IPs,
+        cloud metadata endpoints) would cause litellm to POST all LLM
+        messages to that host.
+        """
+        if v is None:
+            return v
+        parsed = urllib.parse.urlparse(v)
+        if parsed.scheme != "https":
+            raise ValueError(f"anthropic_api_base must use https://, got scheme={parsed.scheme!r}")
+        hostname = parsed.hostname or ""
+        try:
+            addr = ipaddress.ip_address(hostname)
+            if addr.is_private or addr.is_loopback or addr.is_link_local:
+                raise ValueError(
+                    f"anthropic_api_base must not target a private/loopback address: {hostname}"
+                )
+        except ValueError as exc:
+            # Re-raise our own errors; ignore "not a valid IP" (i.e. hostname).
+            if "anthropic_api_base" in str(exc):
+                raise
+        # Block AWS/GCP/Azure instance metadata hostnames explicitly.
+        _blocked = {"169.254.169.254", "metadata.google.internal"}
+        if hostname in _blocked:
+            raise ValueError(
+                f"anthropic_api_base must not target a cloud metadata endpoint: {hostname}"
+            )
+        return v
 
 
 @lru_cache

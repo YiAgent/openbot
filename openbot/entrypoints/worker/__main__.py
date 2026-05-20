@@ -79,6 +79,12 @@ async def _main() -> int:
     # for Redis/Postgres, malformed PEM, etc.) on the worker dyno.
     init_sentry(settings, component="worker")
     init_langsmith()
+    try:
+        import sentry_sdk as _sentry
+
+        _sentry.profiler.start_profiler()
+    except Exception:
+        _logger.debug("sentry_profiler_start_failed", exc_info=True)
     if settings.redis_url is None:
         _logger.error("worker_no_redis_url")
         return 2

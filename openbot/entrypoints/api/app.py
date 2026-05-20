@@ -107,6 +107,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # unreachable, malformed PEM, etc.) is captured.
     init_sentry(settings, component="webapp")
     init_langsmith()
+    try:
+        import sentry_sdk as _sentry
+
+        _sentry.profiler.start_profiler()
+    except Exception:
+        _logger.debug("sentry_profiler_start_failed", exc_info=True)
     auth = _build_auth(settings)
 
     redis_client: redis_async.Redis | None = (
@@ -169,6 +175,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         yield
     finally:
+        try:
+            import sentry_sdk as _sentry
+
+            _sentry.profiler.stop_profiler()
+        except Exception:
+            _logger.debug("sentry_profiler_stop_failed", exc_info=True)
         adapter: GitHubAdapter | None = app.state.github_adapter
         if adapter is not None:
             await adapter.aclose()

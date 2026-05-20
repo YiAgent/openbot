@@ -65,6 +65,7 @@ def init_sentry(settings: Settings, *, component: str) -> None:
         import sentry_sdk
         from sentry_sdk.integrations.fastapi import FastApiIntegration
         from sentry_sdk.integrations.httpx import HttpxIntegration
+        from sentry_sdk.integrations.logging import LoggingIntegration
         from sentry_sdk.integrations.starlette import StarletteIntegration
     except ImportError:
         # sentry-sdk is in the runtime deps, but a slim install (e.g. a
@@ -77,13 +78,23 @@ def init_sentry(settings: Settings, *, component: str) -> None:
         dsn=dsn,  # None = no-op; sentry-sdk documents this contract
         environment=settings.environment,
         traces_sample_rate=settings.sentry_traces_sample_rate,
+        profile_session_sample_rate=settings.sentry_profile_session_sample_rate,
         # Webhook bodies may carry repo / actor info that's already in
         # the audit log; do not duplicate into Sentry.
         send_default_pii=False,
+        # Forward WARNING+ logs to Sentry Logs (2.35+).
+        # Explicit LoggingIntegration overrides the default level=INFO so
+        # routine INFO lines (http_request_completed, etc.) stay in
+        # stdout only and don't flood the Sentry Logs feed.
+        enable_logs=True,
         integrations=[
             StarletteIntegration(),
             FastApiIntegration(),
             HttpxIntegration(),
+            LoggingIntegration(
+                level=logging.WARNING,  # WARNING+ → breadcrumbs + Sentry Logs
+                event_level=logging.ERROR,  # ERROR+   → Sentry error events
+            ),
         ],
     )
     sentry_sdk.set_tag("component", component)
