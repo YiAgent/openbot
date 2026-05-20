@@ -124,20 +124,20 @@ async def decide_and_enqueue(
                 await adapter.reply(event, direct_action.message)
                 if direct_action.labels_to_add:
                     await adapter.add_label(event, *direct_action.labels_to_add)
+                _logger.info(
+                    "decide_and_enqueue_direct_action",
+                    extra={
+                        "delivery_id": event.delivery_id,
+                        "repo": event.repo,
+                        "feature": str(feature),
+                        "labels_added": list(direct_action.labels_to_add),
+                    },
+                )
             except Exception:
                 _logger.exception(
                     "direct_action_reply_failed",
                     extra={"delivery_id": event.delivery_id, "repo": event.repo},
                 )
-            _logger.info(
-                "decide_and_enqueue_direct_action",
-                extra={
-                    "delivery_id": event.delivery_id,
-                    "repo": event.repo,
-                    "feature": str(feature),
-                    "labels_added": direct_action.labels_to_add,
-                },
-            )
             return
 
         initial_labels = _extract_initial_labels(event.raw)

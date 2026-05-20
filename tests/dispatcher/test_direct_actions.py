@@ -90,7 +90,7 @@ class TestCheckPrSize:
         ctx = _ctx(pr_additions=600, pr_deletions=0)
         action = check_pr_size(ctx)
         assert action is not None
-        assert action.labels_to_add == []
+        assert action.labels_to_add == ()
 
 
 # ─── check_mention_clarity ────────────────────────────────────────────────────

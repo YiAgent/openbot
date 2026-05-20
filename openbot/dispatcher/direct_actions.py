@@ -9,7 +9,7 @@ All functions are synchronous and side-effect-free.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from openbot.dispatcher.context import EventContext
 
@@ -45,7 +45,7 @@ class DirectAction:
     """
 
     message: str
-    labels_to_add: list[str] = field(default_factory=list)
+    labels_to_add: tuple[str, ...] = ()
     drop: bool = True
 
 
@@ -72,7 +72,7 @@ def check_issue_completeness(ctx: EventContext) -> DirectAction | None:
             "I've added the **needs-info** label in the meantime. "
             "Feel free to edit the issue body and I'll re-evaluate."
         ),
-        labels_to_add=["needs-info"],
+        labels_to_add=("needs-info",),
     )
 
 
@@ -92,7 +92,7 @@ def check_pr_size(ctx: EventContext) -> DirectAction | None:
             "- Extract preparatory changes into a prerequisite PR\n\n"
             "If splitting is not practical, please add a note explaining why."
         ),
-        labels_to_add=[],
+        labels_to_add=(),
     )
 
 
