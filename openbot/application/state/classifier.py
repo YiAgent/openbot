@@ -8,25 +8,28 @@ live in ``runs_repo`` and ``webapp``.
 Decision matrix mirrors the table in
 ``docs/_archive/slices/2026-05-17-input-side-completeness.md``:
 
-    | event.kind                          | current state | intent      |
-    |-------------------------------------|---------------|-------------|
-    | ISSUE_OPENED / ISSUE_REOPENED       | IDLE/CLOSED   | START       |
-    | ISSUE_OPENED / ISSUE_REOPENED       | RUNNING       | IGNORE      |
-    | ISSUE_ASSIGNED (to bot)             | IDLE/CLOSED   | START       |
-    | ISSUE_ASSIGNED (to bot)             | RUNNING       | SUPERSEDE   |
-    | ISSUE_CLOSED                        | RUNNING       | CANCEL      |
-    | ISSUE_CLOSED                        | *             | IGNORE      |
-    | ISSUE_COMMENT_CREATED (+@openbot)   | IDLE/CLOSED   | START       |
-    | ISSUE_COMMENT_CREATED (+@openbot)   | RUNNING       | SUPERSEDE   |
-    | ISSUE_COMMENT_CREATED (no @)        | *             | IGNORE      |
-    | PR_OPENED / PR_REOPENED             | IDLE/CLOSED   | START       |
-    | PR_SYNCHRONIZED                     | RUNNING       | SUPERSEDE   |
-    | PR_SYNCHRONIZED                     | IDLE/CLOSED   | START       |
-    | PR_CLOSED / PR_MERGED               | RUNNING       | CANCEL      |
-    | PR_CLOSED / PR_MERGED               | *             | IGNORE      |
-    | PR_REVIEW_COMMENT_CREATED (+@)      | IDLE/CLOSED   | START       |
-    | PR_REVIEW_COMMENT_CREATED (+@)      | RUNNING       | SUPERSEDE   |
-    | ping / unknown / bot author         | *             | IGNORE      |
+    | event.kind                              | current state | intent      |
+    |----------------------------------------|---------------|-------------|
+    | ISSUE_OPENED / ISSUE_REOPENED          | IDLE/CLOSED   | START       |
+    | ISSUE_OPENED / ISSUE_REOPENED          | RUNNING       | IGNORE      |
+    | ISSUE_ASSIGNED (to bot)                | IDLE/CLOSED   | START       |
+    | ISSUE_ASSIGNED (to bot)                | RUNNING       | SUPERSEDE   |
+    | ISSUE_UNLABELED / PR_UNLABELED         | *             | IGNORE      |
+    | ISSUE_LABELED (cancel-openbot)         | RUNNING       | CANCEL      |
+    | ISSUE_LABELED / PR_LABELED (other)     | *             | IGNORE      |
+    | ISSUE_CLOSED                           | RUNNING       | CANCEL      |
+    | ISSUE_CLOSED                           | *             | IGNORE      |
+    | ISSUE_COMMENT_CREATED (+@openbot)      | IDLE/CLOSED   | START       |
+    | ISSUE_COMMENT_CREATED (+@openbot)      | RUNNING       | SUPERSEDE   |
+    | ISSUE_COMMENT_CREATED (no @)           | *             | IGNORE      |
+    | PR_OPENED / PR_REOPENED                | IDLE/CLOSED   | START       |
+    | PR_SYNCHRONIZED                        | RUNNING       | SUPERSEDE   |
+    | PR_SYNCHRONIZED                        | IDLE/CLOSED   | START       |
+    | PR_CLOSED / PR_MERGED                  | RUNNING       | CANCEL      |
+    | PR_CLOSED / PR_MERGED                  | *             | IGNORE      |
+    | PR_REVIEW_COMMENT_CREATED (+@)         | IDLE/CLOSED   | START       |
+    | PR_REVIEW_COMMENT_CREATED (+@)         | RUNNING       | SUPERSEDE   |
+    | ping / unknown / bot author            | *             | IGNORE      |
 """
 
 from __future__ import annotations
