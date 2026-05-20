@@ -6,6 +6,8 @@ Secrets are wrapped in `SecretStr` so they never leak into logs or repr.
 
 from __future__ import annotations
 
+import ipaddress
+import urllib.parse
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -140,14 +142,16 @@ class Settings(BaseSettings):
     )
 
     # ─── LLM ───
-    # LiteLLM / Anthropic base URL. When set, routes all Anthropic model
-    # calls to this endpoint (e.g. GLM or other proxies).
-    # Mirrored from CLAUDE_SWITCH_GLM_BASE_URL if present.
+    # LiteLLM / Anthropic base URL. When set, routes Anthropic model calls
+    # to this endpoint (e.g. GLM proxy). Reads from env var
+    # CLAUDE_SWITCH_GLM_BASE_URL (bypasses the OPENBOT_ prefix via alias).
     anthropic_api_base: str | None = Field(
         default=None,
         alias="CLAUDE_SWITCH_GLM_BASE_URL",
         description="Base URL for Anthropic-compatible models (e.g. GLM proxy).",
     )
+
+    # ─── Sentry ───
     # Tags every Sentry event so prod errors don't mix with dev / preview.
     # Heroku sets this via `heroku config:set OPENBOT_ENVIRONMENT=production`.
     environment: str = Field(
@@ -178,8 +182,43 @@ class Settings(BaseSettings):
         "github_app_private_key_path",
         "redis_url",
         "postgres_url",
+        "anthropic_api_base",
         mode="before",
     )(staticmethod(_blank_to_none))
+
+    @field_validator("anthropic_api_base", mode="after")
+    @classmethod
+    def _validate_proxy_url(cls, v: str | None) -> str | None:
+        """Reject non-HTTPS and private-network URLs to prevent SSRF.
+
+        CLAUDE_SWITCH_GLM_BASE_URL is passed directly to litellm as
+        ``api_base``. Without validation, any value (file://, internal IPs,
+        cloud metadata endpoints) would cause litellm to POST all LLM
+        messages to that host.
+        """
+        if v is None:
+            return v
+        parsed = urllib.parse.urlparse(v)
+        if parsed.scheme != "https":
+            raise ValueError(f"anthropic_api_base must use https://, got scheme={parsed.scheme!r}")
+        hostname = parsed.hostname or ""
+        try:
+            addr = ipaddress.ip_address(hostname)
+            if addr.is_private or addr.is_loopback or addr.is_link_local:
+                raise ValueError(
+                    f"anthropic_api_base must not target a private/loopback address: {hostname}"
+                )
+        except ValueError as exc:
+            # Re-raise our own errors; ignore "not a valid IP" (i.e. hostname).
+            if "anthropic_api_base" in str(exc):
+                raise
+        # Block AWS/GCP/Azure instance metadata hostnames explicitly.
+        _blocked = {"169.254.169.254", "metadata.google.internal"}
+        if hostname in _blocked:
+            raise ValueError(
+                f"anthropic_api_base must not target a cloud metadata endpoint: {hostname}"
+            )
+        return v
 
 
 @lru_cache

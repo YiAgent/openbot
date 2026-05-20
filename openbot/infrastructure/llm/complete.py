@@ -317,6 +317,9 @@ class LiteLLMCompleter:
         temperature: float = 0.0,
         max_tokens: int | None = None,
     ) -> str:
+        from openbot.core.settings import get_settings
+
+        settings = get_settings()
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": list(messages),
@@ -324,6 +327,10 @@ class LiteLLMCompleter:
         }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
+        # Honor custom base URL for Anthropic models (e.g. GLM proxy).
+        # Mirrors the same logic in the module-level complete() function.
+        if "anthropic/" in model and settings.anthropic_api_base:
+            kwargs.setdefault("api_base", settings.anthropic_api_base)
         response = await litellm.acompletion(**kwargs)
         # Use attribute access — litellm returns a ModelResponse object,
         # and the rest of this module uses the same pattern (e.g. line 181).

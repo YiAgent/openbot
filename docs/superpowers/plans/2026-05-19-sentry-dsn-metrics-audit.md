@@ -37,7 +37,7 @@ Find the line (currently blank after `=`):
 ```
 Replace it with (uncommented, real DSN):
 ```
-OPENBOT_SENTRY_DSN=https://f07a401fd38b70db0359272557c974d6@o4511407339012096.ingest.us.sentry.io/4511407339143168
+OPENBOT_SENTRY_DSN=https://<key>@o4511407339012096.ingest.us.sentry.io/<project>  # obtain from Sentry → Project Settings → Client Keys
 ```
 
 - [ ] **Step 2: Verify Settings picks it up**

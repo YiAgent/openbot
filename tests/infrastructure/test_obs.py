@@ -66,7 +66,17 @@ def test_init_sentry_passes_settings_through_when_dsn_set() -> None:
     # LoggingIntegration must be present with WARNING+ level so INFO lines
     # (e.g. http_request_completed) don't flood Sentry Logs.
     integrations = kwargs["integrations"]
-    assert any(isinstance(i, LoggingIntegration) for i in integrations)
+    logging_int = next((i for i in integrations if isinstance(i, LoggingIntegration)), None)
+    assert logging_int is not None, "LoggingIntegration missing from integrations list"
+    # LoggingIntegration stores levels on internal handlers:
+    #   _breadcrumb_handler → breadcrumbs threshold (should be WARNING)
+    #   _handler            → Sentry event threshold (should be ERROR)
+    assert logging_int._breadcrumb_handler.level == logging.WARNING, (
+        "LoggingIntegration breadcrumb level must be WARNING to suppress INFO noise in Sentry Logs"
+    )
+    assert logging_int._handler.level == logging.ERROR, (
+        "LoggingIntegration event level must be ERROR to avoid creating Sentry events for warnings"
+    )
 
 
 def test_init_sentry_survives_missing_sdk(monkeypatch) -> None:  # type: ignore[no-untyped-def]

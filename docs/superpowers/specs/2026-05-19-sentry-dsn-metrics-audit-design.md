@@ -58,7 +58,7 @@ if hasattr(metrics, "set"):
 Uncomment and populate:
 
 ```
-OPENBOT_SENTRY_DSN=https://f07a401fd38b70db0359272557c974d6@o4511407339012096.ingest.us.sentry.io/4511407339143168
+OPENBOT_SENTRY_DSN=https://<key>@o4511407339012096.ingest.us.sentry.io/<project>  # obtain from Sentry → Project Settings → Client Keys
 ```
 
 No other config files change. `Settings.sentry_dsn` reads this via the `OPENBOT_` prefix and wraps it in `SecretStr` (never logged, never in repr).

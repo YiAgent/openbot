@@ -84,7 +84,7 @@ async def _main() -> int:
 
         _sentry.profiler.start_profiler()
     except Exception:
-        pass  # SDK absent or DSN=None no-op — profiling is opt-in
+        _logger.debug("sentry_profiler_start_failed", exc_info=True)
     if settings.redis_url is None:
         _logger.error("worker_no_redis_url")
         return 2
