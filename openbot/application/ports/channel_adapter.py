@@ -82,6 +82,15 @@ class ChannelAdapterPort(Protocol):
         """
         ...
 
+    async def get_pr_diff(self, event: UnifiedEvent, pr_number: int) -> str:
+        """Return the PR's unified diff as raw text.
+
+        Returns ``""`` when the PR is missing (404) — closed or deleted PRs
+        must not block the review workflow. Raises on other HTTP errors so
+        the caller's retry layer can act.
+        """
+        ...
+
     async def add_label(self, event: UnifiedEvent, *labels: str) -> list[dict[str, Any]]:
         """Add one or more labels to the issue or PR referenced by *event*.
 

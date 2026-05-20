@@ -93,7 +93,9 @@ async def test_demo_02_pr_opens_review_stub_acks(webhook_harness: WebhookHarness
     assert len(webhook_harness.adapter.replies) == 1
     _, number, body = webhook_harness.adapter.replies[0]
     assert number == 42
-    assert "OpenBot received this PR" in body
+    # Body comes from the fake review responder in conftest (`_fake_review_reply`).
+    # Prompt-quality assertions live in evals/, not here (CLAUDE.md / PRD §8.3).
+    assert body == "DeepAgents review reply for PR #42"
 
 
 # ───────────────────────── demo 03: bot-assigned fix stub ─────────────────────────

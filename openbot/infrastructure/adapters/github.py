@@ -420,6 +420,26 @@ class GitHubAdapter(ChannelAdapter):
             raise ValueError(f"Unexpected encoding from GitHub Contents API: {encoding!r}")
         return base64.b64decode(encoded, validate=False)
 
+    async def get_pr_diff(self, event: UnifiedEvent, pr_number: int) -> str:
+        """Fetch the PR's unified diff via the Accept-header content switch.
+
+        Endpoint: GET /repos/{owner}/{repo}/pulls/{pr_number}
+        with ``Accept: application/vnd.github.v3.diff`` — GitHub returns the
+        raw diff as ``text/plain`` instead of the usual PR JSON. Bypasses
+        ``_authed_json`` because that helper expects a JSON body.
+
+        Returns ``""`` on 404 (closed / deleted PRs must not block review).
+        Raises on other HTTP errors so transient gateway failures surface.
+        """
+        token = await self._installation_token(event)
+        url = f"{self._api_base}/repos/{event.repo}/pulls/{pr_number}"
+        headers = {**self._headers(token.token), "Accept": "application/vnd.github.v3.diff"}
+        response = await self._get_http().get(url, headers=headers)
+        if response.status_code == 404:
+            return ""
+        response.raise_for_status()
+        return response.text
+
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:
             await self._http.aclose()

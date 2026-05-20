@@ -57,6 +57,9 @@ class FakeChannelAdapter:
     async def fetch_repo_file(self, event: UnifiedEvent, path: str) -> bytes | None:
         return None  # no config file by default in tests
 
+    async def get_pr_diff(self, event: UnifiedEvent, pr_number: int) -> str:
+        return ""  # empty diff = "no changes to review" in tests
+
     async def add_label(self, event: UnifiedEvent, *labels: str) -> list[dict[str, Any]]:
         self.labels_added.append((event.resource_key, labels))
         return [{"name": lbl} for lbl in labels]

@@ -459,6 +459,47 @@ async def test_get_actor_role_defaults_to_none_when_missing(adapter_factory: Any
     assert await adapter.get_actor_role(_event()) == "none"
 
 
+# ───── get_pr_diff ─────
+
+_SAMPLE_DIFF = (
+    "diff --git a/foo.py b/foo.py\n"
+    "index 0000000..1111111 100644\n"
+    "--- a/foo.py\n"
+    "+++ b/foo.py\n"
+    "@@ -1 +1 @@\n"
+    "-old\n"
+    "+new\n"
+)
+
+
+async def test_get_pr_diff_returns_raw_diff_text(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, text=_SAMPLE_DIFF), auth=_FakeAuth()
+    )
+
+    diff = await adapter.get_pr_diff(_event(issue_number=None, pr_number=7), 7)
+
+    assert diff == _SAMPLE_DIFF
+    req = captured[0]
+    assert req.method == "GET"
+    assert str(req.url) == "https://api.github.com/repos/YiAgent/openbot/pulls/7"
+    assert req.headers["accept"] == "application/vnd.github.v3.diff"
+    assert req.headers["authorization"] == f"token {_INSTALL_TOKEN}"
+
+
+async def test_get_pr_diff_returns_empty_on_404(adapter_factory: Any) -> None:
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(404, text="Not Found"), auth=_FakeAuth()
+    )
+    assert await adapter.get_pr_diff(_event(issue_number=None, pr_number=7), 7) == ""
+
+
+async def test_get_pr_diff_raises_on_5xx(adapter_factory: Any) -> None:
+    adapter, _ = adapter_factory(lambda req: httpx.Response(503, text="upstream"), auth=_FakeAuth())
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.get_pr_diff(_event(issue_number=None, pr_number=7), 7)
+
+
 # ───── rate-limit warning ─────
 
 

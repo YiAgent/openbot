@@ -279,6 +279,16 @@ async def webhook_harness(
         _fake_chat_reply,
     )
 
+    async def _fake_review_reply(*, event: UnifiedEvent, adapter: Any) -> str:
+        # E2E doesn't exercise the real reviewer — only the audit + reply
+        # plumbing. PRD §8.3: prompt-quality assertions live in evals/.
+        return f"DeepAgents review reply for PR #{event.pr_number}"
+
+    monkeypatch.setattr(
+        "openbot.application.use_cases.review._generate_review_reply",
+        _fake_review_reply,
+    )
+
     try:
         yield harness
     finally:

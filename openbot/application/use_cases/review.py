@@ -1,16 +1,14 @@
-"""PR review workflow — PRD §4.2 entry stub.
+"""PR review workflow — PRD §4.2 entry.
 
-v0.1 Week 2 (slice A): ACK reply + audit. The real LLM-driven review
-(diff fetch, finding extraction, severity filter, multi-turn) lands
-once the agent slice ships.
+Slice A (current): single-shot DeepAgent review.
+  - Adapter fetches the unified diff (``get_pr_diff``).
+  - ``DeepAgentsReviewResponder`` runs once with the diff inline (no tools).
+  - The agent's reply is posted as a single PR comment.
+  - On any agent failure, post a user-facing error stub so the PR author
+    sees a real signal — silent skips break trust.
 
-Slice A guarantees:
-  - Receives a `PreflightContext` that already passed pre-flight
-    (Router dispatched it; gates ran).
-  - Writes STARTED → COMPLETED|FAILED rows to `audit_log` via the shared
-    `audit_lifecycle` helper so all four workflows look identical.
-  - Never raises out — background-task failures must not surface as 5xx
-    on the webhook (GitHub already got its 202).
+Slice B/C (deferred — see docs/superpowers/plans/2026-05-20-review-fix-deepagent.md):
+  structured findings, severity filter, multi-turn, file/grep tools.
 """
 
 from __future__ import annotations
@@ -18,30 +16,39 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from openbot.application.ports.channel_adapter import ChannelAdapterPort
 from openbot.application.use_cases._lifecycle import audit_lifecycle
 from openbot.application.use_cases._tracing import traceable as _traceable
+from openbot.domain.events import UnifiedEvent
 from openbot.domain.workflows import Workflow
+from openbot.infrastructure.agents import DeepAgentsReviewResponder
 
 if TYPE_CHECKING:
     from openbot.application.middleware.preflight import PreflightContext
 
 _logger = logging.getLogger(__name__)
 
-_ACK_TEMPLATE = (
-    ":robot: OpenBot received this PR and review is queued.\n\n"
-    "_v0.1 alpha: only the ACK is automated so far. "
-    "Full review (diff scan, structured findings, severity filter) lands in "
-    "an upcoming commit._"
+_RESPONDER = DeepAgentsReviewResponder()
+
+_ERROR_TEMPLATE = (
+    ":robot: I couldn't complete the review right now.\n\n"
+    "_Please retry by pushing a new commit, or check the worker logs / "
+    "LLM credentials if this keeps failing._"
 )
+
+
+async def _generate_review_reply(*, event: UnifiedEvent, adapter: ChannelAdapterPort) -> str:
+    """Module-level seam — E2E tests monkeypatch this to avoid LLM calls."""
+    return await _RESPONDER.review_for_event(event, adapter=adapter)
 
 
 @_traceable(run_type="chain", name="review")
 async def maybe_run_review(ctx: PreflightContext) -> None:
-    """Post the PR-review ACK + audit-log the run.
+    """Run the DeepAgent review + audit-log the run.
 
-    No-op if `pr_number` is missing — Router already enforces this for
-    the dispatch path, the check here is defense-in-depth for callers
-    that bypass dispatch (e.g. backfill scripts in v0.2).
+    No-op if ``pr_number`` or ``installation_id`` is missing — Router
+    already enforces this for the dispatch path, the check here is
+    defense-in-depth for callers that bypass dispatch.
     """
     event = ctx.event
     if event.pr_number is None or event.installation_id is None:
@@ -51,13 +58,25 @@ async def maybe_run_review(ctx: PreflightContext) -> None:
         )
         return
 
-    message = _ACK_TEMPLATE
+    # Generate the review BEFORE opening the audit-lifecycle span so a
+    # slow LLM call doesn't keep a STARTED row sitting open for minutes.
+    # The reply post inside the lifecycle is the canonical "did we
+    # actually act on the PR?" signal.
+    try:
+        message = await _generate_review_reply(event=event, adapter=ctx.adapter)
+    except Exception:
+        _logger.exception(
+            "review_agent_reply_failed",
+            extra={"delivery_id": event.delivery_id, "repo": event.repo},
+        )
+        message = _ERROR_TEMPLATE
+
     try:
         async with audit_lifecycle(ctx, workflow=Workflow.REVIEW) as audit:
             result = await ctx.adapter.reply(event, message)
             audit.outcome = f"comment_id={result.get('id')}"
             _logger.info(
-                "review_ack_posted",
+                "review_reply_posted",
                 extra={
                     "delivery_id": event.delivery_id,
                     "repo": event.repo,
@@ -69,6 +88,6 @@ async def maybe_run_review(ctx: PreflightContext) -> None:
         # audit_lifecycle already wrote FAILED. Swallow so the background
         # task doesn't surface as 5xx — GitHub already got its 202.
         _logger.exception(
-            "review_ack_failed",
+            "review_reply_post_failed",
             extra={"delivery_id": event.delivery_id, "repo": event.repo},
         )
