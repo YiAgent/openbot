@@ -60,7 +60,7 @@ DEEPAGENTS_THINKING_LEVEL_ENV: Final[str] = "OPENBOT_DEEPAGENTS_THINKING_LEVEL"
 # inside our 32k max_output_tokens cap without crowding the answer body.
 # ``off`` disables thinking entirely (most compatible with non-Anthropic
 # gateways that don't honour the field). Mapping is consulted by
-# :func:`evals.common.deepagents_baseline.get_thinking_budget_tokens`.
+# :func:`evals.agents.baseline.get_thinking_budget_tokens`.
 THINKING_LEVEL_BUDGETS: Final[dict[str, int]] = {
     "off": 0,
     "low": 1024,
@@ -124,7 +124,7 @@ class DeepAgentsSettings(BaseSettings):
     """Per-sample runaway-guard budgets + HTTP client knobs.
 
     Defaults chosen from observed smoke runs — see
-    :mod:`evals.common.deepagents_baseline` module docstring for the
+    :mod:`evals.agents.baseline` module docstring for the
     empirical reasoning behind each value.
     """
 

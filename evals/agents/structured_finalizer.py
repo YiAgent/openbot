@@ -44,7 +44,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel
 
-from evals.common.deepagents_baseline import build_chat_model
+from evals.agents.baseline import build_chat_model
 from evals.common.termination import AgentTerminationError
 
 if TYPE_CHECKING:

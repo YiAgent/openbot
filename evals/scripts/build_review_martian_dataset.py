@@ -13,7 +13,7 @@ The local manifest YAML is the only thing kept on disk — it carries the
 upstream commit, sha256 of the example payload, and license metadata.
 (Trace routing is no longer per-dataset; all eval cells now share the
 single ``LANGSMITH_PROJECT_EVAL`` project — see
-``evals/common/langsmith.py``.)
+``evals/agents/langsmith.py``.)
 
 Reproducibility
 ---------------

@@ -34,7 +34,9 @@ def test_chat_openbot_task_wires_agent_solver_without_inspect_sandbox(monkeypatc
         lambda name: calls.setdefault("trace", name),
     )
     monkeypatch.setattr(chat_swe_qa_pro, "langsmith_dataset", _dataset)
-    monkeypatch.setattr(chat_swe_qa_pro, "deepagents_agent_swe_qa_solver", lambda: "agent-solver")
+    monkeypatch.setattr(
+        chat_swe_qa_pro, "deepagents_baseline_swe_qa_solver", lambda: "agent-solver"
+    )
     monkeypatch.setattr(chat_swe_qa_pro, "swe_qa_pro_judge_scorer", lambda: "scorer")
     monkeypatch.setattr(chat_swe_qa_pro, "Task", _FakeTask)
 
@@ -43,7 +45,7 @@ def test_chat_openbot_task_wires_agent_solver_without_inspect_sandbox(monkeypatc
     assert calls["dataset"] == ("chat_swe_qa_pro_v1", chat_swe_qa_pro.qa_example_to_agent_sample)
     assert task.kwargs["solver"] == "agent-solver"
     assert "sandbox" not in task.kwargs, "Task must not declare Inspect sandbox post-refactor"
-    assert task.kwargs["metadata"]["solver_family"] == "deepagents_agent"
+    assert task.kwargs["metadata"]["solver_family"] == "deepagents_baseline"
 
 
 def test_review_task_metadata_unchanged(monkeypatch) -> None:  # type: ignore[no-untyped-def]

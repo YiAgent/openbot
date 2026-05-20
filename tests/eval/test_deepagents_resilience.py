@@ -10,12 +10,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from evals.common import config
-from evals.common.deepagents_baseline import (
+from evals.agents.baseline import (
     build_chat_model,
     get_model_max_retries,
     get_model_timeout_s,
 )
+from evals.common import config
 
 # Documented baseline — the locked surface tests guard against drift.
 # Numbers mirror the pydantic Field defaults in

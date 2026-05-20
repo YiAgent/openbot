@@ -7,9 +7,7 @@ SWT) writes one ``<run_id>.<model>.json`` summary report to the
 shape SWT uses: ``resolved_ids`` / ``unresolved_ids`` / ``error_ids``.
 
 This script reads that report and attaches ``swe_bench_pass_at_1`` —
-the LangSmith feedback key
-:mod:`evals.common.langsmith_experiments` reserved (see line 503 of
-that module) for offline SWE-bench grading — to each matching
+the LangSmith feedback key reserved for offline SWE-bench grading — to each matching
 prediction Run in the right experiment session.
 
 Resolution semantics (SWE-bench):
@@ -39,8 +37,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Reserved key — see evals/common/langsmith_experiments.py:503. Must
-# not be reused by the in-task export sentinel scorer (swe_export_ok).
+# Reserved offline-grading key. Must not be reused by the in-task export
+# sentinel scorer (swe_export_ok).
 FEEDBACK_KEY = "swe_bench_pass_at_1"
 FEEDBACK_CONFIG = {"type": "continuous", "min": 0.0, "max": 1.0}
 
@@ -81,7 +79,7 @@ def _write_feedback(
     report_path: Path,
 ) -> None:
     """Attach swe_bench_pass_at_1 feedback to one prediction Run."""
-    from evals.common.langsmith_feedback import ensure_feedback_config
+    from evals.agents.langsmith_feedback import ensure_feedback_config
 
     ensure_feedback_config(client, FEEDBACK_KEY, FEEDBACK_CONFIG)
     client.create_feedback(

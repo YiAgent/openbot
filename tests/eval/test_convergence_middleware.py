@@ -16,7 +16,7 @@ import pytest
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
 
-from evals.common.convergence_middleware import (
+from evals.agents.convergence_middleware import (
     ForceCommitBeforeBudget,
     ToolCallRepetitionGuard,
     build_convergence_middlewares,

@@ -1,4 +1,4 @@
-"""Unit tests for evals.common.structured_finalizer.
+"""Unit tests for evals.agents.structured_finalizer.
 
 These pin the failure-mode coverage that the old per-task force-retry
 helpers used to provide. The finalizer is the *one* place we enforce
@@ -15,7 +15,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
-from evals.common.structured_finalizer import (
+from evals.agents.structured_finalizer import (
     _StructuredFinalizerWrapper,
     finalize_structured,
     finalize_structured_sync,
@@ -75,7 +75,7 @@ def test_finalize_sync_passes_through_pydantic_instance() -> None:
             return _Answer(text="hello")
 
     with patch(
-        "evals.common.structured_finalizer._build_finalizer_runnable",
+        "evals.agents.structured_finalizer._build_finalizer_runnable",
         return_value=_Stub(),
     ):
         out = finalize_structured_sync([_ai("hello")], schema=_Answer, model="anthropic:any")
@@ -91,7 +91,7 @@ def test_finalize_sync_validates_dict_return() -> None:
             return {"text": "from-dict"}
 
     with patch(
-        "evals.common.structured_finalizer._build_finalizer_runnable",
+        "evals.agents.structured_finalizer._build_finalizer_runnable",
         return_value=_Stub(),
     ):
         out = finalize_structured_sync([_ai("prose")], schema=_Answer, model="anthropic:any")
@@ -108,7 +108,7 @@ def test_finalize_sync_raises_on_unvalidatable_dict() -> None:
 
     with (
         patch(
-            "evals.common.structured_finalizer._build_finalizer_runnable",
+            "evals.agents.structured_finalizer._build_finalizer_runnable",
             return_value=_Stub(),
         ),
         pytest.raises(AgentTerminationError, match="failed _Answer validation"),
@@ -125,7 +125,7 @@ def test_finalize_sync_raises_on_unexpected_return_type() -> None:
 
     with (
         patch(
-            "evals.common.structured_finalizer._build_finalizer_runnable",
+            "evals.agents.structured_finalizer._build_finalizer_runnable",
             return_value=_Stub(),
         ),
         pytest.raises(AgentTerminationError, match="unexpected type"),
@@ -146,7 +146,7 @@ def test_finalize_sync_wraps_provider_exception() -> None:
 
     with (
         patch(
-            "evals.common.structured_finalizer._build_finalizer_runnable",
+            "evals.agents.structured_finalizer._build_finalizer_runnable",
             return_value=_Boom(),
         ),
         pytest.raises(AgentTerminationError, match="provider 500"),
@@ -166,7 +166,7 @@ async def test_finalize_async_happy_path() -> None:
             return _Answer(text="async")
 
     with patch(
-        "evals.common.structured_finalizer._build_finalizer_runnable",
+        "evals.agents.structured_finalizer._build_finalizer_runnable",
         return_value=_Stub(),
     ):
         out = await finalize_structured([_ai("prose")], schema=_Answer, model="anthropic:any")
@@ -193,7 +193,7 @@ def test_wrapper_invoke_skips_finalizer_when_upstream_supplied_schema() -> None:
 
     wrapper = wrap_agent_with_finalizer(_Agent(), schema=_Answer, model="anthropic:any")
     with patch(
-        "evals.common.structured_finalizer.finalize_structured_sync",
+        "evals.agents.structured_finalizer.finalize_structured_sync",
         side_effect=AssertionError("should not run when upstream supplied schema"),
     ):
         result = wrapper.invoke({})
@@ -210,7 +210,7 @@ def test_wrapper_invoke_runs_finalizer_when_upstream_lacks_schema() -> None:
     recovered = _Answer(text="recovered")
     wrapper = wrap_agent_with_finalizer(_Agent(), schema=_Answer, model="anthropic:any")
     with patch(
-        "evals.common.structured_finalizer.finalize_structured_sync",
+        "evals.agents.structured_finalizer.finalize_structured_sync",
         return_value=recovered,
     ):
         result = wrapper.invoke({})

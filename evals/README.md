@@ -125,7 +125,7 @@ There is **no sandbox** in this flow because the model only reads a diff and emi
 
 1. `build_chat_swe_qa_pro_dataset.py` mirrors SWE-QA-Pro-Bench into LangSmith.
 2. The task loads it from LangSmith.
-3. The solver is `deepagents_agent_swe_qa_solver` (+Agent variant).
+3. The solver uses the preconfigured SWE-QA agent built on `evals.agents.baseline`.
 4. Each sample spins up a `DockerSandboxBackend` where the repo is cloned.
 5. The agent uses `ls`, `grep`, `read_file` to browse the code before answering.
 6. `swe_qa_pro_judge_scorer()` calls the 5-dimension judge for scoring.
@@ -154,22 +154,33 @@ There are three distinct LangSmith integrations in the current code:
    - mirror-only storage for `test_swt_bench_verified`
 
 2. **Trace routing**
-   - `configure_tracing_for_dataset(...)` sends public datasets to `LANGSMITH_PROJECT_PUBLIC`
-   - every other dataset falls back to `LANGSMITH_PROJECT_INTERNAL`
+   - `evals.agents.langsmith.configure_tracing_for_dataset(...)` enables LangSmith tracing
+   - `LANGSMITH_EVAL_PROJECT` is the single project override for eval agent and judge traces
 
 3. **Experiment / feedback projection**
-   - `LangSmithExperiment.wrap(...)` projects per-sample SWE-bench / SWT-Bench results into LangSmith Experiment projects
+   - `evals.agents.langsmith.LangSmithExperiment.wrap(...)` projects per-sample SWE-bench / SWT-Bench results into LangSmith Experiment projects
    - `swe_qa_pro_judge_scorer()` attaches per-dimension feedback to the live LangSmith trace
 
 ## Directory map
 
 ```text
 evals/
+├── agents/
+│   ├── baseline.py                 # shared DeepAgents/LangChain/sandbox baseline
+│   ├── convergence_middleware.py   # shared agent loop convergence guards
+│   ├── structured_finalizer.py     # shared structured-output finalizer
+│   ├── langsmith.py                # trace routing + Inspect -> LangSmith Experiment bridge
+│   ├── langsmith_feedback.py       # shared Feedback config helper
+│   ├── review.py                   # preconfigured review agent
+│   ├── fix.py                      # preconfigured SWE-bench fix agent
+│   ├── test_generation.py          # preconfigured SWT-Bench test agent
+│   └── chat.py                     # preconfigured SWE-QA-Pro chat agent
 ├── common/
 │   ├── datasets.py                  # LangSmith dataset -> Inspect MemoryDataset
-│   ├── deepagents_baseline.py       # shared DeepAgents baseline factory
-│   ├── langsmith.py                 # public/internal trace routing
-│   └── langsmith_experiments.py     # Inspect score -> LangSmith Experiment bridge
+│   ├── prediction_export.py         # shared prediction export helpers
+│   ├── predictions.py               # structured prediction models
+│   ├── termination.py               # shared solver termination checks
+│   └── usage.py                     # provider usage aggregation
 ├── scorers/
 │   ├── review_overlap.py            # review overlap math
 │   ├── swt_bench_scorer.py          # SWT-Bench Success metric
@@ -266,7 +277,7 @@ resume.
 ### Layer 1 — HTTP-client timeout + retries (per request)
 
 Every `deepagents` LLM call is constructed through `build_chat_model(...)`
-in [`evals/common/deepagents_baseline.py`](common/deepagents_baseline.py),
+in [`evals/agents/baseline.py`](agents/baseline.py),
 which sets explicit `timeout` and `max_retries` on the provider httpx
 client. Defaults: **90 s timeout, 3 retries** on retryable HTTP errors
 (429 / 5xx / connection drops).

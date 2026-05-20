@@ -9,8 +9,7 @@ from langchain.agents.middleware import (
 )
 from pydantic import ValidationError
 
-from evals.common import config
-from evals.common.deepagents_baseline import (
+from evals.agents.baseline import (
     build_budget_middlewares,
     build_run_config,
     get_model_call_limit,
@@ -18,6 +17,7 @@ from evals.common.deepagents_baseline import (
     get_tool_call_limit,
     resolve_model,
 )
+from evals.common import config
 
 # Documented baseline — mirrors the pydantic Field defaults in
 # :class:`evals.common.config.DeepAgentsSettings`. Hardcoded here so the
@@ -61,7 +61,7 @@ def test_build_budget_middlewares_default_exit_behavior() -> None:
     The stack now includes ``ToolCallRepetitionGuard`` and
     ``ForceCommitBeforeBudget`` ahead of the call-limit middlewares —
     they're harness-level convergence guards that work for any model.
-    See :mod:`evals.common.convergence_middleware`.
+    See :mod:`evals.agents.convergence_middleware`.
     """
     mws = build_budget_middlewares()
     by_type = {type(m).__name__: m for m in mws}
@@ -128,7 +128,7 @@ def test_resolve_model_explicit_override_beats_shared_env(monkeypatch) -> None: 
 
 def test_display_model_name_strips_langchain_prefix() -> None:
     """LangSmith / dashboard surfaces want the bare model id, no routing prefix."""
-    from evals.common.deepagents_baseline import display_model_name
+    from evals.agents.baseline import display_model_name
 
     # Common case: provider:model → strip provider
     assert display_model_name("anthropic:glm-4.5-air") == "glm-4.5-air"
@@ -141,11 +141,11 @@ def test_display_model_name_strips_langchain_prefix() -> None:
 
 def test_thinking_budget_maps_levels(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Thinking-level string maps to Anthropic ``budget_tokens`` via config."""
-    from evals.common import config as cfg
-    from evals.common.deepagents_baseline import (
+    from evals.agents.baseline import (
         get_thinking_budget_tokens,
         get_thinking_level,
     )
+    from evals.common import config as cfg
 
     cfg.get_eval_config.cache_clear()
     for level, expected in (("off", 0), ("low", 1024), ("medium", 5000), ("high", 10000)):
@@ -160,7 +160,7 @@ def test_build_chat_model_includes_thinking_when_budget_positive(
     monkeypatch,  # type: ignore[no-untyped-def]
 ) -> None:
     """thinking is wired through init_chat_model only when budget > 0."""
-    from evals.common.deepagents_baseline import build_chat_model
+    from evals.agents.baseline import build_chat_model
 
     captured: dict[str, object] = {}
 
@@ -169,7 +169,7 @@ def test_build_chat_model_includes_thinking_when_budget_positive(
         captured["kwargs"] = kwargs
         return "stub"
 
-    import evals.common.deepagents_baseline as mod
+    import evals.agents.baseline as mod
 
     monkeypatch.setattr(mod, "init_chat_model", fake_init_chat_model)
 
@@ -198,9 +198,9 @@ def test_build_baseline_agent_wraps_with_finalizer_when_response_format_set(
     """
     from pydantic import BaseModel
 
-    import evals.common.deepagents_baseline as mod
-    from evals.common.deepagents_baseline import build_baseline_agent
-    from evals.common.structured_finalizer import _StructuredFinalizerWrapper
+    import evals.agents.baseline as mod
+    from evals.agents.baseline import build_baseline_agent
+    from evals.agents.structured_finalizer import _StructuredFinalizerWrapper
 
     captured_chat: dict[str, object] = {}
     captured_agent: dict[str, object] = {}
@@ -252,7 +252,7 @@ def test_build_run_config_records_unprefixed_model_for_langsmith() -> None:
     attributes should show the model the gateway actually served
     (``glm-4.5-air``), not our internal client-selection label.
     """
-    from evals.common.deepagents_baseline import build_run_config
+    from evals.agents.baseline import build_run_config
 
     cfg = build_run_config(
         sample_id="s1",

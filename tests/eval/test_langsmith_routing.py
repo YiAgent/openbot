@@ -1,4 +1,4 @@
-"""Unit tests for single-project trace routing in evals.common.langsmith."""
+"""Unit tests for single-project trace routing in evals.agents.langsmith."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from evals.common import langsmith as ls
+from evals.agents import langsmith as ls
 
 
 def test_configure_tracing_skips_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
