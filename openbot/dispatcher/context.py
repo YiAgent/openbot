@@ -21,8 +21,8 @@ class EventContext:
     """Structured fields extracted from a GitHub webhook payload.
 
     ``issue_body``:
-      - ``None``  — the "body" key was absent from the payload (e.g. label events)
-      - ``""``    — the body key was present but explicitly empty or null in JSON
+      - ``None``  — the "body" key was absent OR the value was null in JSON
+      - ``""``    — the body key was present and explicitly an empty string
       - otherwise — the actual body string
 
     ``pr_additions``, ``pr_deletions``, ``pr_changed_files``:
