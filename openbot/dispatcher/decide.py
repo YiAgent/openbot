@@ -151,11 +151,21 @@ async def decide_and_enqueue(
             or (event.raw.get("pull_request") or {}).get("body")
             or ""
         )
-        classifier_result = await classify_event(
-            feature=dispatch.feature,
-            body=_body,
-            redis=redis,
-        )
+        try:
+            classifier_result = await classify_event(
+                feature=dispatch.feature,
+                body=_body,
+                redis=redis,
+            )
+        except Exception:
+            # Fail-open: any uncaught exception from the classifier (e.g. timeout,
+            # network error) must never prevent enqueue.  classifier_skipped=True
+            # signals the worker to run the full stage set.
+            _logger.exception(
+                "classifier_exception_in_decide",
+                extra={"delivery_id": event.delivery_id, "repo": event.repo},
+            )
+            classifier_result = None
         classifier_output = (
             _dataclass_asdict(classifier_result) if classifier_result is not None else None
         )
