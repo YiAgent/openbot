@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
-def _extract_initial_labels(raw: dict) -> list[str]:
+def _extract_initial_labels(raw: dict[str, object]) -> list[str]:
     """Best-effort label extraction from raw GitHub event payload.
 
     Checks issue.labels and pull_request.labels. Returns [] on any error.

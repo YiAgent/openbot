@@ -83,10 +83,10 @@ async def test_decide_and_enqueue_never_raises() -> None:
     assert dispatch is not None
 
     class ExplodingQueue:
-        async def enqueue(self, *a, **kw) -> str:
+        async def enqueue(self, *_a: object, **_kw: object) -> str:
             return "0-0"
 
-        async def enqueue_task_spec(self, spec) -> str:
+        async def enqueue_task_spec(self, _spec: object) -> str:
             raise RuntimeError("redis down")
 
     await decide_and_enqueue(
