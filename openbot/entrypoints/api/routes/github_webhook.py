@@ -11,7 +11,7 @@ This module is HTTP glue only:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 
@@ -79,7 +79,7 @@ async def github_webhook(
 
 
 async def _decide_and_enqueue_bg(
-    app_instance: object,
+    app_instance: Any,  # FastAPI Starlette app; .state is a dynamic namespace
     adapter: GitHubAdapter,
     event: UnifiedEvent,
     dispatch: Dispatch,
