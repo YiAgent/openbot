@@ -149,6 +149,10 @@ def deserialize_task_spec(blob: str | bytes) -> TaskSpec | None:
         )
         return None
     if not isinstance(data, dict) or data.get("spec_version") != TASK_SPEC_VERSION:
+        _logger.warning(
+            "task_spec_version_mismatch",
+            extra={"spec_version": data.get("spec_version") if isinstance(data, dict) else None},
+        )
         return None
     try:
         return TaskSpec(**data)

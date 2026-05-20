@@ -12,7 +12,7 @@ from openbot.infrastructure.queue.task_spec import (
 )
 
 
-def _spec(**kw) -> TaskSpec:
+def _spec(**kw: object) -> TaskSpec:
     base: dict = {
         "spec_version": 3,
         "task_id": "t-1",
