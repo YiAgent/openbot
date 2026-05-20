@@ -11,6 +11,7 @@ Verifies the observable-outcome criteria from spec §8:
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 from unittest.mock import AsyncMock
 
 import fakeredis.aioredis
@@ -29,6 +30,7 @@ from openbot.application.middleware import (
     RateLimitMiddleware,
     SanitizeInputsMiddleware,
 )
+from openbot.domain.events import UnifiedEvent
 from openbot.infrastructure.queue.task_spec import TaskSpec
 from openbot.infrastructure.queue.worker import (
     GROUP_NAME,
@@ -98,12 +100,12 @@ async def test_f02_worker_routes_v3_to_execute_handler(monkeypatch: pytest.Monke
     handler_calls: list[str] = []
 
     async def fake_execute_handler(**kw: object) -> None:
-        handler_calls.append(kw["event"].delivery_id)  # type: ignore[union-attr]
+        handler_calls.append(cast(UnifiedEvent, kw["event"]).delivery_id)
 
     run_dispatch_calls: list[str] = []
 
     async def fake_run_dispatch(**kw: object) -> None:
-        run_dispatch_calls.append(kw["event"].delivery_id)  # type: ignore[union-attr]
+        run_dispatch_calls.append(cast(UnifiedEvent, kw["event"]).delivery_id)
 
     monkeypatch.setattr(
         "openbot.infrastructure.queue.worker.execute_handler",
@@ -154,12 +156,12 @@ async def test_f03_worker_falls_back_to_run_dispatch_for_v2(
     run_dispatch_calls: list[str] = []
 
     async def fake_run_dispatch(**kw: object) -> None:
-        run_dispatch_calls.append(kw["event"].delivery_id)  # type: ignore[union-attr]
+        run_dispatch_calls.append(cast(UnifiedEvent, kw["event"]).delivery_id)
 
     execute_handler_calls: list[str] = []
 
     async def fake_execute_handler(**kw: object) -> None:
-        execute_handler_calls.append(kw["event"].delivery_id)  # type: ignore[union-attr]
+        execute_handler_calls.append(cast(UnifiedEvent, kw["event"]).delivery_id)
 
     monkeypatch.setattr(
         "openbot.infrastructure.queue.worker.run_dispatch",
@@ -271,12 +273,3 @@ def test_f05_preflight_chain_has_10_middleware_in_locked_order() -> None:
         assert isinstance(actual, expected_cls), (
             f"Position {i}: expected {expected_cls.__name__}, got {type(actual).__name__}"
         )
-
-
-# ── asyncio fixture ────────────────────────────────────────────────────────────
-
-
-@pytest.fixture(autouse=True)
-def _asyncio_mode_marker():
-    """asyncio mode=auto; fixture is a no-op kept as a clear marker."""
-    return None
