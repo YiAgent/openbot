@@ -21,6 +21,7 @@ from openbot.entrypoints.api.deps import verified_github_event
 from openbot.infrastructure.adapters.github import GitHubAdapter
 
 if TYPE_CHECKING:
+    from openbot.application.ports.audit_log import AuditLogPort
     from openbot.application.router import Dispatch
     from openbot.domain.events import UnifiedEvent
 
@@ -84,7 +85,7 @@ async def _decide_and_enqueue_bg(
     event: UnifiedEvent,
     dispatch: Dispatch,
     check_run_id: int | None = None,
-    audit: object | None = None,
+    audit: AuditLogPort | None = None,
 ) -> None:
     """Webhook async segment — runs preflight then enqueues TaskSpec v3.
 
