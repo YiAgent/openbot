@@ -58,14 +58,21 @@ def test_is_v3_spec_bytes_true() -> None:
 @pytest.mark.asyncio
 async def test_worker_routes_v3_to_execute_handler(monkeypatch) -> None:
     """Worker calls execute_handler (not run_dispatch) for v3 specs."""
+    from tests._fakes.config_loader import FakeConfigLoader
+
     handler_calls: list[str] = []
 
-    async def fake_execute_handler(**kw) -> None:
-        handler_calls.append(kw["event"].delivery_id)
+    async def fake_execute_handler(**kw: object) -> None:
+        handler_calls.append(kw["event"].delivery_id)  # type: ignore[union-attr]
 
     monkeypatch.setattr(
         "openbot.infrastructure.queue.worker.execute_handler",
         fake_execute_handler,
+    )
+    fake_loader = FakeConfigLoader()
+    monkeypatch.setattr(
+        "openbot.infrastructure.queue.worker.load_for_repo",
+        fake_loader.load_for_repo,
     )
 
     redis = fakeredis.aioredis.FakeRedis()
@@ -91,14 +98,21 @@ async def test_worker_routes_v3_to_execute_handler(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_worker_v3_cancel_openbot_quick_exit(monkeypatch) -> None:
     """cancel-openbot in initial_labels → XACK immediately, no handler call."""
+    from tests._fakes.config_loader import FakeConfigLoader
+
     handler_calls: list[str] = []
 
-    async def fake_execute_handler(**kw) -> None:
+    async def fake_execute_handler(**_kw: object) -> None:
         handler_calls.append("called")
 
     monkeypatch.setattr(
         "openbot.infrastructure.queue.worker.execute_handler",
         fake_execute_handler,
+    )
+    fake_loader = FakeConfigLoader()
+    monkeypatch.setattr(
+        "openbot.infrastructure.queue.worker.load_for_repo",
+        fake_loader.load_for_repo,
     )
 
     redis = fakeredis.aioredis.FakeRedis()
@@ -127,8 +141,8 @@ async def test_worker_legacy_v2_payload_still_works(monkeypatch) -> None:
     """v2 QueuePayload entries continue through the old path unchanged."""
     run_dispatch_calls: list[str] = []
 
-    async def fake_run_dispatch(**kw) -> None:
-        run_dispatch_calls.append(kw["event"].delivery_id)
+    async def fake_run_dispatch(**kw: object) -> None:
+        run_dispatch_calls.append(kw["event"].delivery_id)  # type: ignore[union-attr]
 
     monkeypatch.setattr(
         "openbot.infrastructure.queue.worker.run_dispatch",

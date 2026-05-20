@@ -178,8 +178,8 @@ async def _execute_task_spec(
             resource_key=spec.resource_key,
         )
 
-    # W4: Load effective config.
-    config = await load_for_repo(None, event)
+    # W4: Load effective config (adapter needed for GitHub API calls in config loader).
+    config = await load_for_repo(adapter, event)
 
     # W5-W8: Attempt counter + cancellation lifecycle.
     attempts = await _bump_attempt_counter(redis, entry_id)
