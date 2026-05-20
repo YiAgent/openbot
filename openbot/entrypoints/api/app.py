@@ -31,6 +31,7 @@ from openbot import __version__
 from openbot.application.ports.channel_adapter import ChannelAdapterPort
 from openbot.application.ports.dedup import DedupPort
 from openbot.application.ports.queue import QueuePort
+from openbot.core.logging import configure_root_logger
 from openbot.core.settings import Settings, get_settings
 from openbot.entrypoints.api.routes.github_webhook import router as _webhook_router
 from openbot.entrypoints.api.routes.health import router as _health_router
@@ -102,6 +103,10 @@ def _build_auth(settings: Settings) -> GitHubAppAuth | None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Switch root logger to JSON before any other startup work so every
+    # subsequent log line (sentry_initialised, langsmith_tracing_active,
+    # openbot_startup, etc.) is emitted as a structured JSON object.
+    configure_root_logger()
     settings = get_settings()
     # Initialise Sentry first so any later startup error (Postgres
     # unreachable, malformed PEM, etc.) is captured.

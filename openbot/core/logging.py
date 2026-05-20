@@ -40,9 +40,18 @@ def _build_json_formatter() -> logging.Formatter:
     Import is deferred so that import-time failures (missing dep) are
     caught by configure_root_logger and handled with a fallback.
     """
-    from pythonjsonlogger import jsonlogger  # type: ignore[import-untyped]
+    try:
+        # python-json-logger ≥ 3.x: module renamed from jsonlogger → json
+        from pythonjsonlogger.json import (
+            JsonFormatter as _JsonFormatter,  # type: ignore[import-untyped]
+        )
+    except ImportError:
+        # python-json-logger < 3.x: fall back to legacy path
+        from pythonjsonlogger.jsonlogger import (
+            JsonFormatter as _JsonFormatter,  # type: ignore[import-untyped]
+        )
 
-    class _OpenBotJsonFormatter(jsonlogger.JsonFormatter):
+    class _OpenBotJsonFormatter(_JsonFormatter):
         """Opinionated JSON format for OpenBot log lines.
 
         Key decisions:
@@ -80,12 +89,15 @@ def configure_root_logger() -> None:
     is not available, falls back to a plain-text basicConfig and emits a
     WARNING so the gap is visible in the logs.
 
-    ``force=True`` is used when installing the JSON handler so that Uvicorn
-    (which configures the root logger before our lifespan runs) and pytest
-    (which sets up its own capturing handler) are replaced. Without ``force``
-    the JSON formatter would silently be ignored whenever another handler
-    got there first.
+    ``force=True`` is used in production so that Uvicorn's handlers (set up
+    before the lifespan runs) are replaced by the JSON handler. In test
+    environments pytest's ``caplog`` installs a ``LogCaptureHandler`` on the
+    root logger; evicting it with ``force=True`` would make ``caplog.records``
+    empty even though logs are flowing. We detect tests via ``sys.modules``
+    and fall back to ``addHandler`` so caplog coexists with JSON output.
     """
+    import sys
+
     level_name = os.environ.get("OPENBOT_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
@@ -103,4 +115,18 @@ def configure_root_logger() -> None:
 
     handler = logging.StreamHandler()
     handler.setFormatter(json_formatter)
-    logging.basicConfig(handlers=[handler], level=level, force=True)
+
+    # Under pytest, use addHandler so caplog's LogCaptureHandler is preserved.
+    # Under uvicorn (production / dev server), force=True is needed to replace
+    # uvicorn's pre-installed handlers.
+    if "pytest" in sys.modules or "_pytest" in sys.modules:
+        root = logging.getLogger()
+        root.setLevel(level)
+        # Avoid duplicate JSON handlers if called more than once in a test run.
+        if not any(
+            isinstance(h, logging.StreamHandler) and h.formatter is json_formatter.__class__
+            for h in root.handlers
+        ):
+            root.addHandler(handler)
+    else:
+        logging.basicConfig(handlers=[handler], level=level, force=True)
