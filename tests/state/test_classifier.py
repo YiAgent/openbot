@@ -172,8 +172,34 @@ _CASES = [
         State.RUNNING,
         Intent.IGNORE,
         State.RUNNING,
-        "unhandled_kind",
-        id="unlabeling_ignored",
+        "label_removed",
+        id="issue_unlabeled_returns_label_removed",
+    ),
+    pytest.param(
+        _event(EventKind.ISSUE_UNLABELED),
+        State.IDLE,
+        Intent.IGNORE,
+        State.IDLE,
+        "label_removed",
+        id="issue_unlabeled_from_idle_returns_label_removed",
+    ),
+    pytest.param(
+        _event(
+            EventKind.PR_UNLABELED, pr_number=42, issue_number=None, label_name="cancel-openbot"
+        ),
+        State.RUNNING,
+        Intent.IGNORE,
+        State.RUNNING,
+        "label_removed",
+        id="pr_unlabeled_returns_label_removed",
+    ),
+    pytest.param(
+        _event(EventKind.PR_UNLABELED, pr_number=42, issue_number=None),
+        State.IDLE,
+        Intent.IGNORE,
+        State.IDLE,
+        "label_removed",
+        id="pr_unlabeled_from_idle_returns_label_removed",
     ),
     # ── issue.closed / pr.closed / pr.merged ──
     pytest.param(

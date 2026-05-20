@@ -11,11 +11,22 @@ Never raises out — callers (BackgroundTask, tests) expect fire-and-forget.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
+from dataclasses import asdict as _dataclass_asdict
 from typing import TYPE_CHECKING
 
 from openbot.application.dispatcher import build_preflight_chain, execute_handler
 from openbot.application.middleware import MiddlewareResult, PreflightContext, run_preflight
+from openbot.dispatcher.classifier import classify_event, stages_from_classifier
+from openbot.dispatcher.context import extract_event_context
+from openbot.dispatcher.direct_actions import (
+    check_issue_completeness,
+    check_mention_clarity,
+    check_pr_size,
+)
+from openbot.dispatcher.incremental import compute_diff_scope
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.queue.task_spec import TaskSpec
 
 if TYPE_CHECKING:
@@ -98,7 +109,76 @@ async def decide_and_enqueue(
         if decision.result is not MiddlewareResult.PROCEED:
             return
 
+        # D11: Extract structured context from raw payload (pure, no I/O).
+        ev_ctx = extract_event_context(event)
+        feature = dispatch.feature
+        _direct_action_rules = {
+            Feature.TRIAGE: check_issue_completeness,
+            Feature.REVIEW: check_pr_size,
+            Feature.CHAT: check_mention_clarity,
+        }
+        rule = _direct_action_rules.get(feature)
+        direct_action = rule(ev_ctx) if rule is not None else None
+
+        # D12: Short-circuit — reply and return without enqueuing.
+        if direct_action is not None:
+            try:
+                await adapter.reply(event, direct_action.message)
+                if direct_action.labels_to_add:
+                    await adapter.add_label(event, *direct_action.labels_to_add)
+                _logger.info(
+                    "decide_and_enqueue_direct_action",
+                    extra={
+                        "delivery_id": event.delivery_id,
+                        "repo": event.repo,
+                        "feature": str(feature),
+                        "labels_added": list(direct_action.labels_to_add),
+                    },
+                )
+            except Exception:
+                _logger.exception(
+                    "direct_action_reply_failed",
+                    extra={"delivery_id": event.delivery_id, "repo": event.repo},
+                )
+            return
+
         initial_labels = _extract_initial_labels(event.raw)
+
+        # D13: Classify event (D10) and compute incremental scope for PRs.
+        _body = (
+            event.comment_body
+            or (event.raw.get("issue") or {}).get("body")
+            or (event.raw.get("pull_request") or {}).get("body")
+            or ""
+        )
+        classifier_result = await classify_event(
+            feature=dispatch.feature,
+            body=_body,
+            redis=redis,
+        )
+        classifier_output = (
+            _dataclass_asdict(classifier_result) if classifier_result is not None else None
+        )
+        stages = stages_from_classifier(dispatch.feature, classifier_result)
+
+        # D13b: For PR review events, fetch the SHA from the last completed
+        # review so DiffScope can decide if this push is incremental.
+        # Use event.resource_key (always computed from channel:repo:pr:N)
+        # rather than dispatch.resource_key (only populated by the state-
+        # machine receive path, None in unit tests and dev mode).
+        last_reviewed_sha: str | None = None
+        if (
+            dispatch.feature is Feature.REVIEW
+            and session_factory is not None
+            and event.resource_key is not None
+        ):
+            from openbot.application.state.runs_repo import get_last_reviewed_sha
+            from openbot.infrastructure.persistence.db import session_scope
+
+            async with session_scope(session_factory) as _session:
+                last_reviewed_sha = await get_last_reviewed_sha(_session, event.resource_key)
+
+        diff_scope = compute_diff_scope(event.raw, last_reviewed_sha=last_reviewed_sha)
 
         if queue is not None:
             spec = TaskSpec.from_event_and_dispatch(
@@ -107,7 +187,11 @@ async def decide_and_enqueue(
                 check_run_id=check_run_id,
                 decision_trace=[],
                 initial_labels=initial_labels,
+                classifier_output=classifier_output,
+                is_incremental=diff_scope.is_incremental,
+                is_force_push=diff_scope.is_force_push,
             )
+            spec = dataclasses.replace(spec, stages_to_run=stages)
             await queue.enqueue_task_spec(spec)
             _logger.info(
                 "decide_and_enqueue_queued",
@@ -116,6 +200,9 @@ async def decide_and_enqueue(
                     "repo": event.repo,
                     "scenario": spec.scenario,
                     "task_id": spec.task_id,
+                    "classifier_skipped": spec.classifier_skipped,
+                    "stages_to_run": spec.stages_to_run,
+                    "is_incremental": spec.is_incremental,
                 },
             )
         else:

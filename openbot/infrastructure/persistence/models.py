@@ -243,6 +243,13 @@ class TaskRun(Base):
     # debugging "which delivery moved this row".
     last_delivery_id: Mapped[str | None] = mapped_column(String(64), default=None)
 
+    # SHA of the PR head commit at the end of the most recent successful
+    # REVIEW run. NULL until the first review completes. The dispatcher
+    # reads this to compute DiffScope.is_incremental for PR_SYNCHRONIZED
+    # events — if the incoming `before` SHA matches this, the push is
+    # incremental (only the diff since last review needs re-checking).
+    last_reviewed_sha: Mapped[str | None] = mapped_column(String(40), default=None)
+
     # SQLAlchemy version_id_col. Incremented atomically on every UPDATE
     # that goes through the ORM mapper; mismatched version raises
     # StaleDataError, which ``runs_repo.transition`` translates into a

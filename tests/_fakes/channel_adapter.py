@@ -14,6 +14,7 @@ class FakeChannelAdapter:
     name: str = "fake"
     parsed_event: UnifiedEvent | None = None
     replies: list[tuple[str | None, str]] = field(default_factory=list)
+    labels_added: list[tuple[str | None, tuple[str, ...]]] = field(default_factory=list)
 
     def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
         return  # always accept
@@ -55,3 +56,7 @@ class FakeChannelAdapter:
 
     async def fetch_repo_file(self, event: UnifiedEvent, path: str) -> bytes | None:
         return None  # no config file by default in tests
+
+    async def add_label(self, event: UnifiedEvent, *labels: str) -> list[dict[str, Any]]:
+        self.labels_added.append((event.resource_key, labels))
+        return [{"name": lbl} for lbl in labels]

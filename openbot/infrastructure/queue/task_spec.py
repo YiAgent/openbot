@@ -64,10 +64,14 @@ class TaskSpec:
     check_run_id: int | None
     # decision proof
     decision_trace: list[dict[str, Any]]
-    classifier_skipped: bool  # True in F1
+    classifier_skipped: bool  # True when classifier_output is None
     stages_to_run: list[str]  # [] = all stages (F1 default)
     # cancel quick-check
     initial_labels: list[str]  # label snapshot at spec-build time
+    # F3 fields — optional with defaults (backward-compat with old v3 JSON)
+    classifier_output: dict[str, Any] | None = None
+    is_incremental: bool = False
+    is_force_push: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, separators=(",", ":"))
@@ -105,6 +109,9 @@ class TaskSpec:
         check_run_id: int | None = None,
         decision_trace: list[dict[str, Any]] | None = None,
         initial_labels: list[str] | None = None,
+        classifier_output: dict[str, Any] | None = None,
+        is_incremental: bool = False,
+        is_force_push: bool = False,
     ) -> TaskSpec:
         now = datetime.now(UTC).isoformat()
         return cls(
@@ -131,9 +138,12 @@ class TaskSpec:
             raw=event.raw,
             check_run_id=check_run_id,
             decision_trace=decision_trace or [],
-            classifier_skipped=True,
+            classifier_skipped=(classifier_output is None),
             stages_to_run=[],
             initial_labels=initial_labels or [],
+            classifier_output=classifier_output,
+            is_incremental=is_incremental,
+            is_force_push=is_force_push,
         )
 
 

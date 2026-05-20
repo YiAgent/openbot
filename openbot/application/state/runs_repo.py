@@ -268,8 +268,36 @@ def _cas_failed(prior_state: State, prior_run_id: str | None) -> TransitionResul
     )
 
 
+async def get_last_reviewed_sha(session: AsyncSession, resource_key: str) -> str | None:
+    """Return the head SHA from the last successful REVIEW run, or None.
+
+    None means either the resource key has never been reviewed, or the
+    ``task_runs`` row does not yet have a ``last_reviewed_sha`` (rows
+    created before F4 still carry NULL). The dispatcher treats None as
+    "first review" and computes a full diff from the PR base.
+    """
+    row = await session.get(TaskRun, resource_key)
+    return row.last_reviewed_sha if row is not None else None
+
+
+async def store_reviewed_sha(session: AsyncSession, resource_key: str, sha: str) -> None:
+    """Persist the head SHA after a successful REVIEW run completes.
+
+    Called by the worker after ``execute_handler`` returns cleanly for a
+    PR review scenario. Does nothing if the ``task_runs`` row is absent
+    (should never happen in production since ``transition`` always writes
+    the row before enqueue, but defensive is better than an unhandled
+    AttributeError).
+    """
+    row = await session.get(TaskRun, resource_key)
+    if row is not None:
+        row.last_reviewed_sha = sha
+
+
 __all__ = [
     "TransitionResult",
+    "get_last_reviewed_sha",
     "get_state",
+    "store_reviewed_sha",
     "transition",
 ]
