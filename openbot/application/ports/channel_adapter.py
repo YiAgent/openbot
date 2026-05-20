@@ -81,3 +81,11 @@ class ChannelAdapterPort(Protocol):
         Raises on other HTTP errors (auth failures, server errors).
         """
         ...
+
+    async def add_label(self, event: UnifiedEvent, *labels: str) -> list[dict[str, Any]]:
+        """Add one or more labels to the issue or PR referenced by *event*.
+
+        Returns a list of created label objects (same shape as GitHub API response).
+        Implementations may return [] on a no-op or if labels already exist.
+        """
+        ...
