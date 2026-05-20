@@ -127,3 +127,8 @@ class TestCheckMentionClarity:
         """Body without @openbot prefix counted from start."""
         long_body = "This is a detailed request about the authentication system failing."
         assert check_mention_clarity(_ctx(mention_body=long_body)) is None
+
+    def test_mention_handle_without_trailing_space(self) -> None:
+        """'@openbot' without trailing space still triggers action (body = 8 chars)."""
+        action = check_mention_clarity(_ctx(mention_body="@openbot"))
+        assert action is not None

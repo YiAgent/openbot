@@ -116,7 +116,7 @@ def check_mention_clarity(ctx: EventContext) -> DirectAction | None:
         )
     for prefix in _CHAT_PREFIXES:
         if body.startswith(prefix):
-            body = body[len(prefix) :]
+            body = body[len(prefix) :].strip()
             break
     if len(body) < _MENTION_MIN_CHARS:
         return DirectAction(
