@@ -1,16 +1,13 @@
-"""State-machine L2: issue lifecycle (I-01, I-05x2, I-09, I-11, I-23, M-31).
+"""State-machine L2: issue lifecycle (I-01, I-02, I-03, I-05x2, I-09, I-11, I-23, M-31).
 
-Plan IDs reference ``docs/plans/webhook-worker-test-plan.md``.
+Plan IDs reference ``docs/_archive/webhook-worker/webhook-worker-test-plan.md``.
 
 Router gaps (events ``dispatch_for`` returns None for — not routed to SM):
   I-04: ISSUE_CLOSED  — no routing; deferred.
-  I-05 fresh path: ISSUE_REOPENED — not in dispatch_for's routing table.
-    ``test_reopened_from_idle`` verifies the router correctly ignores it.
-    To test the SM "fresh reopen" path, the router must be extended first.
 
-  The "IGNORE while already RUNNING" path (I-05 running) IS testable via
-  a second ISSUE_OPENED with a different delivery_id — same event kind,
-  different delivery.
+The "IGNORE while already RUNNING" path (I-05 running) is exercised via
+a second ISSUE_OPENED with a different delivery_id — same event kind,
+different delivery — in ``test_opened_twice_second_ignored_already_running``.
 """
 
 from __future__ import annotations
@@ -41,6 +38,68 @@ async def test_opened_starts_task(sm: SMHarness) -> None:
     assert data["feature"] == "triage"
     assert await sm.queue_len() == 1
     assert await sm.db_state(_ISSUE_RK) == State.RUNNING
+
+
+# ── I-02 / I-03: issues.edited routes through the same triage feature ─────
+
+
+async def test_edited_from_idle_starts_triage(sm: SMHarness) -> None:
+    """I-02: issues.edited on an idle issue → triage START (equivalent to I-01).
+
+    ``dispatch_for`` routes ISSUE_EDITED to TRIAGE via the same branch as
+    ISSUE_OPENED. A first delivery for an edited issue must enter RUNNING.
+    """
+    body = issue_body("edited", number=42)
+    resp = await sm.client.post(
+        "/webhook/github",
+        content=body,
+        headers=sign(body, event="issues", delivery="d-02"),
+    )
+
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["status"] == "accepted"
+    assert data["feature"] == "triage"
+    assert await sm.queue_len() == 1
+    assert await sm.db_state(_ISSUE_RK) == State.RUNNING
+
+
+async def test_edited_supersedes_running_task(sm: SMHarness) -> None:
+    """I-03: issues.edited while a triage run is in flight → SUPERSEDE.
+
+    Sequence:
+      1. ``issues.opened`` → DB RUNNING, run_id_1 allocated.
+      2. ``issues.edited`` → DB RUNNING with a new run_id, cancel flag set
+         for run_id_1 (X-03: cancellation paths must touch task status).
+    """
+    # First delivery: open the issue.
+    body1 = issue_body("opened", number=42)
+    await sm.client.post(
+        "/webhook/github",
+        content=body1,
+        headers=sign(body1, event="issues", delivery="d-03-open"),
+    )
+    assert await sm.db_state(_ISSUE_RK) == State.RUNNING
+    run_id_1 = await sm.db_run_id(_ISSUE_RK)
+    assert run_id_1 is not None
+
+    # Second delivery: title/body changed → edited.
+    body2 = issue_body("edited", number=42)
+    resp = await sm.client.post(
+        "/webhook/github",
+        content=body2,
+        headers=sign(body2, event="issues", delivery="d-03-edit"),
+    )
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "accepted"
+    # Still RUNNING, new run_id, queue has both entries, cancel flag set on old run.
+    assert await sm.db_state(_ISSUE_RK) == State.RUNNING
+    run_id_2 = await sm.db_run_id(_ISSUE_RK)
+    assert run_id_2 is not None
+    assert run_id_2 != run_id_1
+    assert await sm.queue_len() == 2
+    assert await sm.cancel_flag(run_id_1) is True
 
 
 # ── I-05: issues.reopened → fresh or already_running ──────────────────────

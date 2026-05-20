@@ -2,7 +2,7 @@
 
 > **Date**: 2026-05-17  
 > **Scope**: `tests/state_machine/` — 35 new tests, ~350 lines  
-> **Related**: `docs/plans/webhook-worker-test-plan.md` Phase 1
+> **Related**: `docs/_archive/webhook-worker/webhook-worker-test-plan.md` Phase 1
 
 ---
 

@@ -1,6 +1,6 @@
 """State-machine L2: error and edge-case paths (I-30, I-31x2, I-32, X-01).
 
-Plan IDs reference ``docs/plans/webhook-worker-test-plan.md``.
+Plan IDs reference ``docs/_archive/webhook-worker/webhook-worker-test-plan.md``.
 
 I-32 note: when ``enqueue`` raises, the webapp falls through to
 ``BackgroundTasks.add_task(_decide_and_enqueue_bg, ...)``. With ``ASGITransport``,

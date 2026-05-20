@@ -1,10 +1,18 @@
-"""State-machine L2: PR lifecycle (P-01, P-02x2, P-05).
+"""State-machine L2: PR lifecycle (P-01, P-02x2, P-03, P-05).
 
-Plan IDs reference ``docs/plans/webhook-worker-test-plan.md``.
+Plan IDs reference ``docs/_archive/webhook-worker/webhook-worker-test-plan.md``.
 
 NOTE (P-04): PR_CLOSED / PR_MERGED are not routed by ``dispatch_for()`` —
 the webapp returns ``status=ignored`` before the state machine sees them.
 Testing P-04 (cancel on close) requires extending the router. Deferred.
+
+NOTE (P-20..P-23): fork-PR safety. Fork-PR gating is enforced by
+``ForkPRGateMiddleware`` and exhaustively unit-tested in
+``tests/application/middleware/test_security.py`` (13 cases covering
+same-repo PROCEED, fork BLOCKED, maintainer ``/ok-to-test`` PROCEED,
+non-maintainer rejection, non-REVIEW feature pass-through, and both
+``fork`` flag + ``full_name`` mismatch detection paths). The E2E
+chain assertion lives in ``tests/e2e/test_spec_demos.py::test_demo_07_*``.
 """
 
 from __future__ import annotations
@@ -93,6 +101,31 @@ async def test_synchronize_supersedes_running(sm: SMHarness) -> None:
     assert await sm.queue_len() == 2
     # The receive side signals cancellation for the superseded run.
     assert await sm.cancel_flag(run_id_1) is True
+
+
+# ── P-03: pull_request.reopened → REVIEW, RUNNING ────────────────────────
+
+
+async def test_pr_reopened_starts_review(sm: SMHarness) -> None:
+    """P-03: ``pull_request.reopened`` on an idle PR → triage equivalent of opened.
+
+    ``dispatch_for`` routes PR_OPENED, PR_SYNCHRONIZED, and PR_REOPENED all
+    to REVIEW. A reopened PR with no prior run must enter RUNNING via the
+    START intent — same shape as P-01.
+    """
+    body = pr_body("reopened", number=7, head_sha="sha-reopen")
+    resp = await sm.client.post(
+        "/webhook/github",
+        content=body,
+        headers=sign(body, event="pull_request", delivery="p-03"),
+    )
+
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["status"] == "accepted"
+    assert data["feature"] == "review"
+    assert await sm.queue_len() == 1
+    assert await sm.db_state(_PR_RK) == State.RUNNING
 
 
 # ── P-05: pull_request.edited → UNKNOWN kind → ignored ───────────────────
