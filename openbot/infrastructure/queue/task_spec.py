@@ -22,15 +22,10 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 TASK_SPEC_VERSION: Final = 3
 
-
-@dataclass(frozen=True, slots=True)
-class DecisionStep:
-    """One middleware's outcome in the webhook preflight decision trace."""
-
-    middleware: str
-    outcome: str  # "proceed" | "blocked"
-    reason: str | None
-    latency_ms: int
+# Note: the webhook decision trace is serialized as a `list[dict[str, Any]]`
+# (see `decision_trace` field below). A typed `DecisionStep` dataclass was
+# considered during F1 design but never wired — the trace is built directly
+# as dicts in openbot/dispatcher/decide.py to keep JSON serialization trivial.
 
 
 @dataclass(frozen=True, slots=True)

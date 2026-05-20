@@ -205,6 +205,16 @@ doppler run -- uvicorn openbot.entrypoints.api.app:app --reload
 doppler run -- python -m openbot.entrypoints.worker
 ```
 
+Ops reports (read-only) — cost + audit_log:
+
+```bash
+# Last 30 days of LLM spend (markdown table, paste into issue / Slack):
+doppler run -- python -m openbot.entrypoints.cli.audit cost --since 30
+
+# Last 7 days of failed workflows, JSON for piping to jq:
+doppler run -- python -m openbot.entrypoints.cli.audit log --phase failed --since 7 --json
+```
+
 Offline fallback:
 
 ```bash
