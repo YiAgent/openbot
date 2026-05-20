@@ -110,6 +110,13 @@ def classify(event: UnifiedEvent, current_state: State) -> EventClassification:
         return EventClassification(intent=Intent.START, next_state=State.RUNNING)
 
     # ── labeling ──
+    if kind in (EventKind.ISSUE_UNLABELED, EventKind.PR_UNLABELED):
+        return EventClassification(
+            intent=Intent.IGNORE,
+            next_state=current_state,
+            reason="label_removed",
+        )
+
     if kind in (EventKind.ISSUE_LABELED, EventKind.PR_LABELED):
         # We only care about the "cancel-openbot" label (PRD §4.7 / spec §6.1).
         # v0.1: locked literal. v0.2: from config.
