@@ -47,8 +47,10 @@ from openbot.application.state.cancellation import (
 from openbot.application.state.cancellation import (
     signal as cancellation_signal,
 )
+from openbot.application.state.runs_repo import store_reviewed_sha
 from openbot.core.metrics import queue_depth
 from openbot.infrastructure.config_loader import load_for_repo
+from openbot.infrastructure.persistence.db import session_scope
 from openbot.infrastructure.queue.payload import (
     DEAD_STREAM,
     GROUP_NAME,
@@ -211,14 +213,11 @@ async def _execute_task_spec(
     finally:
         cancellation_deregister(active_run_id)
 
-    # W9: For completed PR review runs, persist the head SHA so future
+    # For completed PR review runs, persist the head SHA so future
     # PR_SYNCHRONIZED events can compute DiffScope.is_incremental correctly.
     if spec.scenario == "review" and session_factory is not None and spec.resource_key is not None:
         head_sha = ((spec.raw.get("pull_request") or {}).get("head") or {}).get("sha")
         if head_sha:
-            from openbot.application.state.runs_repo import store_reviewed_sha
-            from openbot.infrastructure.persistence.db import session_scope
-
             try:
                 async with session_scope(session_factory) as _session:
                     await store_reviewed_sha(_session, spec.resource_key, str(head_sha))

@@ -1,5 +1,5 @@
 # openbot/dispatcher/direct_actions.py
-"""D12: Pure rule functions that evaluate EventContext and return a DirectAction.
+"""Pure rule functions that evaluate EventContext and return a DirectAction.
 
 Each function returns ``DirectAction`` if a canned reply should be sent
 immediately (short-circuit, no enqueue) or ``None`` to let normal flow continue.
@@ -9,31 +9,32 @@ All functions are synchronous and side-effect-free.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Final
 
 from openbot.dispatcher.context import EventContext
+from openbot.domain.workflows import Feature
 
 __all__ = [
     "PR_OVERSIZED_THRESHOLD",
+    "RULES_BY_FEATURE",
     "DirectAction",
     "check_issue_completeness",
     "check_mention_clarity",
     "check_pr_size",
 ]
 
-# ─── Tuneable constants ────────────────────────────────────────────────────────
-
-PR_OVERSIZED_THRESHOLD: int = 500
+PR_OVERSIZED_THRESHOLD: Final[int] = 500
 """Total lines changed (additions + deletions) above which a PR is flagged."""
 
-_MENTION_MIN_CHARS: int = 20
+_MENTION_MIN_CHARS: Final[int] = 20
 """Minimum characters in the stripped mention body to be considered substantive."""
 
-_CHAT_PREFIXES: tuple[str, ...] = ("@openbot ", "@yibots ")
-"""Prefixes stripped from mention bodies before measuring length."""
-
-
-# ─── Result type ──────────────────────────────────────────────────────────────
+# Canonical chat-prefix list lives in ``openbot.application.state.classifier``.
+# Direct-action evaluation runs upstream of the state-machine classifier, so
+# we re-declare here to avoid importing that module just for one constant.
+_CHAT_PREFIXES: Final[tuple[str, ...]] = ("@openbot ", "@yibots ")
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,17 +50,12 @@ class DirectAction:
     drop: bool = True
 
 
-# ─── Rule functions ───────────────────────────────────────────────────────────
-
-
 def check_issue_completeness(ctx: EventContext) -> DirectAction | None:
     """Return a DirectAction when an issue body is empty or whitespace-only.
 
     Returns ``None`` when body key was absent or body has non-whitespace text.
     """
-    if ctx.issue_body is None:
-        return None
-    if ctx.issue_body.strip():
+    if ctx.issue_body is None or ctx.issue_body.strip():
         return None
     return DirectAction(
         message=(
@@ -92,7 +88,6 @@ def check_pr_size(ctx: EventContext) -> DirectAction | None:
             "- Extract preparatory changes into a prerequisite PR\n\n"
             "If splitting is not practical, please add a note explaining why."
         ),
-        labels_to_add=(),
     )
 
 
@@ -128,3 +123,10 @@ def check_mention_clarity(ctx: EventContext) -> DirectAction | None:
             ),
         )
     return None
+
+
+RULES_BY_FEATURE: Final[Mapping[Feature, Callable[[EventContext], DirectAction | None]]] = {
+    Feature.TRIAGE: check_issue_completeness,
+    Feature.REVIEW: check_pr_size,
+    Feature.CHAT: check_mention_clarity,
+}
