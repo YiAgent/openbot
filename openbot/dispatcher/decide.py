@@ -112,15 +112,13 @@ async def decide_and_enqueue(
         # D11: Extract structured context from raw payload (pure, no I/O).
         ev_ctx = extract_event_context(event)
         feature = dispatch.feature
-        direct_action = (
-            check_issue_completeness(ev_ctx)
-            if feature is Feature.TRIAGE
-            else check_pr_size(ev_ctx)
-            if feature is Feature.REVIEW
-            else check_mention_clarity(ev_ctx)
-            if feature is Feature.CHAT
-            else None
-        )
+        _direct_action_rules = {
+            Feature.TRIAGE: check_issue_completeness,
+            Feature.REVIEW: check_pr_size,
+            Feature.CHAT: check_mention_clarity,
+        }
+        rule = _direct_action_rules.get(feature)
+        direct_action = rule(ev_ctx) if rule is not None else None
 
         # D12: Short-circuit — reply and return without enqueuing.
         if direct_action is not None:

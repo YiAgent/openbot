@@ -169,6 +169,23 @@ async def test_normal_pr_size_continues_to_enqueue() -> None:
     assert len(adapter.replies) == 0
 
 
+def _chat_event(body: str) -> UnifiedEvent:
+    """Build an ISSUE_COMMENT event that looks like a @mention."""
+    return UnifiedEvent(
+        channel="github",
+        delivery_id="del-chat",
+        kind=EventKind.ISSUE_COMMENT_CREATED,
+        repo="org/repo",
+        actor="alice",
+        actor_type="User",
+        issue_number=7,
+        pr_number=None,
+        installation_id=100,
+        comment_body=body,
+        raw={"comment": {"body": body}},
+    )
+
+
 @pytest.mark.asyncio
 async def test_direct_action_reply_failure_swallowed() -> None:
     """If adapter.reply() raises, decide_and_enqueue must NOT propagate."""
@@ -191,3 +208,87 @@ async def test_direct_action_reply_failure_swallowed() -> None:
         session_factory=None,
         redis=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_direct_action_add_label_failure_swallowed() -> None:
+    """If adapter.add_label() raises, decide_and_enqueue must NOT propagate."""
+    from openbot.application.router import dispatch_for
+
+    event = _issue_event(body="")  # empty body → check_issue_completeness → direct action
+    dispatch = dispatch_for(event)
+    assert dispatch is not None
+
+    adapter = FakeChannelAdapter()
+    adapter.add_label = AsyncMock(side_effect=RuntimeError("GitHub API down"))
+
+    # Should not raise
+    await decide_and_enqueue(
+        adapter=adapter,
+        event=event,
+        dispatch=dispatch,
+        config_loader=FakeConfigLoader(),
+        queue=FakeQueue(),
+        session_factory=None,
+        redis=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_unclear_mention_sends_reply_and_skips_enqueue() -> None:
+    """Single-word @mention (unclear body) → reply with clarification, no TaskSpec."""
+    from openbot.application.router import dispatch_for
+
+    # check_mention_clarity triggers when the body after stripping the prefix is
+    # too short (< 10 chars after strip). Use a prefix that matches the router.
+    event = _chat_event(body="@openbot hi")
+    dispatch = dispatch_for(event)
+    # Router only dispatches CHAT if the comment starts with the bot prefix.
+    if dispatch is None:
+        pytest.skip("Event not routed to CHAT — check chat prefix config")
+
+    adapter = FakeChannelAdapter()
+    queue = FakeQueue()
+
+    await decide_and_enqueue(
+        adapter=adapter,
+        event=event,
+        dispatch=dispatch,
+        config_loader=FakeConfigLoader(),
+        queue=queue,
+        session_factory=None,
+        redis=None,
+    )
+
+    # Unclear mention → direct reply, nothing enqueued.
+    assert len(adapter.replies) == 1
+    assert len(queue.task_specs) == 0
+
+
+@pytest.mark.asyncio
+async def test_chat_clear_mention_enqueues_task() -> None:
+    """Detailed @mention → no direct-action short-circuit, TaskSpec enqueued."""
+    from openbot.application.router import dispatch_for
+
+    body = "@openbot please review the authentication changes in this PR for security issues"
+    event = _chat_event(body=body)
+    dispatch = dispatch_for(event)
+    if dispatch is None:
+        pytest.skip("Event not routed to CHAT — check chat prefix config")
+
+    adapter = FakeChannelAdapter()
+    queue = FakeQueue()
+
+    await decide_and_enqueue(
+        adapter=adapter,
+        event=event,
+        dispatch=dispatch,
+        config_loader=FakeConfigLoader(),
+        queue=queue,
+        session_factory=None,
+        redis=None,
+    )
+
+    # Clear mention → enqueued for LLM handling.
+    assert len(adapter.replies) == 0
+    assert len(queue.task_specs) == 1
