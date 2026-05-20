@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from openbot.application.ports.config_loader import ConfigLoaderPort
     from openbot.application.ports.rate_limiter import RateLimiterPort
     from openbot.application.router import Dispatch
+    from openbot.domain.config_schema import EffectiveConfig
     from openbot.domain.events import UnifiedEvent
 
 _logger = logging.getLogger(__name__)
@@ -252,4 +253,73 @@ async def run_dispatch(
                 _logger.exception("check_run_update_failed_on_handler_crash")
 
 
-__all__ = ["build_preflight_chain", "run_dispatch"]
+async def execute_handler(
+    *,
+    adapter: ChannelAdapterPort,
+    event: UnifiedEvent,
+    dispatch: Dispatch,
+    config: EffectiveConfig,
+    session_factory: async_sessionmaker[AsyncSession] | None,
+    redis: redis_async.Redis | None,
+    check_run_id: int | None = None,
+    audit: AuditLogPort | None = None,
+    rate_limiter: RateLimiterPort | None = None,
+) -> None:
+    """Execute workflow handler directly — no preflight.
+
+    Used by the worker when processing a TaskSpec v3: the webhook async
+    segment already ran the full preflight chain. Never raises out.
+    """
+    ctx = PreflightContext(
+        event=event,
+        dispatch=dispatch,
+        config=config,
+        adapter=adapter,
+        session_factory=session_factory,
+        redis=redis,
+        check_run_id=check_run_id,
+        audit=audit,
+        rate_limiter=rate_limiter,
+    )
+    try:
+        await dispatch.handler(ctx)
+        if check_run_id:
+            try:
+                await adapter.update_check_run(
+                    event,
+                    check_run_id,
+                    status="completed",
+                    conclusion="success",
+                    output={
+                        "title": "Analysis Complete",
+                        "summary": f"Workflow `{dispatch.feature.value}` finished.",
+                    },
+                )
+            except Exception:
+                _logger.exception("check_run_update_failed_on_success")
+    except Exception:
+        _logger.exception(
+            "workflow_handler_crashed",
+            extra={
+                "delivery_id": event.delivery_id,
+                "repo": event.repo,
+                "feature": dispatch.feature.value,
+            },
+        )
+        if check_run_id:
+            try:
+                await adapter.update_check_run(
+                    event,
+                    check_run_id,
+                    status="completed",
+                    conclusion="failure",
+                    output={
+                        "title": "Handler Crash",
+                        "summary": f"Handler `{dispatch.feature.value}` raised unexpectedly.",
+                    },
+                )
+            except Exception:
+                _logger.exception("check_run_update_failed_on_handler_crash")
+
+
+__all__ = ["build_preflight_chain", "execute_handler", "run_dispatch"]

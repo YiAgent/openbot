@@ -30,10 +30,11 @@ would force a circular-import dance via the payload module.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import TYPE_CHECKING, Final
 
-from openbot.application.dispatcher import run_dispatch
+from openbot.application.dispatcher import execute_handler, run_dispatch
 from openbot.application.router import dispatch_for, upgrade_dispatch
 
 # TODO(phase-2c): route through CancellationPort once worker composition root lands.
@@ -47,6 +48,7 @@ from openbot.application.state.cancellation import (
     signal as cancellation_signal,
 )
 from openbot.core.metrics import queue_depth
+from openbot.infrastructure.config_loader import load_for_repo
 from openbot.infrastructure.queue.payload import (
     DEAD_STREAM,
     GROUP_NAME,
@@ -55,6 +57,7 @@ from openbot.infrastructure.queue.payload import (
     QueuePayload,
     deserialize_payload,
 )
+from openbot.infrastructure.queue.task_spec import TaskSpec, deserialize_task_spec
 
 if TYPE_CHECKING:
     import redis.asyncio as redis_async
@@ -90,6 +93,23 @@ def _retry_key(entry_id: str) -> str:
     return f"openbot:workflows:retries:{entry_id}"
 
 
+def _is_v3_spec(blob: str | bytes | None) -> bool:
+    """Peek at the stream entry's JSON to see if it is a TaskSpec v3.
+
+    Returns True only when ``spec_version == 3`` is found, without
+    attempting a full deserialisation. Keeps the v2 path fast for the
+    existing majority of entries during the rolling migration.
+    """
+    if blob is None:
+        return False
+    try:
+        text = blob.decode("utf-8") if isinstance(blob, (bytes, bytearray)) else blob
+        data = json.loads(text)
+        return isinstance(data, dict) and data.get("spec_version") == 3
+    except Exception:
+        return False
+
+
 def _attach_sentry_tags(payload: QueuePayload) -> None:
     """Push delivery context to the Sentry scope for the current dispatch.
 
@@ -106,6 +126,102 @@ def _attach_sentry_tags(payload: QueuePayload) -> None:
         sentry_sdk.set_tag("repo", payload.repo)
     except Exception:
         pass  # Sentry tagging is best-effort; never crash the dispatch loop
+
+
+async def _execute_task_spec(
+    spec: TaskSpec,
+    *,
+    entry_id: str,
+    redis: redis_async.Redis,
+    adapter: GitHubAdapter,
+    session_factory: async_sessionmaker[AsyncSession] | None,
+) -> None:
+    """W1-W8: Process one TaskSpec v3 entry.
+
+    W1: cancel quick-check via initial_labels.
+    W2: reconstruct UnifiedEvent from spec.
+    W3: reconstruct Dispatch from event via router.
+    W4: load EffectiveConfig for this repo.
+    W5: call execute_handler() (no preflight).
+    W6-W8: bump attempt counter, register/deregister cancellation slot.
+    """
+    # W1: Cancel quick-check — avoid calling the handler at all.
+    if "cancel-openbot" in spec.initial_labels:
+        _logger.info(
+            "queue_v3_cancel_quick_exit",
+            extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
+        )
+        await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
+        return
+
+    # W2: Reconstruct event from the spec's serialised fields.
+    event = spec.to_event()
+
+    # W3: Re-derive Dispatch from the router (pure; no I/O).
+    new_dispatch = dispatch_for(event)
+    if new_dispatch is None:
+        _logger.info(
+            "queue_v3_entry_no_longer_routable",
+            extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
+        )
+        await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
+        return
+
+    # Carry state-machine fields forward only for non-start intents.
+    # "start" entries need no upgrade; v2 path differs because QueuePayload.intent
+    # is nullable (None serves as the start sentinel there).
+    if spec.resource_key is not None and spec.intent not in (None, "start"):
+        new_dispatch = upgrade_dispatch(
+            new_dispatch,
+            intent=spec.intent,
+            run_id=spec.run_id,
+            prev_run_id=spec.prev_run_id,
+            event_seq=spec.event_seq,
+            resource_key=spec.resource_key,
+        )
+
+    # W4: Load effective config (adapter needed for GitHub API calls in config loader).
+    config = await load_for_repo(adapter, event)
+
+    # W5-W8: Attempt counter + cancellation lifecycle.
+    attempts = await _bump_attempt_counter(redis, entry_id)
+    active_run_id = new_dispatch.run_id or new_dispatch.task_id
+    cancellation_register(active_run_id)
+
+    try:
+        try:
+            await execute_handler(
+                adapter=adapter,
+                event=event,
+                dispatch=new_dispatch,
+                config=config,
+                session_factory=session_factory,
+                redis=redis,
+                check_run_id=spec.check_run_id,
+            )
+        except Exception:
+            _logger.exception(
+                "queue_v3_execute_handler_escaped",
+                extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
+            )
+            if attempts >= _MAX_ATTEMPTS:
+                await _ack_and_dlq(redis, entry_id, reason="max_attempts_v3")
+            # Don't XACK — let the next reclaim cycle pick it up.
+            return
+    finally:
+        cancellation_deregister(active_run_id)
+
+    await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
+    _logger.info(
+        "queue_v3_entry_dispatched",
+        extra={
+            "entry_id": entry_id,
+            "delivery_id": spec.delivery_id,
+            "repo": spec.repo,
+            "scenario": spec.scenario,
+            "attempts": attempts,
+        },
+    )
 
 
 async def ensure_consumer_group(redis: redis_async.Redis) -> None:
@@ -276,7 +392,27 @@ async def _process_entry(
 ) -> None:
     """Deserialize → dispatch → ack/dlq one entry."""
     blob = _extract_payload_blob(fields)
-    payload = deserialize_payload(blob) if blob is not None else None
+    if blob is None:
+        await _ack_and_dlq(redis, entry_id, reason="payload_unreadable")
+        return
+
+    # Route TaskSpec v3 entries through the new path; fall through to the
+    # legacy QueuePayload path for v1/v2 entries still in the queue.
+    if _is_v3_spec(blob):
+        spec = deserialize_task_spec(blob)
+        if spec is None:
+            await _ack_and_dlq(redis, entry_id, reason="task_spec_v3_unreadable")
+            return
+        await _execute_task_spec(
+            spec,
+            entry_id=entry_id,
+            redis=redis,
+            adapter=adapter,
+            session_factory=session_factory,
+        )
+        return
+
+    payload = deserialize_payload(blob)
     if payload is None:
         await _ack_and_dlq(redis, entry_id, reason="payload_unreadable")
         return
