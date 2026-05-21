@@ -151,6 +151,17 @@ async def test_demo_03_bot_assigned_fix_opens_pr(
     assert "abc1234" in branch_ref
     assert from_sha == "abc1234567"
 
+    # Sandbox push ran between branch creation and PR open. The push
+    # receives the *short* branch_ref (no ``refs/heads/`` prefix) + the
+    # raw token — the adapter handles auth interpolation. Assert on the
+    # full tuple so a regression in any of the three kwargs surfaces here.
+    assert len(webhook_harness.sandbox.pushed) == 1
+    pushed_branch, pushed_message, pushed_token = webhook_harness.sandbox.pushed[0]
+    assert pushed_branch.startswith("openbot/fix-issue-11-")
+    assert not pushed_branch.startswith("refs/heads/")  # short ref, not full
+    assert pushed_message == "openbot: fix #11"
+    assert pushed_token == "fake-installation-token"
+
     # PR was opened with Closes-#N in the body.
     assert len(webhook_harness.adapter.pr_creates) == 1
     pr = webhook_harness.adapter.pr_creates[0]

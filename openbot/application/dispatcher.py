@@ -16,6 +16,15 @@ the time this returns.
 The middleware list lives here (not in webapp) so the worker and the
 webapp can't drift apart on the chain order — a single source of
 truth per spec §3 M3.
+
+Slice-C note (sandbox DI): both ``run_dispatch`` and ``execute_handler``
+accept a ``sandbox_factory`` kwarg (default ``None``) so the fix use
+case can open a sandbox per event. Production callers
+(``openbot.entrypoints.api.app``, ``openbot.infrastructure.queue.worker``,
+``openbot.dispatcher.decide``) still pass ``None`` — wiring a real
+``DaytonaSandboxAdapter``-backed factory at those call sites is the
+follow-up operational slice. Until then the fix use case posts a
+graceful "sandbox not configured" comment.
 """
 
 from __future__ import annotations

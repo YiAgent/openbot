@@ -60,13 +60,20 @@ _E2E_SECRET = "e2e-test-secret"
 
 @dataclass
 class FakeSandbox:
-    """E2E sandbox stand-in matching ``SandboxPort``.
+    """Partial ``SandboxPort`` stand-in for the E2E fix-loop demos.
 
-    Records each call as a ``(repo_url, ref, token)`` /
+    Implements only the methods reachable when ``_generate_fix_outcome``
+    is monkeypatched: ``clone`` + ``commit_and_push`` + ``close`` +
+    ``workspace``. The agent-side surface (``read_file`` / ``write_file``
+    / ``list_files`` / ``run`` / ``git_diff``) is intentionally omitted —
+    if you extend a demo to exercise the real agent path, copy
+    ``_FakeSandbox`` from ``tests/application/use_cases/test_fix.py``
+    (full port shape) instead of growing this class.
+
+    Each call is recorded as a ``(repo_url, ref, token)`` /
     ``(branch_ref, message, token)`` tuple so demos can assert on the
     exact contract the use case must honour against the real
-    ``DaytonaSandboxAdapter`` (mirrors ``_FakeSandbox`` in
-    ``tests/application/use_cases/test_fix.py``).
+    ``DaytonaSandboxAdapter``.
 
     Token injection is the *adapter's* concern (see
     ``DaytonaSandboxAdapter._inject_token`` + ``SandboxPort`` docstring);
