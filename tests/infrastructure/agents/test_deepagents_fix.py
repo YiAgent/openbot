@@ -204,3 +204,75 @@ async def test_raises_when_structured_response_missing(monkeypatch: pytest.Monke
             sandbox=_StubSandbox(),  # type: ignore[arg-type]
             issue={"title": "t", "body": "b", "base_sha": "abc1234"},
         )
+
+
+async def test_raises_when_issue_number_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The responder cannot produce a useful prompt without an issue
+    number — fail loudly rather than render ``#None`` and waste a model
+    call. Mirrors ``test_review_responder_requires_pr_number``.
+    """
+    from openbot.infrastructure.agents import deepagents_fix as mod
+
+    # The guard fires before ``make_fix_tools`` and ``create_deep_agent``,
+    # so the monkeypatch returns an opaque sentinel — if the guard
+    # regressed, the test would surface a different (less actionable)
+    # failure from the stub, not a silent pass.
+    monkeypatch.setattr(mod, "create_deep_agent", lambda **_: object())
+
+    event = UnifiedEvent(
+        channel="github",
+        delivery_id="d",
+        kind=EventKind.ISSUE_ASSIGNED,
+        repo="o/r",
+        actor="alice",
+        issue_number=None,
+        installation_id=1,
+    )
+
+    responder = mod.DeepAgentsFixResponder()
+    with pytest.raises(ValueError, match="deepagents_fix_requires_issue_number"):
+        await responder.fix_for_event(
+            event,
+            adapter=_StubAdapter(),  # type: ignore[arg-type]
+            sandbox=_StubSandbox(),  # type: ignore[arg-type]
+            issue={"title": "t", "body": "b", "base_sha": "abc1234"},
+        )
+
+
+async def test_responder_rebuilds_agent_per_event(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tools close over ``(sandbox, event)`` — caching by model alone
+    would leak a previous tenant's sandbox handle into the next event.
+    Two consecutive calls must produce distinct ``tools`` lists.
+    Mirrors ``test_review_responder_rebuilds_agent_per_event``.
+    """
+    from openbot.infrastructure.agents import deepagents_fix as mod
+
+    builds: list[dict[str, Any]] = []
+
+    class FakeAgent:
+        async def ainvoke(self, payload: Any, config: Any) -> dict[str, Any]:
+            return _fake_agent_result()
+
+    def _capture(**kwargs: Any) -> FakeAgent:
+        builds.append(kwargs)
+        return FakeAgent()
+
+    monkeypatch.setattr(mod, "create_deep_agent", _capture)
+
+    responder = mod.DeepAgentsFixResponder()
+    await responder.fix_for_event(
+        _event(),
+        adapter=_StubAdapter(),  # type: ignore[arg-type]
+        sandbox=_StubSandbox(),  # type: ignore[arg-type]
+        issue={"title": "t", "body": "b", "base_sha": "abc1234"},
+    )
+    await responder.fix_for_event(
+        _event(),
+        adapter=_StubAdapter(),  # type: ignore[arg-type]
+        sandbox=_StubSandbox(),  # type: ignore[arg-type]
+        issue={"title": "t", "body": "b", "base_sha": "abc1234"},
+    )
+
+    # Two distinct builds — tools cannot leak between events.
+    assert len(builds) == 2
+    assert builds[0]["tools"] is not builds[1]["tools"]
