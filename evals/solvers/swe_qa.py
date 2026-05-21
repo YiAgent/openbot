@@ -1,20 +1,7 @@
-"""SWE-QA-Pro solver — paper +Agent variant (Docker sandbox + read tools).
+"""SWE-QA-Pro solver — deepagents +Agent variant (Docker sandbox).
 
-SWE-QA-Pro (TIGER-Lab, arXiv 2603.16124) evaluates *repository-level* code
-understanding. We only run the paper's Table 2 "+Agent" column:
-
-- :func:`deepagents_baseline_swe_qa_solver` — each sample runs in its own
-  **Docker sandbox** with the target repo cloned at the pinned commit
-  into ``/workspace``. The agent uses deepagents' native sandbox-aware
-  tools (``ls`` / ``glob`` / ``grep`` / ``read_file`` / ``execute``) via
-  :class:`DockerSandboxBackend`. Final answer is schema-bound to
-  :class:`SweQaProAnswer` so the judge always sees a well-formed body +
-  structured citations regardless of how the agent formats its prose.
-
-The closed-book "Direct" baseline was removed — see ``evals/tasks/
-chat_swe_qa_pro.py`` module docstring for rationale. The agent sandbox
-here is fully separate from any Inspect-managed sandbox: agent execution
-is decoupled from the evaluation surface.
+Each sample runs in its own sandbox with the repo at the pinned commit.
+Final answer is schema-bound to SweQaProAnswer via the structured finalizer.
 """
 
 from __future__ import annotations
@@ -27,17 +14,6 @@ from evals.common.predictions import SweQaProAnswer
 from evals.common.termination import assert_clean_termination
 from evals.common.usage import aggregate_provider_usage
 from evals.sandboxes import RepoSpec, create_sandbox_for_sample
-
-# Usage aggregation lives in evals.common.usage — sums across all AI
-# messages, matching LangSmith's trace-side aggregation.
-
-
-# ─── +Agent: Modal sandbox with repo cloned at commit ──────────────────────
-#
-# Removed the closed-book ("Direct" column in SWE-QA-Pro Table 2) baseline
-# solver — we only run the +Agent variant. The agent inspects the actual
-# repo at the pinned commit via DockerSandboxBackend's read-only tools.
-
 
 _AGENT_REPO_PATH = "/workspace"
 
@@ -53,21 +29,8 @@ async def _invoke_agent_with_modal(
 ) -> dict[str, Any]:
     """Run the +Agent flow: spin up the sandbox, drive deepagents, return the
     structured answer.
-
-    The agent is built with ``response_format=SweQaProAnswer``. The
-    baseline wraps the compiled graph with
-    :func:`~evals.agents.structured_finalizer.wrap_agent_with_finalizer`,
-    so structured output is enforced by a dedicated post-loop LLM call
-    rather than by binding ``tool_choice=forced`` into the agent loop
-    (which conflicts with Anthropic's extended-thinking and is silently
-    dropped to optional). The wrapper populates
-    ``result["structured_response"]`` with a validated
-    :class:`SweQaProAnswer` whenever the agent produced *any* prose;
-    transport failure or an empty trace still raises
-    :class:`~evals.common.termination.AgentTerminationError` so Inspect
-    treats the sample as errored under ``--retry-on-error`` /
-    ``--fail-on-error``.
     """
+    # build_chat_agent wraps with the structured finalizer (middleware.py).
     from langsmith.run_helpers import get_current_run_tree
 
     backend = await create_sandbox_for_sample(

@@ -1,5 +1,3 @@
-"""Reusable DeepAgents agent layer for OpenBot evals."""
-
 from evals.agents.baseline import build_baseline_agent, build_run_config, resolve_model
 from evals.agents.chat import build_chat_agent
 from evals.agents.fix import build_fix_agent

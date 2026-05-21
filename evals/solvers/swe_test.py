@@ -1,18 +1,7 @@
-"""SWT-Bench Verified solver — deepagents inside an isolated Modal sandbox.
+"""SWT-Bench Verified solver — deepagents inside an isolated sandbox.
 
-Sister to :mod:`evals.solvers.swe_fix`. The differences:
-
-- **Prompt** asks for a regression test only — production code is off
-  limits. The official SWT-Bench grader rejects any patch that touches
-  non-test files, so the prompt is the soft front-line of that contract.
-- **Output schema** is :class:`evals.common.predictions.SwtBenchPrediction`.
-  SWT-Bench's ``predictions.jsonl`` reuses the SWE-bench shape verbatim
-  (the ``model_patch`` field carries the test-only diff).
-- **No tests are run here.** This solver only captures the agent's diff
-  via ``git diff`` and writes it to ``state.metadata['prediction']`` for
-  the prediction exporter scorer. Actual grading happens **offline**
-  against the official SWT-Bench Docker harness — see
-  :mod:`evals.common.prediction_export`.
+Writes regression tests only (no production-code edits). Captures
+git diff into SwtBenchPrediction; grading is offline via SWT-Bench harness.
 """
 
 from __future__ import annotations
@@ -40,10 +29,6 @@ def _extract_text(message: Any) -> str:
     if isinstance(text, list):
         text = "\n".join(b.get("text", "") for b in text if isinstance(b, dict))
     return str(text)
-
-
-# Usage aggregation lives in evals.common.usage — sums across all AI
-# messages, matching LangSmith's trace-side aggregation.
 
 
 def _join_message_text(messages: list[Any]) -> str:
@@ -105,10 +90,7 @@ def deepagents_baseline_swt_solver(*, model: str | None = None) -> Solver:
                     config=ls_config,
                 )
 
-                # Same termination contract as swe_fix: refuse to capture
-                # a diff (and write a prediction row) from a run the agent
-                # never finished cleanly. Raising marks the sample errored
-                # so it skips both the metric and the predictions JSONL.
+                # Raises AgentTerminationError on incomplete runs.
                 assert_clean_termination(result, requires_structured_response=False)
                 patch = await backend.acapture_diff()
                 prediction = SwtBenchPrediction(

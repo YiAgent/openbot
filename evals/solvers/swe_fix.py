@@ -1,26 +1,8 @@
-"""SWE-bench Verified solver — deepagents inside an isolated Modal sandbox.
+"""SWE-bench Verified solver — deepagents inside an isolated sandbox.
 
-Architecture (PRD §3.1, post-refactor):
-
-- The agent runs in a **Modal sandbox** with the target repo cloned at the
-  base commit into ``/workspace``. The sandbox lives for the duration of
-  one eval sample and is torn down when the solver returns.
-- DeepAgents uses its **native** sandbox-aware tool surface
-  (``ls`` / ``read_file`` / ``glob`` / ``grep`` / ``write_file`` /
-  ``edit_file`` / ``execute``) wired through
-  :class:`evals.sandboxes.modal_backend.DockerSandboxBackend`. There is no
-  bridge to Inspect's per-sample sandbox — agent execution is fully
-  decoupled from the official benchmark Docker harness.
-- The solver captures ``git diff`` from the Modal sandbox at the end of
-  the run and emits an :class:`evals.common.predictions.SweBenchPrediction`
-  to ``state.metadata['prediction']``. The
-  :func:`evals.common.prediction_export.prediction_exporter` scorer then
-  appends it to ``evals/outputs/.../*.predictions.jsonl`` in the official
-  SWE-bench format.
-
-The official ``run_evaluation.py`` (Docker harness) is run **offline** by
-the user against the assembled JSONL — see the module-level docstring of
-:mod:`evals.common.prediction_export` for the exact command.
+The agent runs with the repo cloned at base_commit into /workspace.
+git diff is captured after the run as a SweBenchPrediction.
+Actual grading happens offline via the SWE-bench Docker harness.
 """
 
 from __future__ import annotations
@@ -45,11 +27,6 @@ def _extract_text(message: Any) -> str:
     if isinstance(text, list):
         text = "\n".join(b.get("text", "") for b in text if isinstance(b, dict))
     return str(text)
-
-
-# Usage aggregation lives in evals.common.usage. We sum across all AI
-# messages because LangChain attaches per-call usage to each message and
-# the agent loop produces many — see that module's docstring.
 
 
 def _join_message_text(messages: list[Any]) -> str:
@@ -114,13 +91,7 @@ def deepagents_baseline_swe_solver(*, model: str | None = None) -> Solver:
                     config=ls_config,
                 )
 
-                # Refuse to capture / score a diff from a run the agent
-                # never finished cleanly (middleware-cut, rate-limit storm,
-                # pending tool-call, empty final message). Raising here
-                # marks the sample as errored — Inspect excludes it from
-                # the metric and from the predictions JSONL, instead of
-                # shipping an empty patch that would be misread as
-                # "model failed to fix".
+                # Raises AgentTerminationError on incomplete runs; Inspect marks them errored.
                 assert_clean_termination(result, requires_structured_response=False)
                 patch = await backend.acapture_diff()
                 prediction = SweBenchPrediction(

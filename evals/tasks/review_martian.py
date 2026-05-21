@@ -24,8 +24,8 @@ from inspect_ai import Task, task
 from inspect_ai.scorer import Score, Target, mean, scorer, stderr
 from inspect_ai.solver import Solver, TaskState
 
-from evals.agents.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.common.datasets import langsmith_dataset
+from evals.inspect.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.scorers.review_judge import (
     MARTIAN_JUDGE_MODEL_ID,
     MARTIAN_JUDGE_VERSION,

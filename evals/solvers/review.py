@@ -1,16 +1,7 @@
-"""Inspect solver wrapping the durable `deepagents_baseline` review provider.
+"""Inspect solver wrapping the deepagents review provider (PRD §4.1).
 
-PRD §4.1 reserves a future `openbot_prod` provider that will call
-`openbot.application.workflows.review.run(...)` once the production workflow exists. This
-module intentionally keeps the deepagents path as a long-lived comparator so
-future evals can show where OpenBot itself beats a credible baseline.
-
-Both providers must preserve the same input/output contract:
-  - Input  : PR diff (str)
-  - Output : list[Finding] where Finding = {file, line: int | None, body, severity}
-
-The Inspect AI `@solver` shim at the bottom is the entry point used by
-`evals/tasks/review_martian.py`.
+Input: PR diff string. Output: list[Finding] (file, line, body, severity).
+The @solver shim is at the bottom of this file.
 """
 
 from __future__ import annotations
@@ -145,16 +136,7 @@ def _findings_from_structured(payload: Any) -> list[Finding] | None:
 
 
 def _collect_raw_text(messages: list[Any]) -> str:
-    """Concatenate every assistant message into one string.
-
-    The safety scorer (E2-T13) scans the **whole** agent reply for canaries
-    and forbidden patterns. With ``response_format=`` enabled, the final
-    schema-binding step is its own assistant turn, so an attacker who plants
-    a canary in an earlier turn (e.g. a chain-of-thought leak) would slip
-    past a scan that only looked at ``messages[-1]``. Joining every AI text
-    turn keeps the safety scorer's surface a strict superset of what the
-    previous "last message only" path saw.
-    """
+    """Concatenate all assistant message text for safety-scanner coverage."""
     parts: list[str] = []
     for msg in messages:
         if getattr(msg, "type", None) != "ai":
@@ -303,22 +285,13 @@ def deepagents_baseline_review_solver(
             else:
                 md = state.metadata or {}
                 repo = _resolve_owner_repo(md.get("repo"), md.get("pr_url"))
-                # ``upstream_commit`` is martian-CRB's own snapshot SHA (provenance
-                # of the golden comments), NOT the PR's base commit on the target
-                # repo. Using it for ``git fetch`` guarantees the SHA-fallback path
-                # fires and the agent ends up reading the wrong code. Trust only
-                # ``base_sha`` (the dataset builder writes it via the GitHub PR API);
-                # missing ``base_sha`` ⇒ bare sandbox (no repo) is more honest than a
-                # silently-wrong checkout.
+                # base_sha is the PR base commit; upstream_commit is martian-CRB's
+                # snapshot SHA and must NOT be used for git checkout.
                 base_sha = md.get("base_sha")
                 if backend is not None:
                     effective_backend = backend
                 elif repo and base_sha:
-                    # Production path: clone the repo at the PR base commit
-                    # so the agent can chase callers / type defs / tests
-                    # beyond what the diff shows. Backend kind is config-
-                    # driven (OPENBOT_SANDBOX_BACKEND); the solver doesn't
-                    # care which one returned.
+                    # Production path: clone repo at PR base commit for full context.
                     effective_backend = await create_sandbox_for_sample(
                         repo_spec=RepoSpec(repo=str(repo), base_commit=str(base_sha)),
                     )
@@ -327,13 +300,7 @@ def deepagents_baseline_review_solver(
                     # tests, prompt-injection corpus, etc.). Agent still gets
                     # a shell + scratch /workspace; diff in input is enough.
                     effective_backend = await create_bare_sandbox()
-                # Track whether *we* own the backend, so we can close it on
-                # exit (caller-supplied backends stay alive — caller-managed).
                 owns_backend = backend is None
-                # try/finally must wrap everything after the backend is
-                # constructed — if agent build or config wiring throws,
-                # we still need to tear the container down. Previously the
-                # try started only around ainvoke, leaking on early errors.
                 try:
                     agent = build_review_agent(
                         model=resolved_model,
@@ -365,12 +332,7 @@ def deepagents_baseline_review_solver(
                         {"messages": [{"role": "user", "content": user_msg}]},
                         config=ls_config,
                     )
-                    # Structured output is enforced by the baseline
-                    # wrapper's post-loop finalizer call — by the time we
-                    # get here, ``structured_response`` is populated (or
-                    # the wrapper already raised AgentTerminationError on
-                    # an empty trace). We still gate on the contract so
-                    # any future regression is loud.
+                    # Structured output guaranteed by baseline's wrap_agent_with_finalizer.
                     assert_clean_termination(
                         raw_result,
                         requires_structured_response=True,

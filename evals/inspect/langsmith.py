@@ -1,45 +1,9 @@
-"""LangSmith trace routing and Experiment projection for agent evals.
+"""LangSmith trace routing and Experiment projection for Inspect evals.
 
-This module owns the LangSmith surfaces used by eval tasks:
-
-- ``configure_tracing_for_dataset(...)`` sets LangChain/LangSmith tracing
-  environment variables for agent and judge calls.
-- ``LangSmithExperiment`` projects Inspect sample scores into LangSmith
-  Experiment rows.
-
-Inspect AI ships its own log-and-score pipeline (``.inspect/logs/...``) but
-does not register evals as LangSmith Experiments. This module adds that
-bridge: each Inspect sample completion is replayed as a single LangSmith
-``create_run`` call with ``reference_example_id`` pointing at the matching
-LangSmith dataset example, grouped under a per-task experiment session.
-
-The result: the LangSmith Experiments tab gets one row per task invocation,
-with per-sample scores tied back to the dataset example, exactly as if the
-eval had been driven by ``Client.aevaluate``.
-
-Usage in an Inspect ``@task`` constructor::
-
-    exp = LangSmithExperiment.start(
-        dataset_name="fix_swe_bench_verified",
-        solver_family="deepagents_baseline",
-        model="anthropic/mimo-v2.5",
-        git_sha=_git_sha(),
-    )
-    return Task(
-        ...,
-        scorer=exp.wrap(
-            swe_bench_scorer(),
-            scorer_name="swe_export_ok",          # how it surfaces in Inspect logs
-            feedback_key="swe_export_ok",         # LangSmith Feedback column
-            feedback_config={"type": "continuous", "min": 0.0, "max": 1.0},
-        ),
-        metadata={..., **exp.metadata()},
-    )
-
-``scorer_name`` and ``feedback_key`` are intentionally required keyword args —
-a previous bug had the export-success signal silently writing into the
-``swe_bench_pass_at_1`` Feedback column, polluting the official pass@1 metric.
-Forcing every caller to name both keys prevents recurrence.
+``configure_tracing_for_dataset`` sets LangChain/LangSmith env vars.
+``LangSmithExperiment`` projects Inspect sample scores into LangSmith
+Experiment rows with per-sample scores tied back to dataset examples.
+``ensure_feedback_config`` reconciles feedback key configs idempotently.
 """
 
 from __future__ import annotations
@@ -60,6 +24,27 @@ from inspect_ai.solver import TaskState
 from evals.common import config
 
 logger = logging.getLogger(__name__)
+
+_RECONCILED_FEEDBACK_KEYS: set[str] = set()
+
+
+def ensure_feedback_config(client: Any, key: str, config: dict[str, Any]) -> None:
+    """Make LangSmith's stored config for ``key`` match ``config`` (idempotent)."""
+    if key in _RECONCILED_FEEDBACK_KEYS:
+        return
+    try:
+        try:
+            client.create_feedback_config(feedback_key=key, feedback_config=config)
+        except Exception:
+            client.update_feedback_config(feedback_key=key, feedback_config=config)
+        _RECONCILED_FEEDBACK_KEYS.add(key)
+    except Exception as exc:
+        logger.warning("langsmith: failed to reconcile feedback config for %r: %s", key, exc)
+
+
+def reset_feedback_cache_for_tests() -> None:
+    """Drop the per-process feedback reconciliation cache (test fixture)."""
+    _RECONCILED_FEEDBACK_KEYS.clear()
 
 
 def configure_tracing_for_dataset(dataset_version: str) -> dict[str, str | None]:
@@ -456,8 +441,6 @@ class LangSmithExperiment:
                     "scorer_name": scorer_name,
                 }
                 if feedback_config is not None:
-                    from evals.agents.langsmith_feedback import ensure_feedback_config
-
                     ensure_feedback_config(client, feedback_key, feedback_config)
                 client.create_feedback(
                     run_id=run_id,

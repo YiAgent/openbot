@@ -201,43 +201,13 @@ def build_budget_middlewares(
     model_call_limit: int | None = None,
     tool_call_limit: int | None = None,
 ) -> list[AgentMiddleware]:
-    """Standard budget + convergence middleware stack for every OpenBot run.
+    """Standard budget + convergence middleware stack for one eval sample.
 
-    Four-layer defence against the runaway-loop failure mode (weaker
-    models that say "let me check one more thing" until the budget
-    runs out, then emit an empty answer):
-
-    1. :class:`ToolCallRepetitionGuard` — short-circuits identical tool
-       calls in a sliding window. Surgical: only stops *repeats*, lets
-       genuinely-distinct exploration continue.
-    2. :class:`ForceCommitBeforeBudget` — injects a "wrap up" directive
-       at 70% of the LLM-call budget so the model has runway to commit
-       its answer, instead of being killed mid-thought at 100%.
-    3. ``ToolCallLimitMiddleware(exit_behavior="continue")`` — once
-       ``thread_limit`` tool invocations are spent the next would-be
-       tool call is intercepted and replaced with a synthetic tool
-       message telling the model "tool budget exhausted, finish with
-       what you have", giving the model one last LLM step to draft a
-       final answer instead of being killed mid-flight.
-    4. ``ModelCallLimitMiddleware(exit_behavior="end")`` — last-resort
-       hard cap. Model middleware's "continue" variant short-circuits
-       the graph immediately; we want a clean END so the LangGraph
-       state still produces an ``AIMessage`` we can score.
-
-    Layers 1-2 are the "harness constraints any model must obey"
-    contribution — they impose convergence pressure that doesn't
-    depend on the model's own self-discipline. A robust eval framework
-    is supposed to work for *any* model; these two carry that load.
-    Layers 3-4 remain as the hard backstop.
-
-    Per-thread (= per Inspect sample) limits, never per-run accumulators.
-    The middlewares maintain internal state (window deque, call counter)
-    so a fresh agent must be built per sample — ``build_baseline_agent``
-    already does this.
+    Layers: ToolCallRepetitionGuard → ForceCommitBeforeBudget →
+    ToolCallLimitMiddleware(continue) → ModelCallLimitMiddleware(end).
     """
-    # Local import keeps the langchain-pull at this file's top out of
-    # convergence_middleware's own import path → avoids a cycle.
-    from evals.agents.convergence_middleware import build_convergence_middlewares
+    # Local import avoids a circular dependency.
+    from evals.agents.middleware import build_convergence_middlewares
 
     resolved_model_limit = (
         model_call_limit if model_call_limit is not None else get_model_call_limit()
@@ -323,7 +293,7 @@ def _register_baseline_profile(model: str) -> None:
     Enabling the plan tool gives the model a deterministic surface to
     commit interim observations, which empirically reduces stall loops
     on review / fix tasks. The harness-level convergence guards (see
-    :mod:`evals.agents.convergence_middleware`) remain as the backstop.
+    :mod:`evals.agents.middleware`) remain as the backstop.
 
     ``general_purpose_subagent.enabled=False`` is kept because eval cells
     are single-objective — the auto-attached delegation ``task`` tool
@@ -403,17 +373,7 @@ def build_baseline_agent(
         tool_call_limit=tool_call_limit,
     )
     middleware.extend(extra_middleware)
-    # Structured output is enforced *after* the agent loop by
-    # :mod:`evals.agents.structured_finalizer`, not by binding
-    # ``response_format`` into the deepagents graph. That decoupling
-    # is what lets us keep extended thinking on for QA / review
-    # without triggering the Anthropic ``tool_choice=forced +
-    # thinking=enabled`` rejection (LangChain's shim drops
-    # ``tool_choice`` in that combo, making the schema tool optional
-    # and letting the model skip it mid-graph). The wrapper we
-    # return here is duck-typed against ``CompiledStateGraph`` and
-    # adds ``structured_response`` to the result dict on
-    # ``ainvoke`` / ``invoke``.
+    # Finalizer enforces structured output post-loop; see middleware.py.
     chat_model = build_chat_model(
         model,
         timeout_s=timeout_s,
@@ -431,9 +391,9 @@ def build_baseline_agent(
     if response_format is None:
         return agent
     schema = _resolve_response_schema(response_format)
-    # Local import — structured_finalizer imports build_chat_model from
+    # Local import — middleware imports build_chat_model from
     # this module, so a top-level import would be circular.
-    from evals.agents.structured_finalizer import wrap_agent_with_finalizer
+    from evals.agents.middleware import wrap_agent_with_finalizer
 
     return wrap_agent_with_finalizer(agent, schema=schema, model=model)
 
@@ -458,7 +418,7 @@ def _resolve_response_schema(response_format: ResponseFormat) -> type[Any]:
             return schema
     raise TypeError(
         "build_baseline_agent now enforces structured output via "
-        "structured_finalizer, which requires a Pydantic model class. "
+        "middleware.wrap_agent_with_finalizer, which requires a Pydantic model class. "
         f"Got {type(response_format).__name__}; pass the model class "
         "directly (e.g. response_format=MySchema)."
     )

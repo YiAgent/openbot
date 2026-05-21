@@ -46,8 +46,8 @@ from __future__ import annotations
 from inspect_ai import Task, task
 from inspect_ai.scorer import mean, stderr
 
-from evals.agents.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.common.datasets import langsmith_dataset, qa_example_to_agent_sample
+from evals.inspect.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.scorers.swe_qa_judge import SWE_QA_JUDGE_MODEL_ID, SWE_QA_JUDGE_VERSION
 from evals.scorers.swe_qa_pro import swe_qa_pro_judge_scorer
 from evals.solvers.swe_qa import deepagents_baseline_swe_qa_solver
