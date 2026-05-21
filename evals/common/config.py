@@ -31,7 +31,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Final, Literal
 
-from pydantic import BeforeValidator, Field, PositiveInt
+from pydantic import BaseModel, BeforeValidator, Field, PositiveInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ─── Re-exported env-var names ──────────────────────────────────────────────
@@ -237,6 +237,73 @@ class PredictionsSettings(BaseSettings):
     )
 
 
+# ─── Dataset catalog ────────────────────────────────────────────────────────
+# Single source of truth for dataset / solver family identifiers used across
+# every eval suite. Task scripts must *import* these instead of re-declaring
+# their own ``_DATASET_VERSION`` / ``_HF_DATASET`` constants — doing so
+# silently diverges whenever a dataset slot is bumped.
+
+
+class _DatasetSlot(BaseModel):
+    """Immutable descriptor for one eval suite's canonical dataset."""
+
+    model_config = {"frozen": True}
+
+    dataset_version: str
+    hf_dataset: str = ""
+    dataset_source: str = ""
+
+
+class CatalogSettings(BaseModel):
+    """Locked dataset & solver-family identifiers for all eval suites.
+
+    This class is intentionally a plain ``BaseModel`` (not ``BaseSettings``)
+    because catalog values are *code constants*, not operator knobs. They
+    must be bumped by a deliberate code change (diff-visible, reviewable)
+    rather than silently overridden via env vars. Operator-tunable values
+    belong in the other ``*Settings`` sections.
+
+    LangSmith feedback keys follow the convention
+    ``<suite>_<signal>_<qualifier>`` so that they sort together in the UI
+    and are grep-able as a group.
+    """
+
+    model_config = {"frozen": True}
+
+    # ── solver family ────────────────────────────────────────────────────────
+    solver_family_baseline: str = "deepagents_baseline"
+
+    # ── dataset slots ────────────────────────────────────────────────────────
+    review: _DatasetSlot = _DatasetSlot(
+        dataset_version="martian_2026w20",
+    )
+    chat: _DatasetSlot = _DatasetSlot(
+        dataset_version="chat_swe_qa_pro_v1",
+        hf_dataset="TIGER-Lab/SWE-QA-Pro-Bench",
+        dataset_source=(
+            "langsmith:chat_swe_qa_pro_v1 (mirror of huggingface:TIGER-Lab/SWE-QA-Pro-Bench)"
+        ),
+    )
+    fix: _DatasetSlot = _DatasetSlot(
+        dataset_version="fix_swe_bench_verified",
+        hf_dataset="princeton-nlp/SWE-bench_Verified",
+        dataset_source="huggingface:princeton-nlp/SWE-bench_Verified",
+    )
+    swt: _DatasetSlot = _DatasetSlot(
+        dataset_version="test_swt_bench_verified",
+        hf_dataset="eth-sri/SWT-bench_Verified_bm25_27k_zsb",
+    )
+
+    # ── LangSmith feedback keys ──────────────────────────────────────────────
+    swe_export_feedback_key: str = "swe_export_ok"
+    swt_export_feedback_key: str = "swt_export_ok"
+    swe_harness_feedback_key: str = "swe_bench_pass_at_1"
+    swt_harness_feedback_key: str = "swt_bench_pass_at_1"
+    unit_feedback_config: dict[str, object] = Field(
+        default_factory=lambda: {"type": "continuous", "min": 0.0, "max": 1.0}
+    )
+
+
 class EvalSettings(BaseSettings):
     """Aggregate root — one frozen instance per process via :func:`get_eval_config`."""
 
@@ -247,6 +314,7 @@ class EvalSettings(BaseSettings):
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     langsmith: LangSmithSettings = Field(default_factory=LangSmithSettings)
     predictions: PredictionsSettings = Field(default_factory=PredictionsSettings)
+    catalog: CatalogSettings = Field(default_factory=CatalogSettings)
 
 
 @lru_cache
