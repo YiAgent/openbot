@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from openbot.application.ports.sandbox import ExecResult
+from openbot.domain.checkout import CloneStrategy
 from openbot.infrastructure.sandboxes.fake import FakeSandboxAdapter
 
 
@@ -81,6 +82,35 @@ async def test_clone_checks_out_ref(repo_url: str) -> None:
     try:
         await sb.clone(repo_url=repo_url, ref="main", token="ignored")
         assert (Path(sb.workspace) / "README.md").read_text() == "hello\n"
+    finally:
+        await sb.close()
+
+
+@pytest.mark.parametrize("strategy", list(CloneStrategy))
+@pytest.mark.asyncio
+async def test_fake_clone_accepts_strategy(repo_url: str, strategy: CloneStrategy) -> None:
+    # The fake doesn't actually vary its git invocation per strategy — it
+    # always runs a full clone of a local file:// repo. What we need to
+    # verify is that the Protocol's new keyword is *accepted* and recorded
+    # on the fake so use-case tests can assert on the contract the
+    # resolver enforces against the production adapter.
+    sb = FakeSandboxAdapter()
+    try:
+        await sb.clone(repo_url=repo_url, ref="main", token="x", strategy=strategy)
+        assert (Path(sb.workspace) / "README.md").read_text() == "hello\n"
+        # Strategy recorded for downstream test assertions.
+        assert sb.last_clone_strategy is strategy
+    finally:
+        await sb.close()
+
+
+@pytest.mark.asyncio
+async def test_fake_clone_strategy_defaults_to_shallow(repo_url: str) -> None:
+    """Callers that omit ``strategy`` get the historical SHALLOW behaviour."""
+    sb = FakeSandboxAdapter()
+    try:
+        await sb.clone(repo_url=repo_url, ref="main", token="x")
+        assert sb.last_clone_strategy is CloneStrategy.SHALLOW
     finally:
         await sb.close()
 

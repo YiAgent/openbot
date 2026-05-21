@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from openbot.application.ports.sandbox import ExecResult
+from openbot.domain.checkout import CloneStrategy
 
 
 @dataclass
@@ -59,11 +60,24 @@ class FakeSandboxLifecycle:
 
     workspace: str = "/workspace/repo"
     cloned: list[tuple[str, str, str]] = field(default_factory=list)
+    # Parallel list of strategies, one entry per ``clone`` call. Kept
+    # alongside ``cloned`` rather than as a 4-tuple so the historical
+    # ``sandbox.cloned == [(url, ref, token)]`` assertion shape stays
+    # intact for existing tests.
+    clone_strategies: list[CloneStrategy] = field(default_factory=list)
     pushed: list[tuple[str, str, str]] = field(default_factory=list)
     closed: bool = False
 
-    async def clone(self, *, repo_url: str, ref: str, token: str) -> None:
+    async def clone(
+        self,
+        *,
+        repo_url: str,
+        ref: str,
+        token: str,
+        strategy: CloneStrategy = CloneStrategy.SHALLOW,
+    ) -> None:
         self.cloned.append((repo_url, ref, token))
+        self.clone_strategies.append(strategy)
 
     async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
         self.pushed.append((branch_ref, message, token))

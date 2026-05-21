@@ -19,6 +19,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from openbot.domain.checkout import CloneStrategy
+
 
 @dataclass(frozen=True, slots=True)
 class ExecResult:
@@ -53,12 +55,34 @@ class SandboxPort(Protocol):
 
     workspace: str
 
-    async def clone(self, *, repo_url: str, ref: str, token: str) -> None:
+    async def clone(
+        self,
+        *,
+        repo_url: str,
+        ref: str,
+        token: str,
+        strategy: CloneStrategy = CloneStrategy.SHALLOW,
+    ) -> None:
         """Clone ``repo_url`` at ``ref`` into ``workspace``.
 
         ``token`` is the short-lived GitHub installation access token —
         adapters interpolate it as ``https://x-access-token:{token}@...``
         if ``repo_url`` is HTTPS. ``file://`` URLs ignore the token.
+
+        ``strategy`` selects the clone depth / filter; the
+        ``CheckoutSpec`` produced by ``resolve_checkout`` carries the
+        per-workflow choice and the dispatcher passes it through here.
+        Adapters MUST honour:
+
+          - ``SHALLOW``        — ``git clone --depth=1 --branch={ref}``
+            (default; matches the historical behaviour, smallest payload).
+          - ``SHALLOW_HISTORY``— ``git clone --depth=50 --branch={ref}``
+            (used by fix when blame / recent log needs a small window).
+          - ``BLOBLESS``       — ``git clone --filter=blob:none --no-checkout``
+            then ``git checkout {ref}`` (used by review so file content
+            comes in lazily, but the full commit graph is available).
+          - ``FULL``           — no extra flags (escape hatch; rarely used).
+
         Raises on clone failure (network error, bad token, missing ref).
         """
         ...

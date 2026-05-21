@@ -35,7 +35,10 @@ class _StubSandbox:
     listing: list[str] = field(default_factory=list)
     diff_text: str = ""
 
-    async def clone(self, *, repo_url: str, ref: str, token: str) -> None:
+    async def clone(self, *args: object, **kwargs: object) -> None:
+        # Signature kept loose on purpose — the test asserts that fix
+        # *tools* never reach back into the sandbox to re-clone, so any
+        # call here is a contract violation regardless of args.
         raise AssertionError("tools must not call clone()")
 
     async def read_file(self, path: str) -> str:
