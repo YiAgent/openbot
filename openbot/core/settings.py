@@ -96,6 +96,24 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ─── Sandbox (production fix loop — distinct from eval sandbox) ───
+    daytona_api_key: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Daytona API key for the production fix-loop sandbox. "
+            "Distinct from the eval-suite Daytona key (which is configured "
+            "via DAYTONA_API_KEY at the evals/ layer). If unset, the fix "
+            "responder fails closed and the use case posts a tailored "
+            "comment instead of attempting a fix."
+        ),
+    )
+    daytona_server_url: str | None = Field(
+        default=None,
+        description=(
+            "Override the default Daytona endpoint. Leave unset to use Daytona's public API."
+        ),
+    )
+
     # ─── Worker queue (PRD §5.1 / harness spec §9.3) ───
     # Single-process worker with N asyncio consumers. v0.1 defaults to
     # 4 — fine for individual maintainer scale (<10 events/day). At
@@ -183,6 +201,7 @@ class Settings(BaseSettings):
         "redis_url",
         "postgres_url",
         "anthropic_api_base",
+        "daytona_server_url",
         mode="before",
     )(staticmethod(_blank_to_none))
 
