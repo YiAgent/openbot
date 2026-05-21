@@ -21,6 +21,17 @@ make dev     # run FastAPI with autoreload
 make hooks   # install git pre-commit / pre-push hooks
 ```
 
+## Superpowers 文档归档（每 session 必检查）
+
+当一个 slice/feature 完成提交后，立即将对应文件归档：
+
+```bash
+mv docs/superpowers/plans/<done>.md docs/_archive/superpowers/
+mv docs/superpowers/specs/<done>.md  docs/_archive/superpowers/
+```
+
+Session 开始时主动检查 `docs/superpowers/plans/` 和 `docs/superpowers/specs/` 是否有已完成的文件未归档。
+
 ## Forbidden
 
 - Do not commit: `.env*`, local DBs, `evals/logs/`, `.langgraph/`, `.inspect/`, `.doppler/`.

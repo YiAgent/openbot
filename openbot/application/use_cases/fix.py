@@ -227,10 +227,9 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
                 return
 
             branch = _branch_name(issue_number=issue_number, base_sha=base_sha)
-            branch_ref = f"refs/heads/{branch}"
 
             try:
-                await adapter.create_branch(event, branch_ref, base_sha)
+                await adapter.create_branch(event, branch, base_sha)
             except Exception:
                 _logger.exception("fix_create_branch_failed", extra=_log_extra(event))
                 await _safe_reply(adapter, event, _BRANCH_CONFLICT)

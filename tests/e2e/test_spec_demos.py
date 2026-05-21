@@ -144,10 +144,11 @@ async def test_demo_03_bot_assigned_fix_opens_pr(
     ]
 
     # Branch was created with the predictable openbot/fix-issue-N-SHORTSHA pattern.
+    # The use case passes the *short* ref; the GitHub adapter adds "refs/heads/" internally.
     assert len(webhook_harness.adapter.branch_creates) == 1
     repo, branch_ref, from_sha = webhook_harness.adapter.branch_creates[0]
     assert repo == "acme/test-repo"
-    assert branch_ref.startswith("refs/heads/openbot/fix-issue-11-")
+    assert branch_ref.startswith("openbot/fix-issue-11-")
     assert "abc1234" in branch_ref
     assert from_sha == "abc1234567"
 

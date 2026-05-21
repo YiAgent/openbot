@@ -172,8 +172,10 @@ async def test_fetches_issue_clones_and_opens_pr(monkeypatch):
     assert sandbox.closed is True
 
     # Branch name pattern + short SHA.
+    # adapter.create_branch receives the *short* ref; the GitHub adapter
+    # prepends "refs/heads/" internally before calling the REST API.
     branch_ref = adapter.create_branch.call_args.args[1]
-    assert branch_ref.startswith("refs/heads/openbot/fix-issue-7-")
+    assert branch_ref.startswith("openbot/fix-issue-7-")
     assert "abc1234" in branch_ref
 
     # PR body closes the issue; head/base wired from issue dict.

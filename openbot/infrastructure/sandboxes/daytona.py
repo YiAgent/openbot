@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -59,6 +60,20 @@ def _build_client(api_key: str, server_url: str | None) -> Any:
         config_kwargs["api_url"] = server_url
     config = daytona_mod.DaytonaConfig(**config_kwargs)
     return daytona_mod.Daytona(config)
+
+
+_TOKEN_PATTERN = re.compile(r"x-access-token:[^@\s]+@")
+
+
+def _redact_tokens(text: str) -> str:
+    """Replace ``x-access-token:<value>@`` with ``x-access-token:<redacted>@``.
+
+    Daytona process output can include git error messages that echo the
+    clone URL verbatim (e.g. ``fatal: repository 'https://x-access-token:
+    ghp_TOKEN@github.com/...' not found``). This strips the credential
+    before the message reaches exception text or log lines.
+    """
+    return _TOKEN_PATTERN.sub("x-access-token:<redacted>@", text)
 
 
 def _inject_token(repo_url: str, token: str) -> str:
@@ -141,8 +156,9 @@ class DaytonaSandboxAdapter(SandboxPort):
         # 5 minute timeout — generous for repos up to a few hundred MB.
         response = await asyncio.to_thread(self._sandbox.process.exec, clone_cmd, 300)
         if response.exit_code not in (0, None):
+            safe_output = _redact_tokens(response.result or "")
             raise RuntimeError(
-                f"daytona git clone failed (exit_code={response.exit_code}): {response.result!r}"
+                f"daytona git clone failed (exit_code={response.exit_code}): {safe_output!r}"
             )
 
     async def git_diff(self) -> str:
@@ -177,8 +193,9 @@ class DaytonaSandboxAdapter(SandboxPort):
         )
         push_resp = await asyncio.to_thread(self._sandbox.process.exec, push_script, 120)
         if push_resp.exit_code not in (0, None):
+            safe_output = _redact_tokens(push_resp.result or "")
             raise RuntimeError(
-                f"daytona push failed (exit_code={push_resp.exit_code}): {push_resp.result!r}"
+                f"daytona push failed (exit_code={push_resp.exit_code}): {safe_output!r}"
             )
 
     # ── file IO ──
