@@ -56,10 +56,12 @@ def test_solvers_do_not_construct_deepagents_directly() -> None:
 
 
 def test_agent_langsmith_surface_is_canonical() -> None:
-    langsmith = importlib.import_module("evals.agents.langsmith")
+    langsmith = importlib.import_module("evals.inspect.langsmith")
 
     assert hasattr(langsmith, "configure_tracing_for_dataset")
     assert hasattr(langsmith, "LangSmithExperiment")
     assert not Path("evals/common/langsmith.py").exists()
     assert not Path("evals/common/langsmith_experiments.py").exists()
     assert not Path("evals/common/langsmith_feedback.py").exists()
+    assert not Path("evals/agents/langsmith.py").exists()
+    assert not Path("evals/agents/langsmith_feedback.py").exists()
