@@ -16,6 +16,28 @@ class FakeChannelAdapter:
     replies: list[tuple[str | None, str]] = field(default_factory=list)
     labels_added: list[tuple[str | None, tuple[str, ...]]] = field(default_factory=list)
     pr_reviews: list[dict[str, Any]] = field(default_factory=list)
+    # ── Slice C fix-loop recording fields ──
+    issue_lookups: list[tuple[str | None, int]] = field(default_factory=list)
+    branch_creates: list[tuple[str | None, str, str]] = field(default_factory=list)
+    pr_creates: list[dict[str, Any]] = field(default_factory=list)
+    token_lookups: list[str | None] = field(default_factory=list)
+    fake_issue: dict[str, Any] = field(
+        default_factory=lambda: {
+            "title": "stub issue",
+            "body": "stub body",
+            "comments": [],
+            "base_sha": "0" * 40,
+            "default_branch": "main",
+            "clone_url": "https://github.com/example/repo.git",
+        }
+    )
+    fake_pr: dict[str, Any] = field(
+        default_factory=lambda: {
+            "number": 1,
+            "html_url": "https://github.com/example/repo/pull/1",
+        }
+    )
+    fake_installation_token: str = "fake-install-token"
 
     def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
         return  # always accept
@@ -96,3 +118,34 @@ class FakeChannelAdapter:
         }
         self.pr_reviews.append(record)
         return {"ok": True, "id": len(self.pr_reviews), **record}
+
+    async def get_issue(self, event: UnifiedEvent, issue_number: int) -> dict[str, Any]:
+        self.issue_lookups.append((event.resource_key, issue_number))
+        # Return a *copy* so test mutations don't poison the shared default.
+        return dict(self.fake_issue)
+
+    async def create_branch(self, event: UnifiedEvent, branch_ref: str, from_sha: str) -> None:
+        self.branch_creates.append((event.resource_key, branch_ref, from_sha))
+
+    async def open_pull_request(
+        self,
+        event: UnifiedEvent,
+        *,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+    ) -> dict[str, Any]:
+        record = {
+            "resource_key": event.resource_key,
+            "title": title,
+            "body": body,
+            "head": head,
+            "base": base,
+        }
+        self.pr_creates.append(record)
+        return dict(self.fake_pr)
+
+    async def get_installation_token(self, event: UnifiedEvent) -> str:
+        self.token_lookups.append(event.resource_key)
+        return self.fake_installation_token

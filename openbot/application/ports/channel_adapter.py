@@ -154,3 +154,72 @@ class ChannelAdapterPort(Protocol):
         — the caller treats a failed review submission as a workflow failure.
         """
         ...
+
+    async def get_issue(
+        self,
+        event: UnifiedEvent,
+        issue_number: int,
+    ) -> dict[str, Any]:
+        """Return a normalized snapshot of an issue.
+
+        Shape (all keys always present):
+            {
+              "title": str,
+              "body": str,                # "" if GitHub returned null
+              "comments": list[dict],     # [{"author": str, "body": str}, ...]
+              "base_sha": str,            # default branch HEAD
+              "default_branch": str,
+              "clone_url": str,
+            }
+
+        Implementations batch the underlying calls (issue + comments +
+        repo metadata + branch ref). Raises ``httpx.HTTPStatusError`` on
+        any non-2xx (the use case catches the 404 case to skip silently).
+        """
+        ...
+
+    async def create_branch(
+        self,
+        event: UnifiedEvent,
+        branch_ref: str,
+        from_sha: str,
+    ) -> None:
+        """Create a new branch ``branch_ref`` pointing at ``from_sha``.
+
+        ``branch_ref`` is the short ref (e.g. ``openbot/fix-issue-42-deadbee``);
+        implementations prepend ``refs/heads/`` for GitHub's git-refs endpoint.
+
+        Raises ``httpx.HTTPStatusError(422)`` if the branch already exists —
+        the use case surfaces that as "open fix attempt already pending".
+        """
+        ...
+
+    async def open_pull_request(
+        self,
+        event: UnifiedEvent,
+        *,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+    ) -> dict[str, Any]:
+        """Open a non-draft pull request from ``head`` into ``base``.
+
+        Returns the GitHub PR object (``number``, ``html_url``, ``head``, ...).
+        Always non-draft (PRD §13 #2 — fix loop never opens speculative PRs).
+        Raises on HTTP error so the use case can post a tailored comment.
+        """
+        ...
+
+    async def get_installation_token(self, event: UnifiedEvent) -> str:
+        """Return a short-lived push token for the event's installation.
+
+        The use case interpolates this into the clone/push URL:
+        ``https://x-access-token:{token}@github.com/{repo}.git``. Token is
+        opaque, single-use from the use case's perspective; adapter caches
+        and refreshes it internally.
+
+        Raises if the adapter was constructed without auth (e.g., webhook-
+        only mode without a GitHub App).
+        """
+        ...

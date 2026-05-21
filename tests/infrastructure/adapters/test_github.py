@@ -730,3 +730,212 @@ async def test_aclose_releases_owned_http_client() -> None:
     await adapter.aclose()
     # Calling it twice is safe even though the client is already closed.
     await adapter.aclose()
+
+
+# ───── get_issue ─────
+
+
+async def test_get_issue_batches_three_calls(adapter_factory: Any) -> None:
+    """Issue body + comments + default-branch repo metadata fetched in one batch."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if url.endswith("/issues/42") and not url.endswith("/comments"):
+            return httpx.Response(
+                200,
+                json={
+                    "title": "Bug: pagination off-by-one",
+                    "body": "Page 2 returns rows 9-17 instead of 10-19.",
+                },
+            )
+        if url.endswith("/issues/42/comments"):
+            return httpx.Response(
+                200,
+                json=[
+                    {"user": {"login": "alice"}, "body": "Repro on main."},
+                    {"user": {"login": "bob"}, "body": "Looks like LIMIT/OFFSET swap."},
+                ],
+            )
+        if url.endswith("/repos/YiAgent/openbot"):
+            return httpx.Response(
+                200,
+                json={
+                    "default_branch": "main",
+                    "clone_url": "https://github.com/YiAgent/openbot.git",
+                },
+            )
+        if url.endswith("/repos/YiAgent/openbot/git/ref/heads/main"):
+            return httpx.Response(
+                200,
+                json={"object": {"sha": "deadbeefcafebabe1234567890abcdef12345678"}},
+            )
+        raise AssertionError(f"unexpected url: {url}")
+
+    adapter, captured = adapter_factory(handler, auth=_FakeAuth())
+    issue = await adapter.get_issue(_event(issue_number=42), 42)
+
+    assert issue["title"] == "Bug: pagination off-by-one"
+    assert issue["body"].startswith("Page 2")
+    assert issue["comments"] == [
+        {"author": "alice", "body": "Repro on main."},
+        {"author": "bob", "body": "Looks like LIMIT/OFFSET swap."},
+    ]
+    assert issue["default_branch"] == "main"
+    assert issue["clone_url"] == "https://github.com/YiAgent/openbot.git"
+    assert issue["base_sha"] == "deadbeefcafebabe1234567890abcdef12345678"
+    # 4 requests: issue, comments, repo metadata, default-branch ref
+    assert len(captured) == 4
+
+
+async def test_get_issue_raises_on_404(adapter_factory: Any) -> None:
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(404, json={"message": "Not Found"}),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.get_issue(_event(issue_number=999), 999)
+
+
+async def test_get_issue_handles_empty_body_and_no_comments(adapter_factory: Any) -> None:
+    """Issue with `body: null` and zero comments still produces a valid dict."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if url.endswith("/issues/7") and not url.endswith("/comments"):
+            return httpx.Response(200, json={"title": "thin", "body": None})
+        if url.endswith("/issues/7/comments"):
+            return httpx.Response(200, json=[])
+        if url.endswith("/repos/YiAgent/openbot"):
+            return httpx.Response(
+                200,
+                json={
+                    "default_branch": "trunk",
+                    "clone_url": "https://github.com/YiAgent/openbot.git",
+                },
+            )
+        if "/git/ref/heads/trunk" in url:
+            return httpx.Response(200, json={"object": {"sha": "abc1234567890"}})
+        raise AssertionError(f"unexpected url: {url}")
+
+    adapter, _ = adapter_factory(handler, auth=_FakeAuth())
+    issue = await adapter.get_issue(_event(issue_number=7), 7)
+
+    assert issue["title"] == "thin"
+    assert issue["body"] == ""  # null body normalized to empty string
+    assert issue["comments"] == []
+    assert issue["default_branch"] == "trunk"
+
+
+# ───── create_branch ─────
+
+
+async def test_create_branch_posts_git_refs(adapter_factory: Any) -> None:
+    """POST /repos/{r}/git/refs with body {ref, sha}."""
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(
+            201,
+            json={"ref": "refs/heads/openbot/fix-issue-42-deadbee", "object": {"sha": "deadbee"}},
+        ),
+        auth=_FakeAuth(),
+    )
+
+    await adapter.create_branch(
+        _event(),
+        "openbot/fix-issue-42-deadbee",
+        from_sha="deadbeefcafebabe1234567890abcdef12345678",
+    )
+
+    assert len(captured) == 1
+    req = captured[0]
+    assert req.method == "POST"
+    assert str(req.url) == "https://api.github.com/repos/YiAgent/openbot/git/refs"
+    body = json.loads(req.content)
+    # GitHub expects the *full ref path*, not the short name.
+    assert body == {
+        "ref": "refs/heads/openbot/fix-issue-42-deadbee",
+        "sha": "deadbeefcafebabe1234567890abcdef12345678",
+    }
+
+
+async def test_create_branch_raises_on_422_conflict(adapter_factory: Any) -> None:
+    """422 = branch already exists. Caller surfaces a tailored comment."""
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(422, json={"message": "Reference already exists"}),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await adapter.create_branch(_event(), "openbot/fix-issue-42-deadbee", from_sha="deadbee")
+    assert exc_info.value.response.status_code == 422
+
+
+# ───── open_pull_request ─────
+
+
+async def test_open_pull_request_posts_pulls(adapter_factory: Any) -> None:
+    """draft=False is implicit (GitHub default) — fix loop never opens drafts."""
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(
+            201,
+            json={
+                "number": 123,
+                "html_url": "https://github.com/YiAgent/openbot/pull/123",
+                "head": {"ref": "openbot/fix-issue-42-deadbee"},
+            },
+        ),
+        auth=_FakeAuth(),
+    )
+
+    pr = await adapter.open_pull_request(
+        _event(),
+        title="Fix #42: pagination off-by-one",
+        body="Closes #42\n\nSwapped LIMIT and OFFSET.",
+        head="openbot/fix-issue-42-deadbee",
+        base="main",
+    )
+
+    assert pr["html_url"] == "https://github.com/YiAgent/openbot/pull/123"
+    assert len(captured) == 1
+    req = captured[0]
+    assert req.method == "POST"
+    assert str(req.url) == "https://api.github.com/repos/YiAgent/openbot/pulls"
+    body = json.loads(req.content)
+    assert body == {
+        "title": "Fix #42: pagination off-by-one",
+        "body": "Closes #42\n\nSwapped LIMIT and OFFSET.",
+        "head": "openbot/fix-issue-42-deadbee",
+        "base": "main",
+    }
+    # draft must not be in the payload — never set explicitly, never True.
+    assert "draft" not in body
+
+
+async def test_open_pull_request_raises_on_422_no_diff(adapter_factory: Any) -> None:
+    """No-commit branch → 422 "No commits between base and head".
+    Use case surfaces this as the "tests passed but no changes" path."""
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(
+            422,
+            json={
+                "message": "Validation Failed",
+                "errors": [{"message": "No commits between main and ..."}],
+            },
+        ),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await adapter.open_pull_request(_event(), title="t", body="b", head="x", base="main")
+    assert exc_info.value.response.status_code == 422
+
+
+# ───── get_installation_token ─────
+
+
+async def test_get_installation_token_returns_raw_string(adapter_factory: Any) -> None:
+    """The application layer never sees InstallationToken — only the raw bearer."""
+    auth = _FakeAuth()
+    adapter, _ = adapter_factory(lambda req: httpx.Response(500), auth=auth)
+
+    token = await adapter.get_installation_token(_event())
+
+    assert token == _INSTALL_TOKEN
+    assert auth.calls == [_INSTALL_ID]

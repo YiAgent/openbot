@@ -554,6 +554,96 @@ class GitHubAdapter(ChannelAdapter):
             payload["comments"] = comments
         return await self._authed_json("POST", url, event, json_body=payload)
 
+    async def get_issue(self, event: UnifiedEvent, issue_number: int) -> dict[str, Any]:
+        """Return a normalized issue snapshot for the fix loop.
+
+        Three GitHub calls (issue, comments, repo metadata) + one for the
+        branch ref so we know the SHA to fork the fix branch from. Issued
+        sequentially through ``_authed_json`` so the existing retry +
+        rate-limit-headroom logging fires for each.
+        """
+        base = f"{self._api_base}/repos/{event.repo}"
+        issue = await self._authed_json("GET", f"{base}/issues/{issue_number}", event)
+        comments_raw = await self._authed_json(
+            "GET", f"{base}/issues/{issue_number}/comments", event
+        )
+        repo_meta = await self._authed_json("GET", base, event)
+        default_branch = (
+            str(repo_meta.get("default_branch") or "main")
+            if isinstance(repo_meta, dict)
+            else "main"
+        )
+        ref = await self._authed_json("GET", f"{base}/git/ref/heads/{default_branch}", event)
+        base_sha = (
+            str(ref["object"]["sha"])
+            if isinstance(ref, dict) and isinstance(ref.get("object"), dict)
+            else ""
+        )
+
+        comments: list[dict[str, str]] = []
+        if isinstance(comments_raw, list):
+            for c in comments_raw:
+                if not isinstance(c, dict):
+                    continue
+                user = c.get("user") if isinstance(c.get("user"), dict) else {}
+                comments.append(
+                    {
+                        "author": str(user.get("login") or "unknown"),
+                        "body": str(c.get("body") or ""),
+                    }
+                )
+
+        return {
+            "title": str(issue.get("title") or "") if isinstance(issue, dict) else "",
+            "body": str(issue.get("body") or "") if isinstance(issue, dict) else "",
+            "comments": comments,
+            "base_sha": base_sha,
+            "default_branch": default_branch,
+            "clone_url": (
+                str(repo_meta.get("clone_url") or f"https://github.com/{event.repo}.git")
+                if isinstance(repo_meta, dict)
+                else f"https://github.com/{event.repo}.git"
+            ),
+        }
+
+    async def create_branch(
+        self,
+        event: UnifiedEvent,
+        branch_ref: str,
+        from_sha: str,
+    ) -> None:
+        """POST /repos/{r}/git/refs — prepend ``refs/heads/`` (GitHub requires it)."""
+        url = f"{self._api_base}/repos/{event.repo}/git/refs"
+        await self._authed_json(
+            "POST",
+            url,
+            event,
+            json_body={"ref": f"refs/heads/{branch_ref}", "sha": from_sha},
+        )
+
+    async def open_pull_request(
+        self,
+        event: UnifiedEvent,
+        *,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+    ) -> dict[str, Any]:
+        """POST /repos/{r}/pulls — never sends ``draft`` (default False)."""
+        url = f"{self._api_base}/repos/{event.repo}/pulls"
+        return await self._authed_json(
+            "POST",
+            url,
+            event,
+            json_body={"title": title, "body": body, "head": head, "base": base},
+        )
+
+    async def get_installation_token(self, event: UnifiedEvent) -> str:
+        """Expose the raw bearer for sandbox push URLs (see port docstring)."""
+        token = await self._installation_token(event)
+        return str(token.token)
+
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:
             await self._http.aclose()
