@@ -1,33 +1,159 @@
-"""Issue → PR fix workflow — PRD §4.3 entry stub.
+"""Issue → PR fix workflow — PRD §4.3 end-to-end pipeline.
 
-v0.1 Week 2 (slice A): ACK reply + audit. The agent loop (Modal clone
-→ DeepAgent → push branch → open PR → self-fix on CI failure) lands
-in the agent slice.
+Flow:
+  1. Fetch the issue body and base commit from GitHub.
+  2. Open a sandbox via ``ctx.sandbox_factory()``.
+  3. Clone the repo with an installation-scoped token.
+  4. Run ``DeepAgentsFixResponder`` to produce a ``FixOutcome``.
+  5. Tests passed → push branch, open PR, comment with PR URL.
+     Tests failed → comment with the truncated test output.
+     Any step raised → comment with the corresponding error template.
 
-Slice A guarantees the same as `review.py` — pre-flight already ran;
-this stub only acknowledges + audits, never raises.
+The whole pipeline runs inside ``audit_lifecycle`` so the workflow
+phase transitions get logged uniformly with review/triage. No path
+raises out of this function — every failure becomes a comment.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from openbot.application.use_cases._lifecycle import audit_lifecycle
 from openbot.application.use_cases._tracing import traceable as _traceable
+from openbot.domain.fix import FixOutcome
 from openbot.domain.workflows import Workflow
+from openbot.infrastructure.agents import DeepAgentsFixResponder
 
 if TYPE_CHECKING:
     from openbot.application.middleware.preflight import PreflightContext
+    from openbot.application.ports.channel_adapter import ChannelAdapterPort
+    from openbot.application.ports.sandbox import SandboxPort
+    from openbot.domain.events import UnifiedEvent
 
 _logger = logging.getLogger(__name__)
 
-_ACK_TEMPLATE = (
-    ":robot: OpenBot received the fix assignment on issue #{issue} and the "
-    "agent will start shortly.\n\n"
-    "_v0.1 alpha: only the ACK is automated so far. Sandbox clone, "
-    "DeepAgent loop, and PR creation land in an upcoming commit._"
+# GitHub comments hard-cap at 65_536 chars. 4_000 keeps headers + URLs
+# + diff snippets fitting when the agent emits verbose test output.
+_MAX_TEST_OUTPUT_CHARS = 4_000
+
+_NO_SANDBOX = (
+    ":robot: OpenBot can't run the fix loop: the sandbox is not configured "
+    "on this deployment. The maintainer needs to set "
+    "`OPENBOT_DAYTONA_API_KEY` (or another sandbox backend) before "
+    "automated fixes will work."
 )
+_ISSUE_READ_FAIL = (
+    ":warning: OpenBot could not read this issue from GitHub. The fix loop "
+    "was skipped. The error has been logged."
+)
+_CLONE_FAIL = (
+    ":warning: OpenBot opened a sandbox but could not clone the repository. "
+    "The fix loop was skipped. The error has been logged."
+)
+_AGENT_FAIL = (
+    ":warning: OpenBot's fix agent failed before producing a result. "
+    "The error has been logged; please re-assign the issue to retry."
+)
+_BRANCH_CONFLICT = (
+    ":warning: OpenBot finished the fix locally but could not create the "
+    "branch on GitHub (it may already exist). The error has been logged."
+)
+_PUSH_FAIL = (
+    ":warning: OpenBot finished the fix locally but could not push the "
+    "branch to GitHub. The error has been logged."
+)
+_OPEN_PR_FAIL = (
+    ":warning: OpenBot pushed the fix branch but could not open the pull "
+    "request. The error has been logged."
+)
+_TESTS_FAILED_HEADER = (
+    ":x: OpenBot attempted a fix but the tests did not pass.\n\n"
+    "**Summary:** {summary}\n"
+    "**Command:** `{cmd}`\n\n"
+    "<details><summary>Test output</summary>\n\n```\n{output}\n```\n</details>"
+)
+_PR_OPENED = (
+    ":sparkles: OpenBot opened a fix for issue #{issue}: {url}\n\n"
+    "**Summary:** {summary}\n"
+    "**Files changed:** {files}\n"
+    "**Test command:** `{cmd}`"
+)
+
+
+def _truncate(text: str, *, limit: int = _MAX_TEST_OUTPUT_CHARS) -> str:
+    if len(text) <= limit:
+        return text
+    dropped = len(text) - limit
+    return text[:limit] + f"\n\n[truncated — {dropped} bytes of test output omitted]"
+
+
+def _inject_token(clone_url: str, token: str) -> str:
+    """Embed the installation token in an HTTPS clone URL.
+
+    GitHub accepts ``https://x-access-token:<TOKEN>@host/owner/repo.git``
+    as a credential carrier. Refuse non-HTTPS — the token is a bearer
+    secret and inserting it into ``ssh://`` or ``file://`` leaks it.
+    """
+    if not clone_url.startswith("https://"):
+        raise ValueError(f"fix_clone_url_not_https:{clone_url[:32]}")
+    return f"https://x-access-token:{token}@{clone_url[len('https://') :]}"
+
+
+def _short_sha(sha: str) -> str:
+    return sha[:7] if sha else "nosha"
+
+
+def _branch_name(*, issue_number: int, base_sha: str) -> str:
+    return f"openbot/fix-issue-{issue_number}-{_short_sha(base_sha)}"
+
+
+def _pr_title(issue_title: str, issue_number: int) -> str:
+    head = (issue_title or "").strip().replace("\n", " ")
+    if not head:
+        head = f"Fix for issue #{issue_number}"
+    return f"[OpenBot] {head}"[:240]  # GitHub caps PR titles at 256.
+
+
+def _pr_body(*, attempt_summary: str, issue_number: int, test_command: str) -> str:
+    return (
+        f"Closes #{issue_number}.\n\n"
+        f"**Summary:** {attempt_summary}\n"
+        f"**Test command:** `{test_command}`\n\n"
+        "_Generated by OpenBot. Reviewer should still read the diff before merging._"
+    )
+
+
+def _files_changed_str(files: tuple[str, ...]) -> str:
+    if not files:
+        return "(none reported)"
+    if len(files) <= 5:
+        return ", ".join(f"`{f}`" for f in files)
+    head = ", ".join(f"`{f}`" for f in files[:5])
+    return f"{head}, …and {len(files) - 5} more"
+
+
+async def _generate_fix_outcome(
+    *,
+    sandbox: SandboxPort,
+    event: UnifiedEvent,
+    adapter: ChannelAdapterPort,
+    issue: dict[str, Any],
+) -> FixOutcome:
+    """Module-level seam — E2E tests monkeypatch this to skip DeepAgents.
+
+    Mirrors ``_generate_review_findings`` in ``review.py``. Keeping the
+    responder construction inside a top-level coroutine means tests can
+    replace just this one function without touching the orchestration
+    code that wraps it.
+    """
+    responder = DeepAgentsFixResponder()
+    return await responder.fix_for_event(
+        event,
+        adapter=adapter,
+        sandbox=sandbox,
+        issue=issue,
+    )
 
 
 @_traceable(run_type="chain", name="fix")
@@ -40,22 +166,143 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
         )
         return
 
-    message = _ACK_TEMPLATE.format(issue=event.issue_number)
-    try:
-        async with audit_lifecycle(ctx, workflow=Workflow.FIX) as audit:
-            result = await ctx.adapter.reply(event, message)
-            audit.outcome = f"comment_id={result.get('id')}"
-            _logger.info(
-                "fix_ack_posted",
-                extra={
-                    "delivery_id": event.delivery_id,
-                    "repo": event.repo,
-                    "issue_number": event.issue_number,
-                    "comment_id": result.get("id"),
-                },
+    adapter = ctx.adapter
+    issue_number = event.issue_number
+
+    if ctx.sandbox_factory is None:
+        await _safe_reply(adapter, event, _NO_SANDBOX)
+        return
+
+    async with audit_lifecycle(ctx, workflow=Workflow.FIX) as audit:
+        try:
+            issue = await adapter.get_issue(event, issue_number)
+        except Exception:
+            _logger.exception("fix_get_issue_failed", extra=_log_extra(event))
+            await _safe_reply(adapter, event, _ISSUE_READ_FAIL)
+            audit.outcome = "get_issue_failed"
+            return
+
+        clone_url = str(issue.get("clone_url", ""))
+        base_sha = str(issue.get("base_sha", ""))
+        default_branch = str(issue.get("default_branch", "main"))
+
+        try:
+            token = await adapter.get_installation_token(event)
+            authed_url = _inject_token(clone_url, token)
+        except Exception:
+            _logger.exception("fix_token_failed", extra=_log_extra(event))
+            await _safe_reply(adapter, event, _CLONE_FAIL)
+            audit.outcome = "token_failed"
+            return
+
+        async with ctx.sandbox_factory() as sandbox:
+            try:
+                await sandbox.clone(authed_url, ref=base_sha)
+            except Exception:
+                _logger.exception("fix_clone_failed", extra=_log_extra(event))
+                await _safe_reply(adapter, event, _CLONE_FAIL)
+                audit.outcome = "clone_failed"
+                return
+
+            try:
+                outcome = await _generate_fix_outcome(
+                    sandbox=sandbox,
+                    event=event,
+                    adapter=adapter,
+                    issue=issue,
+                )
+            except Exception:
+                _logger.exception("fix_agent_failed", extra=_log_extra(event))
+                await _safe_reply(adapter, event, _AGENT_FAIL)
+                audit.outcome = "agent_failed"
+                return
+
+            if not outcome.attempt.tests_passed:
+                await _safe_reply(
+                    adapter,
+                    event,
+                    _TESTS_FAILED_HEADER.format(
+                        summary=outcome.attempt.summary,
+                        cmd=outcome.attempt.test_command,
+                        output=_truncate(outcome.attempt.test_output),
+                    ),
+                )
+                audit.outcome = "tests_failed"
+                return
+
+            branch = _branch_name(issue_number=issue_number, base_sha=base_sha)
+            branch_ref = f"refs/heads/{branch}"
+
+            try:
+                await adapter.create_branch(event, branch_ref, base_sha)
+            except Exception:
+                _logger.exception("fix_create_branch_failed", extra=_log_extra(event))
+                await _safe_reply(adapter, event, _BRANCH_CONFLICT)
+                audit.outcome = "create_branch_failed"
+                return
+
+            try:
+                await sandbox.commit_and_push(
+                    branch=branch,
+                    message=f"openbot: fix #{issue_number}",
+                    remote_url=authed_url,
+                )
+            except Exception:
+                _logger.exception("fix_push_failed", extra=_log_extra(event))
+                await _safe_reply(adapter, event, _PUSH_FAIL)
+                audit.outcome = "push_failed"
+                return
+
+            try:
+                pr = await adapter.open_pull_request(
+                    event,
+                    title=_pr_title(str(issue.get("title", "")), issue_number),
+                    body=_pr_body(
+                        attempt_summary=outcome.attempt.summary,
+                        issue_number=issue_number,
+                        test_command=outcome.attempt.test_command,
+                    ),
+                    head=branch,
+                    base=default_branch,
+                )
+            except Exception:
+                _logger.exception("fix_open_pr_failed", extra=_log_extra(event))
+                await _safe_reply(adapter, event, _OPEN_PR_FAIL)
+                audit.outcome = "open_pr_failed"
+                return
+
+            pr_url = str(pr.get("html_url", ""))
+            await _safe_reply(
+                adapter,
+                event,
+                _PR_OPENED.format(
+                    issue=issue_number,
+                    url=pr_url,
+                    summary=outcome.attempt.summary,
+                    files=_files_changed_str(outcome.attempt.files_changed),
+                    cmd=outcome.attempt.test_command,
+                ),
             )
+            audit.outcome = f"pr_opened:{pr_url}"
+
+
+async def _safe_reply(adapter: ChannelAdapterPort, event: UnifiedEvent, message: str) -> None:
+    """Post a comment, swallowing any errors. The use case contract is
+    "the fix workflow never raises out of pre-flight." Comment posting
+    is best-effort UX — substantive work and audit are already recorded.
+    """
+    try:
+        await adapter.reply(event, message)
     except Exception:
-        _logger.exception(
-            "fix_ack_failed",
-            extra={"delivery_id": event.delivery_id, "repo": event.repo},
-        )
+        _logger.exception("fix_reply_failed", extra=_log_extra(event))
+
+
+def _log_extra(event: UnifiedEvent) -> dict[str, Any]:
+    return {
+        "delivery_id": event.delivery_id,
+        "repo": event.repo,
+        "issue_number": event.issue_number,
+    }
+
+
+__all__ = ["maybe_run_fix"]

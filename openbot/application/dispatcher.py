@@ -162,6 +162,10 @@ async def run_dispatch(
         check_run_id=check_run_id,
         audit=audit,
         rate_limiter=rate_limiter,
+        # TODO(C.9 DI): wire a DaytonaSandboxAdapter-backed factory here
+        # for Feature.FIX dispatches. Until then the fix use case posts a
+        # graceful "sandbox not configured" comment.
+        sandbox_factory=None,
     )
 
     try:
@@ -280,6 +284,10 @@ async def execute_handler(
         check_run_id=check_run_id,
         audit=audit,
         rate_limiter=rate_limiter,
+        # TODO(C.9 DI): wire a DaytonaSandboxAdapter-backed factory here
+        # for Feature.FIX dispatches. Until then the fix use case posts a
+        # graceful "sandbox not configured" comment.
+        sandbox_factory=None,
     )
     try:
         await dispatch.handler(ctx)

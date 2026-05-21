@@ -108,12 +108,18 @@ async def test_demo_02_pr_opens_review_stub_acks(webhook_harness: WebhookHarness
 
 
 async def test_demo_03_bot_assigned_fix_stub(webhook_harness: WebhookHarness) -> None:
-    """Issue assigned to the bot → FIX workflow ACK.
+    """Issue assigned to the bot → FIX workflow comments "sandbox not configured".
 
     Router gates fix on ``assignee.type == "Bot"``. ActorRoleMiddleware
     then checks the *actor's* role against the FIX allow-list; the
     RecordingGitHubAdapter defaults actor_role to "admin" so the gate
     passes without further setup.
+
+    Slice C.8: the use case now requires ``ctx.sandbox_factory``. The
+    dispatcher leaves it ``None`` until C.9 wires Daytona DI, so the
+    use case takes the early "no sandbox" path — a single GitHub
+    comment, no ``audit_lifecycle`` rows (the sandbox-missing branch
+    exits before entering the audit context manager).
     """
     event = webhook_harness.make_event(
         kind=EventKind.ISSUE_ASSIGNED,
@@ -124,12 +130,16 @@ async def test_demo_03_bot_assigned_fix_stub(webhook_harness: WebhookHarness) ->
     await webhook_harness.dispatch(event)
 
     rows = await webhook_harness.audit_rows(delivery_id="d-fix-1")
-    assert _phases(rows) == [WorkflowPhase.STARTED, WorkflowPhase.COMPLETED]
-    assert all(row.workflow is Workflow.FIX for row in rows)
+    # No FIX-workflow audit rows: the sandbox-missing branch exits the
+    # use case before audit_lifecycle runs. Pre-flight may still have
+    # written STARTED via AuditStartMiddleware — filter to FIX-workflow
+    # rows so this demo is robust to middleware-side audit changes.
+    fix_rows = [row for row in rows if row.workflow is Workflow.FIX]
+    assert _phases(fix_rows) in ([], [WorkflowPhase.STARTED])
     assert len(webhook_harness.adapter.replies) == 1
     _, number, body = webhook_harness.adapter.replies[0]
     assert number == 11
-    assert "fix assignment on issue #11" in body
+    assert "sandbox is not configured" in body.lower()
 
 
 # ───────────────────────── demo 04: @openbot chat ack ─────────────────────────
