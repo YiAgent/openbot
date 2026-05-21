@@ -211,6 +211,28 @@ class ChannelAdapterPort(Protocol):
         """
         ...
 
+    async def get_pull_request(self, event: UnifiedEvent, pr_number: int) -> dict[str, Any]:
+        """Return the GitHub PR object — the JSON body of
+        ``GET /repos/{owner}/{repo}/pulls/{n}``.
+
+        Shape (only the keys the resolver depends on are guaranteed):
+            {
+              "head": {"sha": str, ...},
+              "base": {"sha": str, ...},
+              ...
+            }
+
+        The resolver (``openbot.application.checkout_resolver``) uses
+        this when a webhook payload doesn't carry the head/base SHAs
+        directly — notably ``issue_comment`` events on a PR, where the
+        ``issue`` payload only references the PR by number.
+
+        Raises ``httpx.HTTPStatusError`` on non-2xx; the resolver
+        surfaces these as ``CheckoutResolutionError`` so the dispatcher
+        can degrade gracefully (handler runs without a sandbox).
+        """
+        ...
+
     async def get_default_branch_sha(self, event: UnifiedEvent) -> str:
         """Return the SHA at the tip of the repo's default branch.
 

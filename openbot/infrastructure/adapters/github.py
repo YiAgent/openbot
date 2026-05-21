@@ -432,6 +432,26 @@ class GitHubAdapter(ChannelAdapter):
             raise ValueError(f"Unexpected encoding from GitHub Contents API: {encoding!r}")
         return base64.b64decode(encoded, validate=False)
 
+    async def get_pull_request(self, event: UnifiedEvent, pr_number: int) -> dict[str, Any]:
+        """Return the JSON body of ``GET /repos/{owner}/{repo}/pulls/{n}``.
+
+        Used by the checkout resolver when the event payload doesn't
+        carry head/base SHAs (e.g. ``issue_comment`` events on a PR).
+        Bypasses ``get_pr_diff`` because we need the JSON, not the
+        ``application/vnd.github.v3.diff`` text representation.
+
+        Raises ``httpx.HTTPStatusError`` on non-2xx — the resolver
+        surfaces these as ``CheckoutResolutionError``.
+        """
+        url = f"{self._api_base}/repos/{event.repo}/pulls/{pr_number}"
+        data = await self._authed_json("GET", url, event)
+        if not isinstance(data, dict):
+            # Defensive: a non-dict response means the JSON parsed but
+            # the API contract is broken — treat as a hard failure so
+            # the resolver doesn't silently propagate garbage.
+            raise ValueError(f"unexpected PR shape: {type(data).__name__}")
+        return data
+
     async def get_pr_diff(self, event: UnifiedEvent, pr_number: int) -> str:
         """Fetch the PR's unified diff via the Accept-header content switch.
 

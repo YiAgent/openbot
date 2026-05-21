@@ -951,6 +951,55 @@ async def test_get_default_branch_sha_raises_on_repo_404(
         await adapter.get_default_branch_sha(_event())
 
 
+# ───── get_pull_request (used by checkout_resolver) ─────
+
+
+async def test_get_pull_request_returns_full_pr_json(adapter_factory: Any) -> None:
+    """GET /repos/{owner}/{repo}/pulls/{n} — used by the resolver to
+    get head/base SHAs that the webhook payload doesn't carry (e.g.
+    ``issue_comment`` events on a PR)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert str(req.url).endswith("/repos/YiAgent/openbot/pulls/17")
+        return httpx.Response(
+            200,
+            json={
+                "number": 17,
+                "head": {"sha": "a" * 40, "ref": "feature/x"},
+                "base": {"sha": "b" * 40, "ref": "main"},
+                "state": "open",
+            },
+        )
+
+    adapter, _ = adapter_factory(handler, auth=_FakeAuth())
+    pr = await adapter.get_pull_request(_event(pr_number=17), 17)
+    assert pr["head"]["sha"] == "a" * 40
+    assert pr["base"]["sha"] == "b" * 40
+
+
+async def test_get_pull_request_raises_on_404(adapter_factory: Any) -> None:
+    """Closed/deleted PRs surface as 404 — propagate so the resolver
+    can convert it into a ``CheckoutResolutionError``."""
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(404, json={"message": "Not Found"}),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.get_pull_request(_event(pr_number=999), 999)
+
+
+async def test_get_pull_request_rejects_non_dict_payload(adapter_factory: Any) -> None:
+    """Defensive: GitHub always returns an object here, but if some
+    proxy returns a list/string the resolver shouldn't silently
+    propagate garbage."""
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(200, json=["unexpected", "shape"]),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(ValueError, match="unexpected PR shape"):
+        await adapter.get_pull_request(_event(pr_number=17), 17)
+
+
 async def test_get_issue_handles_empty_body_and_no_comments(adapter_factory: Any) -> None:
     """Issue with `body: null` and zero comments still produces a valid dict."""
 
