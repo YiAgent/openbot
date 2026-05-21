@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from openbot.domain.events import EventKind, UnifiedEvent
 
@@ -15,6 +15,7 @@ class FakeChannelAdapter:
     parsed_event: UnifiedEvent | None = None
     replies: list[tuple[str | None, str]] = field(default_factory=list)
     labels_added: list[tuple[str | None, tuple[str, ...]]] = field(default_factory=list)
+    pr_reviews: list[dict[str, Any]] = field(default_factory=list)
 
     def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
         return  # always accept
@@ -76,3 +77,22 @@ class FakeChannelAdapter:
     async def add_label(self, event: UnifiedEvent, *labels: str) -> list[dict[str, Any]]:
         self.labels_added.append((event.resource_key, labels))
         return [{"name": lbl} for lbl in labels]
+
+    async def create_pr_review(
+        self,
+        event: UnifiedEvent,
+        pr_number: int,
+        *,
+        body: str,
+        event_type: Literal["APPROVE", "COMMENT"],
+        comments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        record = {
+            "resource_key": event.resource_key,
+            "pr_number": pr_number,
+            "body": body,
+            "event_type": event_type,
+            "comments": list(comments or ()),
+        }
+        self.pr_reviews.append(record)
+        return {"ok": True, "id": len(self.pr_reviews), **record}

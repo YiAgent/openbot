@@ -1,35 +1,47 @@
 """PR review workflow — PRD §4.2 entry.
 
-Slice A (current): single-shot DeepAgent review.
-  - Adapter fetches the unified diff (``get_pr_diff``).
-  - ``DeepAgentsReviewResponder`` runs once with the diff inline (no tools).
-  - The agent's reply is posted as a single PR comment.
-  - On any agent failure, post a user-facing error stub so the PR author
-    sees a real signal — silent skips break trust.
+Slice B (current): structured-output reviewer + PR Review API submission.
 
-Slice B/C (deferred — see docs/superpowers/plans/2026-05-20-review-fix-deepagent.md):
-  structured findings, severity filter, multi-turn, file/grep tools.
+  - Adapter fetches the unified diff (``get_pr_diff``).
+  - ``DeepAgentsReviewResponder`` returns a ``ReviewFindings`` value.
+  - Findings are filtered by ``ctx.config.severity_threshold``.
+  - Inline findings (with ``line``) become PR review comments; repo-wide
+    findings (no ``line``) are folded into the review body since the PR
+    Review API requires a line number for inline comments.
+  - Verdict is ``APPROVE`` when no findings survive the threshold,
+    ``COMMENT`` otherwise. We intentionally never emit ``REQUEST_CHANGES``
+    (PRD §13 — OpenBot is advisory in v0.1).
+  - On any agent or submission failure, post a fallback ``COMMENT`` review
+    with the error template so the PR author sees a real signal.
+
+Slice C (deferred): the fix workflow uses the responder output to grade
+its own attempts.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from openbot.application.ports.channel_adapter import ChannelAdapterPort
 from openbot.application.use_cases._lifecycle import audit_lifecycle
 from openbot.application.use_cases._tracing import traceable as _traceable
 from openbot.domain.events import UnifiedEvent
+from openbot.domain.review import Finding, ReviewFindings, passes_threshold
 from openbot.domain.workflows import Workflow
 from openbot.infrastructure.agents import DeepAgentsReviewResponder
 
 if TYPE_CHECKING:
     from openbot.application.middleware.preflight import PreflightContext
+    from openbot.domain.config_schema import SeverityThreshold
 
 _logger = logging.getLogger(__name__)
 
 _RESPONDER = DeepAgentsReviewResponder()
 
+# Posted as a COMMENT review when the responder fails — the PR author
+# sees a real signal instead of silence. Wraps a ``ReviewFindings``-like
+# shape so the same submission path handles success and failure.
 _ERROR_TEMPLATE = (
     ":robot: I couldn't complete the review right now.\n\n"
     "_Please retry by pushing a new commit, or check the worker logs / "
@@ -37,14 +49,75 @@ _ERROR_TEMPLATE = (
 )
 
 
-async def _generate_review_reply(*, event: UnifiedEvent, adapter: ChannelAdapterPort) -> str:
+async def _generate_review_findings(
+    *, event: UnifiedEvent, adapter: ChannelAdapterPort
+) -> ReviewFindings:
     """Module-level seam — E2E tests monkeypatch this to avoid LLM calls."""
     return await _RESPONDER.review_for_event(event, adapter=adapter)
 
 
+def _filter_findings(
+    findings: tuple[Finding, ...], threshold: SeverityThreshold
+) -> tuple[Finding, ...]:
+    """Keep findings at or above ``threshold``. Stable order preserved."""
+    return tuple(f for f in findings if passes_threshold(f, threshold))
+
+
+def _partition_findings(
+    findings: tuple[Finding, ...],
+) -> tuple[list[Finding], list[Finding]]:
+    """Split into (inline, repo-wide).
+
+    Inline findings have a ``line`` and become PR review comments.
+    Repo-wide findings (``line is None``) get folded into the review body
+    because the PR Review API rejects inline comments without a line.
+    """
+    inline: list[Finding] = []
+    repo_wide: list[Finding] = []
+    for f in findings:
+        (inline if f.line is not None else repo_wide).append(f)
+    return inline, repo_wide
+
+
+def _format_finding_body(finding: Finding) -> str:
+    """Render one finding as the comment body for a PR review comment."""
+    head = f"**{finding.severity}** — {finding.message}"
+    if finding.quote:
+        return f"{head}\n\n```\n{finding.quote}\n```"
+    return head
+
+
+def _format_repo_wide_section(findings: list[Finding]) -> str:
+    """Format repo-wide findings as a bullet list for the review body."""
+    lines = ["", "**Repo-wide notes:**"]
+    for f in findings:
+        lines.append(f"- _{f.severity}_ — `{f.file}`: {f.message}")
+    return "\n".join(lines)
+
+
+def _build_review_body(summary: str, repo_wide: list[Finding]) -> str:
+    """The text that renders at the top of the PR review."""
+    if not repo_wide:
+        return summary
+    return summary + "\n" + _format_repo_wide_section(repo_wide)
+
+
+def _build_inline_comments(inline: list[Finding]) -> list[dict[str, object]]:
+    """Shape inline findings for the PR Review API."""
+    return [
+        {
+            "path": f.file,
+            "line": f.line,
+            "body": _format_finding_body(f),
+        }
+        for f in inline
+        if f.line is not None
+    ]
+
+
 @_traceable(run_type="chain", name="review")
 async def maybe_run_review(ctx: PreflightContext) -> None:
-    """Run the DeepAgent review + audit-log the run.
+    """Run the DeepAgent review + submit findings via the PR Review API.
 
     No-op if ``pr_number`` or ``installation_id`` is missing — Router
     already enforces this for the dispatch path, the check here is
@@ -60,34 +133,57 @@ async def maybe_run_review(ctx: PreflightContext) -> None:
 
     # Generate the review BEFORE opening the audit-lifecycle span so a
     # slow LLM call doesn't keep a STARTED row sitting open for minutes.
-    # The reply post inside the lifecycle is the canonical "did we
-    # actually act on the PR?" signal.
+    findings: ReviewFindings | None = None
     try:
-        message = await _generate_review_reply(event=event, adapter=ctx.adapter)
+        findings = await _generate_review_findings(event=event, adapter=ctx.adapter)
     except Exception:
         _logger.exception(
             "review_agent_reply_failed",
             extra={"delivery_id": event.delivery_id, "repo": event.repo},
         )
-        message = _ERROR_TEMPLATE
+
+    # Build the PR Review submission. On responder failure: an error-body
+    # COMMENT review with no inline comments. On success: filter →
+    # partition → format.
+    if findings is None:
+        body = _ERROR_TEMPLATE
+        event_type: Literal["APPROVE", "COMMENT"] = "COMMENT"
+        comments: list[dict[str, object]] = []
+        kept = 0
+    else:
+        filtered = _filter_findings(findings.findings, ctx.config.severity_threshold)
+        inline, repo_wide = _partition_findings(filtered)
+        body = _build_review_body(findings.summary, repo_wide)
+        comments = _build_inline_comments(inline)
+        # Per PRD §13 lock: APPROVE on zero filtered findings, never REQUEST_CHANGES.
+        event_type = "APPROVE" if not filtered else "COMMENT"
+        kept = len(filtered)
 
     try:
         async with audit_lifecycle(ctx, workflow=Workflow.REVIEW) as audit:
-            result = await ctx.adapter.reply(event, message)
-            audit.outcome = f"comment_id={result.get('id')}"
+            result = await ctx.adapter.create_pr_review(
+                event,
+                event.pr_number,
+                body=body,
+                event_type=event_type,
+                comments=comments or None,
+            )
+            audit.outcome = f"review_id={result.get('id')} event={event_type} findings={kept}"
             _logger.info(
-                "review_reply_posted",
+                "review_posted",
                 extra={
                     "delivery_id": event.delivery_id,
                     "repo": event.repo,
                     "pr_number": event.pr_number,
-                    "comment_id": result.get("id"),
+                    "review_id": result.get("id"),
+                    "event_type": event_type,
+                    "findings_kept": kept,
                 },
             )
     except Exception:
         # audit_lifecycle already wrote FAILED. Swallow so the background
         # task doesn't surface as 5xx — GitHub already got its 202.
         _logger.exception(
-            "review_reply_post_failed",
+            "review_post_failed",
             extra={"delivery_id": event.delivery_id, "repo": event.repo},
         )

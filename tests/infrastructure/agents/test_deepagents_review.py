@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.domain.review import Finding, ReviewFindings
+from openbot.infrastructure.agents._review_schema import (
+    FindingSchema,
+    ReviewFindingsSchema,
+)
 
 
 def _event(*, repo: str = "YiAgent/openbot", pr_number: int | None = 42) -> UnifiedEvent:
@@ -32,6 +36,10 @@ class _StubAdapter:
         return self._diff
 
 
+def _findings_payload(*findings: FindingSchema, summary: str = "ok") -> ReviewFindingsSchema:
+    return ReviewFindingsSchema(summary=summary, findings=list(findings))
+
+
 async def test_review_responder_builds_agent_with_review_model(monkeypatch) -> None:
     seen: dict[str, Any] = {}
 
@@ -41,7 +49,9 @@ async def test_review_responder_builds_agent_with_review_model(monkeypatch) -> N
         ) -> dict[str, Any]:
             seen["payload"] = payload
             seen["config"] = config
-            return {"messages": [SimpleNamespace(content="Reviewed: no blocking findings. LGTM.")]}
+            return {
+                "structured_response": _findings_payload(summary="Reviewed: no blocking findings.")
+            }
 
     def _fake_create_deep_agent(**kwargs: Any) -> _Agent:
         seen["kwargs"] = kwargs
@@ -52,15 +62,19 @@ async def test_review_responder_builds_agent_with_review_model(monkeypatch) -> N
     monkeypatch.setattr(mod, "create_deep_agent", _fake_create_deep_agent)
 
     adapter = _StubAdapter("diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n")
-    reply = await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)
+    result = await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)
 
-    assert reply == "Reviewed: no blocking findings. LGTM."
+    assert isinstance(result, ReviewFindings)
+    assert result.summary == "Reviewed: no blocking findings."
+    assert result.findings == ()
     assert adapter.calls == [("YiAgent/openbot", 42)]
     assert seen["kwargs"]["model"] == "anthropic:claude-opus-4-7"
-    # Slice A2: agent now gets read_file + grep_repo tools.
+    # Slice A2: agent gets read_file + grep_repo tools.
     tool_names = {getattr(t, "name", None) for t in seen["kwargs"]["tools"]}
     assert tool_names == {"read_file", "grep_repo"}
     assert "senior code reviewer" in seen["kwargs"]["system_prompt"].lower()
+    # Slice B: structured output is required end-to-end.
+    assert seen["kwargs"]["response_format"] is ReviewFindingsSchema
     # Tool budget is enforced via recursion_limit on the ainvoke config.
     assert isinstance(seen["config"], dict)
     assert seen["config"].get("recursion_limit", 0) > 0
@@ -68,6 +82,38 @@ async def test_review_responder_builds_agent_with_review_model(monkeypatch) -> N
     assert "YiAgent/openbot" in prompt
     assert "#42" in prompt
     assert "diff --git" in prompt
+
+
+async def test_review_responder_returns_findings_from_structured_response(monkeypatch) -> None:
+    """The agent's structured findings round-trip into domain ReviewFindings."""
+
+    class _Agent:
+        async def ainvoke(
+            self, payload: dict[str, Any], *, config: dict[str, Any] | None = None
+        ) -> dict[str, Any]:
+            return {
+                "structured_response": _findings_payload(
+                    FindingSchema(severity="high", file="src/x.py", message="null deref", line=10),
+                    FindingSchema(severity="nit", file="src/x.py", message="style"),
+                    summary="2 findings",
+                )
+            }
+
+    import openbot.infrastructure.agents.deepagents_review as mod
+
+    monkeypatch.setattr(mod, "create_deep_agent", lambda **_: _Agent())
+
+    result = await mod.DeepAgentsReviewResponder().review_for_event(
+        _event(), adapter=_StubAdapter("d")
+    )
+
+    assert result == ReviewFindings(
+        summary="2 findings",
+        findings=(
+            Finding(severity="high", file="src/x.py", message="null deref", line=10),
+            Finding(severity="nit", file="src/x.py", message="style"),
+        ),
+    )
 
 
 async def test_review_responder_handles_empty_diff(monkeypatch) -> None:
@@ -78,16 +124,16 @@ async def test_review_responder_handles_empty_diff(monkeypatch) -> None:
             self, payload: dict[str, Any], *, config: dict[str, Any] | None = None
         ) -> dict[str, Any]:
             seen["payload"] = payload
-            return {"messages": [SimpleNamespace(content="No diff available.")]}
+            return {"structured_response": _findings_payload(summary="No diff available.")}
 
     import openbot.infrastructure.agents.deepagents_review as mod
 
     monkeypatch.setattr(mod, "create_deep_agent", lambda **_: _Agent())
 
     adapter = _StubAdapter("")  # closed / deleted PR
-    reply = await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)
+    result = await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)
 
-    assert reply == "No diff available."
+    assert result.summary == "No diff available."
     prompt = seen["payload"]["messages"][0]["content"]
     assert "(diff unavailable" in prompt
 
@@ -100,7 +146,7 @@ async def test_review_responder_truncates_huge_diffs(monkeypatch) -> None:
             self, payload: dict[str, Any], *, config: dict[str, Any] | None = None
         ) -> dict[str, Any]:
             seen["payload"] = payload
-            return {"messages": [SimpleNamespace(content="OK.")]}
+            return {"structured_response": _findings_payload(summary="OK.")}
 
     import openbot.infrastructure.agents.deepagents_review as mod
 
@@ -115,44 +161,20 @@ async def test_review_responder_truncates_huge_diffs(monkeypatch) -> None:
     assert "(diff truncated" in prompt
 
 
-async def test_review_responder_extracts_text_from_block_content(monkeypatch) -> None:
+async def test_review_responder_raises_on_missing_structured_response(monkeypatch) -> None:
+    """No structured_response → fail loud; the use case posts the error template."""
+
     class _Agent:
         async def ainvoke(
             self, payload: dict[str, Any], *, config: dict[str, Any] | None = None
         ) -> dict[str, Any]:
-            return {
-                "messages": [
-                    SimpleNamespace(
-                        content=[
-                            {"type": "text", "text": "First. "},
-                            {"type": "text", "text": "Second."},
-                        ]
-                    )
-                ]
-            }
+            return {"messages": []}  # no structured_response key at all
 
     import openbot.infrastructure.agents.deepagents_review as mod
 
     monkeypatch.setattr(mod, "create_deep_agent", lambda **_: _Agent())
 
-    reply = await mod.DeepAgentsReviewResponder().review_for_event(
-        _event(), adapter=_StubAdapter("d")
-    )
-    assert reply == "First. Second."
-
-
-async def test_review_responder_raises_on_empty_reply(monkeypatch) -> None:
-    class _Agent:
-        async def ainvoke(
-            self, payload: dict[str, Any], *, config: dict[str, Any] | None = None
-        ) -> dict[str, Any]:
-            return {"messages": [SimpleNamespace(content="   ")]}
-
-    import openbot.infrastructure.agents.deepagents_review as mod
-
-    monkeypatch.setattr(mod, "create_deep_agent", lambda **_: _Agent())
-
-    with pytest.raises(ValueError, match="deepagents_result_missing_text"):
+    with pytest.raises(ValueError, match="deepagents_result_missing_structured_response"):
         await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=_StubAdapter("d"))
 
 
@@ -168,18 +190,14 @@ async def test_review_responder_requires_pr_number(monkeypatch) -> None:
 
 
 async def test_review_responder_rebuilds_agent_per_event(monkeypatch) -> None:
-    """Tools close over (adapter, event) — caching by model alone is wrong.
-
-    Without per-call rebuild, the second event would silently bind to the
-    first event's adapter, which is a correctness bug (multi-tenant!).
-    """
+    """Tools close over (adapter, event) — caching by model alone is wrong."""
     builds: list[dict[str, Any]] = []
 
     class _Agent:
         async def ainvoke(
             self, payload: dict[str, Any], *, config: dict[str, Any] | None = None
         ) -> dict[str, Any]:
-            return {"messages": [SimpleNamespace(content="ok")]}
+            return {"structured_response": _findings_payload(summary="ok")}
 
     def _capture(**kwargs: Any) -> _Agent:
         builds.append(kwargs)
@@ -199,11 +217,7 @@ async def test_review_responder_rebuilds_agent_per_event(monkeypatch) -> None:
 
 
 async def test_review_responder_passes_recursion_limit(monkeypatch) -> None:
-    """The recursion limit gates runaway tool loops at the langgraph layer.
-
-    The ToolBudget guard catches the common case; recursion_limit catches
-    pathological cases where the agent gets stuck in a non-tool loop.
-    """
+    """The recursion limit gates runaway tool loops at the langgraph layer."""
     seen: dict[str, Any] = {}
 
     class _Agent:
@@ -211,7 +225,7 @@ async def test_review_responder_passes_recursion_limit(monkeypatch) -> None:
             self, payload: dict[str, Any], *, config: dict[str, Any] | None = None
         ) -> dict[str, Any]:
             seen["config"] = config
-            return {"messages": [SimpleNamespace(content="ok")]}
+            return {"structured_response": _findings_payload(summary="ok")}
 
     import openbot.infrastructure.agents.deepagents_review as mod
 

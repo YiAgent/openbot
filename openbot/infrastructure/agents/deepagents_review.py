@@ -1,25 +1,25 @@
-"""DeepAgent-backed PR review responder — slice A2.
+"""DeepAgent-backed PR review responder — slice B.
 
-What changed from slice A:
+What changed from slice A2:
 
-  - The agent is now a *tool-using* ReAct loop. It still receives an inline
-    diff in the user prompt (cheap context that's always there), but it can
-    also call ``read_file`` to pull the rest of a file the diff touches and
-    ``grep_repo`` to find related code.
-  - The agent is rebuilt per event because tools close over
-    ``(adapter, event)``. Caching by model alone (slice A's
-    ``_agent_for_model``) is now a correctness bug, not just an optimization
-    miss — tools from event A would leak into event B's run.
-  - Runaway agent loops are bounded twice: ``ToolBudget`` (default 5 calls)
-    sits at the port boundary so each tool call is counted; ``recursion_limit``
-    on the langgraph config (25) catches non-tool loops the budget can't see.
+  - The agent now returns *structured findings* (one ``ReviewFindings``
+    value) instead of a free-form markdown reply. We pass
+    ``response_format=ReviewFindingsSchema`` so DeepAgents/LangGraph coerces
+    the model's final answer into a typed pydantic object, then convert
+    that to the domain ``ReviewFindings`` (anti-corruption boundary —
+    pydantic stops at this module).
+  - The use case (`maybe_run_review`) filters findings by severity and
+    submits them through the PR Review API (POST .../reviews) instead of
+    posting one free-form comment. This module no longer knows or cares
+    how the result is rendered to GitHub.
 
-What's still out of scope (slice B):
+Carried over from A2:
 
-  - Structured findings (severity, file, line) via PR review API.
-  - Multi-turn / "ask the author" follow-up.
-  - Re-review on PR_SYNCHRONIZED (incremental review wiring lives in F3; the
-    responder is event-stateless today, by design).
+  - Tools (``read_file``, ``grep_repo``) close over ``(adapter, event)`` so
+    the agent is rebuilt per call — caching by model alone would be a
+    multi-tenant correctness bug.
+  - ``ToolBudget`` caps total tool invocations (5); ``recursion_limit``
+    (25) catches non-tool loops the budget guard can't see.
 """
 
 from __future__ import annotations
@@ -29,6 +29,11 @@ from typing import TYPE_CHECKING, Any
 from deepagents import create_deep_agent
 
 from openbot.domain.events import UnifiedEvent
+from openbot.domain.review import ReviewFindings
+from openbot.infrastructure.agents._review_schema import (
+    ReviewFindingsSchema,
+    parse_structured_response,
+)
 from openbot.infrastructure.agents._review_tools import make_review_tools
 from openbot.infrastructure.llm.model_router import Feature, primary_model_for
 
@@ -38,7 +43,6 @@ if TYPE_CHECKING:
 # PR diffs can grow large; opus-4-7 has plenty of headroom but pure-noise
 # tokens (lockfile churn, generated assets) waste budget. 64KB ≈ ~16k
 # tokens — still well below model context but keeps cost predictable.
-# Slice B will replace this with surgical diff slicing per-file.
 _MAX_DIFF_CHARS = 64_000
 
 # LangGraph counts every node visit toward this limit; a ReAct loop with
@@ -47,26 +51,32 @@ _MAX_DIFF_CHARS = 64_000
 # last tool call exhausts the budget.
 _RECURSION_LIMIT = 25
 
-_SYSTEM_PROMPT = """You are OpenBot, a senior code reviewer responding inline on a GitHub pull request.
+_SYSTEM_PROMPT = """You are OpenBot, a senior code reviewer. You will return a JSON object \
+matching the provided schema — never plain text.
 
 Your job:
-- Read the provided unified diff and call out concrete, actionable issues.
+- Read the provided unified diff and identify concrete, actionable issues.
 - Focus on correctness, security, and obvious bugs first; style notes only if material.
-- If the diff is empty or trivial (lockfile-only, docs-only, formatting), say so and approve briefly.
-- Quote the relevant `path:line` when you flag something so the author can find it.
+- Severities: `critical` (data loss / security), `high` (likely bug), `medium` (smelly / risky), \
+`low` (could be better), `nit` (taste). When in doubt, pick lower.
+- If the diff is empty, trivial, or you find no issues: return `summary` only with `findings: []`.
+- For each finding: set `file` to the repo-relative path. Set `line` to the line in the new file \
+when the issue is local to one line; omit `line` for repo-wide findings (e.g. missing changelog).
+- `quote` is optional — include a short source snippet (≤ 200 chars) when it helps the author \
+locate the issue without clicking.
 
 Tools available (use sparingly — total tool calls are budget-capped):
-- `read_file(path)` — fetch the UTF-8 text of a file in the repo. Use this when the diff
-  references a function or class you need to see in full to judge the change.
-- `grep_repo(pattern, path_glob=None)` — find lines matching `pattern` across the repo.
-  Useful for "is this function called elsewhere?" or "is there an existing helper for this?".
-  `path_glob` is GitHub's `path:` qualifier — substring match, not a real glob.
+- `read_file(path)` — fetch the UTF-8 text of a file in the repo. Use when the diff references a \
+function or class you need to see in full to judge the change.
+- `grep_repo(pattern, path_glob=None)` — find lines matching `pattern` across the repo. \
+`path_glob` is GitHub's `path:` qualifier (substring, not real glob).
 
 Rules:
 - Default to the inline diff. Only reach for tools when the diff alone is genuinely insufficient.
-- One reply per call. No multi-step planning visible to the author — produce the final review.
-- Markdown formatting is fine; keep the reply under ~600 words.
-- Do not claim you ran code or executed tests. You can only read repo files and search code.
+- Return ONE structured object. Do not emit chains of thought, multi-turn dialogue, or markdown \
+prose outside the schema.
+- Keep `summary` to one line.
+- Do not invent line numbers — when you're not sure, omit `line` and explain in `message`.
 """
 
 
@@ -105,42 +115,23 @@ def _user_prompt(event: UnifiedEvent, diff: str) -> str:
         "```diff\n"
         f"{diff_block}\n"
         "```\n\n"
-        "Review the diff and produce a single, complete PR comment."
+        "Review the diff and return a single structured object matching the schema."
     )
 
 
-def _coerce_text_part(part: Any) -> str:
-    if isinstance(part, str):
-        return part
-    if isinstance(part, dict):
-        if part.get("type") == "text":
-            text = part.get("text")
-            return text if isinstance(text, str) else ""
-        return ""
-    text_attr = getattr(part, "text", None)
-    return text_attr if isinstance(text_attr, str) else ""
+def _extract_findings(result: dict[str, Any]) -> ReviewFindings:
+    """Read DeepAgents' structured-output channel and coerce to the domain type.
 
-
-def _extract_message_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        return "".join(_coerce_text_part(part) for part in content).strip()
-    text_attr = getattr(content, "text", None)
-    if isinstance(text_attr, str):
-        return text_attr.strip()
-    return ""
-
-
-def _extract_reply(result: dict[str, Any]) -> str:
-    messages = result.get("messages")
-    if not isinstance(messages, list) or not messages:
-        raise ValueError("deepagents_result_missing_messages")
-    content = getattr(messages[-1], "content", None)
-    reply = _extract_message_text(content)
-    if not reply:
-        raise ValueError("deepagents_result_missing_text")
-    return reply
+    Some agent runtimes (langgraph + ``response_format``) put the parsed
+    response under ``structured_response``; older or simpler graphs may
+    just include it in the final message. We try the dedicated key first
+    and fall back to inspecting the last message only if needed —
+    ``parse_structured_response`` does the heavy lifting.
+    """
+    structured = result.get("structured_response")
+    if structured is not None:
+        return parse_structured_response(structured)
+    raise ValueError("deepagents_result_missing_structured_response")
 
 
 class DeepAgentsReviewResponder:
@@ -158,7 +149,7 @@ class DeepAgentsReviewResponder:
         event: UnifiedEvent,
         *,
         adapter: ChannelAdapterPort,
-    ) -> str:
+    ) -> ReviewFindings:
         if event.pr_number is None:
             raise ValueError("deepagents_review_requires_pr_number")
         diff = await adapter.get_pr_diff(event, event.pr_number)
@@ -167,6 +158,7 @@ class DeepAgentsReviewResponder:
             model=_normalize_model_name(primary_model_for(Feature.REVIEW)),
             tools=tools,
             system_prompt=_SYSTEM_PROMPT,
+            response_format=ReviewFindingsSchema,
         )
         result = await agent.ainvoke(
             {
@@ -179,7 +171,7 @@ class DeepAgentsReviewResponder:
             },
             config={"recursion_limit": _RECURSION_LIMIT},
         )
-        return _extract_reply(result)
+        return _extract_findings(result)
 
 
 __all__ = ["DeepAgentsReviewResponder"]

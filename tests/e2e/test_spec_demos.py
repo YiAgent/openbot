@@ -90,12 +90,18 @@ async def test_demo_02_pr_opens_review_stub_acks(webhook_harness: WebhookHarness
     rows = await webhook_harness.audit_rows(delivery_id="d-review-1")
     assert _phases(rows) == [WorkflowPhase.STARTED, WorkflowPhase.COMPLETED]
     assert all(row.workflow is Workflow.REVIEW for row in rows)
-    assert len(webhook_harness.adapter.replies) == 1
-    _, number, body = webhook_harness.adapter.replies[0]
-    assert number == 42
-    # Body comes from the fake review responder in conftest (`_fake_review_reply`).
-    # Prompt-quality assertions live in evals/, not here (CLAUDE.md / PRD §8.3).
-    assert body == "DeepAgents review reply for PR #42"
+    # Slice B: review goes through the PR Review API, not a free-form comment.
+    # The fake responder in conftest emits zero findings, so we expect a single
+    # APPROVE review with the summary as the body.
+    assert len(webhook_harness.adapter.pr_reviews) == 1
+    review = webhook_harness.adapter.pr_reviews[0]
+    assert review["pr_number"] == 42
+    assert review["event_type"] == "APPROVE"
+    assert review["body"] == "DeepAgents review summary for PR #42"
+    assert review["comments"] == []
+    # Free-form `reply()` is no longer the review path — this also acts as a
+    # regression guard against accidentally re-routing through `issues/.../comments`.
+    assert webhook_harness.adapter.replies == []
 
 
 # ───────────────────────── demo 03: bot-assigned fix stub ─────────────────────────
@@ -278,9 +284,12 @@ async def test_demo_07_fork_pr_default_off_ok_to_test_opens(
     ok_rows = await webhook_harness.audit_rows(delivery_id="d-fork-ok")
     assert _phases(ok_rows) == [WorkflowPhase.STARTED, WorkflowPhase.COMPLETED]
     assert all(row.workflow is Workflow.REVIEW for row in ok_rows)
-    # Step 1 posted 1 reply (the BLOCK notice); Step 2 posts another
-    # (the review ACK) — 2 total across the two dispatches.
-    assert len(webhook_harness.adapter.replies) == 2
+    # Step 1 posted 1 reply (the BLOCK notice via `reply`); Step 2 now goes
+    # through the PR Review API (slice B), so `replies` stays at 1 and
+    # `pr_reviews` gets a new entry.
+    assert len(webhook_harness.adapter.replies) == 1
+    assert len(webhook_harness.adapter.pr_reviews) == 1
+    assert webhook_harness.adapter.pr_reviews[0]["pr_number"] == 77
 
 
 # ───────────────────────── demo 08: rate limit announce_once ─────────────────────

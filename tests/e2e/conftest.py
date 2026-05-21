@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import fakeredis.aioredis
 import pytest
@@ -88,6 +88,8 @@ class RecordingGitHubAdapter(GitHubAdapter):
         # ``grep_responses[(pattern, path_glob)]`` returns the canned list.
         self.file_responses: dict[str, str] = {}
         self.grep_responses: dict[tuple[str, str | None], list[str]] = {}
+        # Slice-B PR Review API — recorded submissions for assertion in demo 2.
+        self.pr_reviews: list[dict[str, Any]] = []
 
     async def reply(self, event: UnifiedEvent, message: str) -> dict[str, Any]:
         """Record + return a synthetic comment id (matches real shape)."""
@@ -138,6 +140,26 @@ class RecordingGitHubAdapter(GitHubAdapter):
     ) -> list[str]:
         """Return canned grep results keyed by (pattern, path_glob)."""
         return list(self.grep_responses.get((pattern, path_glob), ()))[:max_matches]
+
+    async def create_pr_review(
+        self,
+        event: UnifiedEvent,
+        pr_number: int,
+        *,
+        body: str,
+        event_type: Literal["APPROVE", "COMMENT"],
+        comments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Record the PR Review submission; demo 2 asserts on the recorded shape."""
+        record = {
+            "repo": event.repo,
+            "pr_number": pr_number,
+            "body": body,
+            "event_type": event_type,
+            "comments": list(comments or ()),
+        }
+        self.pr_reviews.append(record)
+        return {"id": 20_000 + len(self.pr_reviews), **record}
 
     async def _installation_token(self, event: UnifiedEvent) -> Any:
         """Bypass App auth — return a minimal object whose ``.token`` is read."""
@@ -299,14 +321,16 @@ async def webhook_harness(
         _fake_chat_reply,
     )
 
-    async def _fake_review_reply(*, event: UnifiedEvent, adapter: Any) -> str:
-        # E2E doesn't exercise the real reviewer — only the audit + reply
-        # plumbing. PRD §8.3: prompt-quality assertions live in evals/.
-        return f"DeepAgents review reply for PR #{event.pr_number}"
+    from openbot.domain.review import ReviewFindings as _ReviewFindings
+
+    async def _fake_review_findings(*, event: UnifiedEvent, adapter: Any) -> _ReviewFindings:
+        # E2E doesn't exercise the real reviewer — only the audit + PR Review
+        # API plumbing. PRD §8.3: prompt-quality assertions live in evals/.
+        return _ReviewFindings(summary=f"DeepAgents review summary for PR #{event.pr_number}")
 
     monkeypatch.setattr(
-        "openbot.application.use_cases.review._generate_review_reply",
-        _fake_review_reply,
+        "openbot.application.use_cases.review._generate_review_findings",
+        _fake_review_findings,
     )
 
     try:

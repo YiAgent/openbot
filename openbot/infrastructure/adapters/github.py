@@ -23,7 +23,7 @@ import json
 import logging
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, Literal
 from urllib.parse import quote
 
 import httpx
@@ -527,6 +527,32 @@ class GitHubAdapter(ChannelAdapter):
             if len(out) >= max_matches:
                 break
         return out
+
+    async def create_pr_review(
+        self,
+        event: UnifiedEvent,
+        pr_number: int,
+        *,
+        body: str,
+        event_type: Literal["APPROVE", "COMMENT"],
+        comments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Submit a PR review with optional inline comments (slice B).
+
+        Endpoint: POST /repos/{owner}/{repo}/pulls/{pr_number}/reviews
+
+        ``event_type`` is locked to APPROVE / COMMENT — OpenBot is advisory
+        (PRD §13), never block merge with REQUEST_CHANGES.
+
+        Each entry in ``comments`` must shape as ``{path, line, body}``;
+        GitHub rejects inline comments without a line number, so callers
+        fold repo-wide findings into ``body`` instead.
+        """
+        url = f"{self._api_base}/repos/{event.repo}/pulls/{pr_number}/reviews"
+        payload: dict[str, Any] = {"body": body, "event": event_type}
+        if comments:
+            payload["comments"] = comments
+        return await self._authed_json("POST", url, event, json_body=payload)
 
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:

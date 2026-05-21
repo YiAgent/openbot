@@ -1,6 +1,6 @@
 # Review / Fix DeepAgent integration — slice plan
 
-**Status:** slices A + A2 landed. Slice B/C deferred.
+**Status:** slices A + A2 + B landed. Slice C deferred.
 **Branch:** `feat/review-deepagent`
 **PRD anchors:** §4.2 (review), §4.3 (fix), §13 #2 (locked model routing)
 
@@ -83,14 +83,56 @@
 
 ---
 
-## Slice B (structured findings)
+## Slice B (DONE — structured findings + PR Review API)
 
-Goal: emit one comment per high-confidence finding instead of one consolidated reply.
+### Locked design decisions (from session 2026-05-20)
 
-- Add a Pydantic schema for findings (`severity`, `file`, `line`, `message`, `quote`).
-- Switch responder to `with_structured_output` or a final-pass extractor.
-- Adapter gets `add_pr_review_comments(event, findings)` — uses the PR review API (`POST /repos/.../pulls/{n}/reviews` with `comments` array, single REQUEST_CHANGES/COMMENT review).
-- Severity filter from `.openbot/config.yaml` `review.min_severity`.
+| Q | Decision | Rationale |
+|---|----------|-----------|
+| Verdict ceiling | **COMMENT-only** — never `REQUEST_CHANGES` regardless of severity | OpenBot is advisory in v0.1 (PRD §13). Humans still make merge calls. Lowers blast radius if the model gets things wrong. |
+| Zero findings | **APPROVE review with summary** | Posting a real APPROVE makes "no findings above threshold" feel intentional rather than a no-op. |
+
+### What landed
+
+- `openbot/domain/review.py`
+  - Frozen `Finding(severity, file, message, line=None, quote=None)`, frozen `ReviewFindings(summary, findings=())`.
+  - `Severity = Literal["critical", "high", "medium", "low", "nit"]` — strict superset of `SeverityThreshold` (which omits `nit`; threshold of "nit" would be useless).
+  - `passes_threshold(finding, threshold)` ranks by tuple index; unknown severities silently drop rather than crash the run (LLM hallucination resilience).
+- `openbot/infrastructure/agents/_review_schema.py`
+  - Pydantic `_FindingModel` / `_ReviewFindingsModel` with `extra="forbid"` — schema drift is a deliberate code change.
+  - `to_domain()` is the anti-corruption boundary; pydantic does not leak past this module.
+  - `parse_structured_response()` accepts pydantic instance OR plain dict; raises on anything else so silent approve on garbage is impossible.
+- `ChannelAdapterPort.create_pr_review(event, pr_number, *, body, event_type, comments)`
+  - `event_type: Literal["APPROVE", "COMMENT"]` — `REQUEST_CHANGES` is unreachable by construction.
+  - `GitHubAdapter` impl POSTs to `/repos/{owner}/{repo}/pulls/{n}/reviews` via the existing `_authed_json` helper.
+- `DeepAgentsReviewResponder`
+  - Returns `ReviewFindings` (was `str`).
+  - Passes `response_format=ReviewFindingsSchema` to `create_deep_agent`.
+  - Reads `result["structured_response"]`; fails loud if missing.
+  - System prompt rewritten to demand structured output and explain when to omit `line` (repo-wide findings).
+- `maybe_run_review` (use case)
+  - Calls the responder, filters by `ctx.config.severity_threshold`, partitions into inline (`line is not None`) and repo-wide.
+  - Inline findings → PR review comments shaped `{path, line, body: "**severity** — message"}` (quote rendered as a fenced block when present).
+  - Repo-wide findings → folded into the review body under "Repo-wide notes" (PR Review API rejects line-less inline comments).
+  - Verdict: `APPROVE` iff filtered findings is empty, else `COMMENT`. PRD-locked, asserted by `test_never_emits_request_changes_even_on_critical`.
+  - Responder failure → fallback COMMENT review with the error template (so the PR author still sees a real signal, never silent).
+
+### Tests
+
+- `tests/domain/test_review.py` — 16 tests covering immutability, defaults, and the full severity-ranking matrix (including unknown severities).
+- `tests/infrastructure/agents/test_review_schema.py` — 7 tests covering `to_domain()` happy/drop paths, `parse_structured_response` shape acceptance, and `extra="forbid"`.
+- `tests/infrastructure/adapters/test_github.py` — 3 new tests for `create_pr_review` (APPROVE body-only, COMMENT with inline comments, missing-auth guard).
+- `tests/infrastructure/agents/test_deepagents_review.py` — rewritten for structured output (8 tests; added `test_review_responder_returns_findings_from_structured_response` and `test_review_responder_raises_on_missing_structured_response`).
+- `tests/application/use_cases/test_review.py` — 9 new tests covering approve, comment with inline comments, severity filter (drop and keep paths), repo-wide folding, responder failure, both skip-conditions, and the no-REQUEST_CHANGES lock.
+- `tests/e2e/conftest.py` — `_fake_review_findings` returns a `ReviewFindings`; `RecordingGitHubAdapter` records via new `pr_reviews` list.
+- `tests/e2e/test_spec_demos.py` — demo 02 asserts on `pr_reviews` (APPROVE shape); demo 07 split between `replies` (announce) and `pr_reviews` (review).
+- 878 → 915 passing.
+
+### Out-of-scope for slice B
+
+- Re-review on `PR_SYNCHRONIZED` — incremental review wiring lives in F3 (already in router); the responder is event-stateless by design. A future "diff since last review" feature is a separate slice.
+- Suggested edits (`suggestion` code blocks) — GitHub renders them as one-click commits. Useful but the agent would need to emit a target line range, not just a single line. Defer until reviewers ask for it.
+- LangSmith feedback on individual findings — would require persisting `findings_id` per comment. Out of scope; the chain-level trace is enough for v0.1.
 
 ## Slice C (Fix workflow)
 
@@ -122,6 +164,18 @@ Goal: implement `openbot/application/use_cases/fix.py` end-to-end.
 - [ ] Smoke test on a real PR — does the agent actually fetch files when the diff is insufficient? (manual, after merge.)
 - [ ] Cost test — how many tool calls does opus-4-7 average across a small batch of real PRs? Confirm `DEFAULT_TOOL_BUDGET = 5` is enough headroom.
 
+## Acceptance checks (slice B)
+
+- [x] `make check` passes (fmt + lint + 915 tests).
+- [x] `FakeChannelAdapter` + `RecordingGitHubAdapter` still satisfy `ChannelAdapterPort` (now including `create_pr_review`).
+- [x] Domain layer has no pydantic dependency — verified by the hexagonal contract (import-linter green).
+- [x] `event_type` is `Literal["APPROVE", "COMMENT"]` — `REQUEST_CHANGES` is unreachable by construction (PRD §13 lock).
+- [x] LLM hallucinations on `severity` are dropped, not raised (`test_to_domain_drops_unknown_severity` + `passes_threshold` test for unknown).
+- [x] No new prompt-quality assertions in `tests/`.
+- [x] No new network calls in unit tests.
+- [ ] Smoke test on a real PR — does the structured-output pass actually produce parseable findings on opus-4-7? (manual, after merge.)
+- [ ] Configure `.openbot/config.yaml` `review.severity_threshold` per repo and verify filter behavior (manual.)
+
 ---
 
 ## Files touched
@@ -149,4 +203,22 @@ tests/e2e/conftest.py                               +22  (RecordingGitHubAdapter
 tests/infrastructure/adapters/test_github.py        +130 (8 tests)
 tests/infrastructure/agents/test_deepagents_review.py +60 (2 new tests + ainvoke signature updates)
 tests/infrastructure/agents/test_review_tools.py    +130 (new file, 7 tests)
+```
+
+### Slice B
+```
+openbot/domain/review.py                             +85  (new — Finding/ReviewFindings + passes_threshold)
+openbot/application/ports/channel_adapter.py        +25  (create_pr_review)
+openbot/application/use_cases/review.py             ~120 (severity filter + PR Review API submission)
+openbot/infrastructure/adapters/github.py           +25  (create_pr_review impl)
+openbot/infrastructure/agents/_review_schema.py     +120 (new — pydantic ⇄ domain boundary)
+openbot/infrastructure/agents/deepagents_review.py  ~40  (structured response_format + prompt)
+tests/_fakes/channel_adapter.py                     +20  (port conformance)
+tests/e2e/conftest.py                               +25  (RecordingGitHubAdapter parity + monkeypatch swap)
+tests/e2e/test_spec_demos.py                        ~20  (demo 02 + demo 07 reshape for PR Review API)
+tests/domain/test_review.py                         +80  (new — 16 tests)
+tests/application/use_cases/test_review.py          +220 (new — 9 tests)
+tests/infrastructure/adapters/test_github.py        +60  (3 tests)
+tests/infrastructure/agents/test_review_schema.py   +85  (new — 7 tests)
+tests/infrastructure/agents/test_deepagents_review.py ~50 (rewritten for structured_response path)
 ```

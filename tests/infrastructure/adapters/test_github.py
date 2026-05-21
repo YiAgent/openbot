@@ -626,6 +626,66 @@ async def test_grep_repo_skips_items_without_text_matches(adapter_factory: Any) 
     assert await adapter.grep_repo(_event(), pattern="x", path_glob=None) == []
 
 
+# ───── create_pr_review ─────
+
+
+_REVIEW_RESPONSE = {"id": 9000, "state": "COMMENTED"}
+
+
+async def test_create_pr_review_posts_to_pulls_reviews_endpoint(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, json=_REVIEW_RESPONSE), auth=_FakeAuth()
+    )
+
+    result = await adapter.create_pr_review(
+        _event(pr_number=77),
+        pr_number=77,
+        body="LGTM overall",
+        event_type="APPROVE",
+    )
+
+    assert result == _REVIEW_RESPONSE
+    req = captured[0]
+    assert req.method == "POST"
+    assert str(req.url) == "https://api.github.com/repos/YiAgent/openbot/pulls/77/reviews"
+    sent = json.loads(req.content)
+    assert sent["body"] == "LGTM overall"
+    assert sent["event"] == "APPROVE"
+    # No comments key means GitHub treats it as a body-only review — that's
+    # exactly what we want for an APPROVE with no inline findings.
+    assert sent.get("comments", []) == []
+
+
+async def test_create_pr_review_sends_inline_comments(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, json=_REVIEW_RESPONSE), auth=_FakeAuth()
+    )
+    inline = [
+        {"path": "src/auth.py", "line": 42, "body": "**high** — bug here"},
+        {"path": "src/db.py", "line": 10, "body": "**medium** — race"},
+    ]
+
+    await adapter.create_pr_review(
+        _event(pr_number=12),
+        pr_number=12,
+        body="2 findings",
+        event_type="COMMENT",
+        comments=inline,
+    )
+
+    sent = json.loads(captured[0].content)
+    assert sent["event"] == "COMMENT"
+    assert sent["comments"] == inline
+
+
+async def test_create_pr_review_raises_when_no_auth(adapter_factory: Any) -> None:
+    adapter, _ = adapter_factory(lambda req: httpx.Response(500), auth=None)
+    with pytest.raises(RuntimeError, match="write-back unavailable"):
+        await adapter.create_pr_review(
+            _event(pr_number=1), pr_number=1, body="x", event_type="COMMENT"
+        )
+
+
 # ───── rate-limit warning ─────
 
 

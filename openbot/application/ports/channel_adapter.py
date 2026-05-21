@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -127,5 +127,30 @@ class ChannelAdapterPort(Protocol):
 
         Returns a list of created label objects (same shape as GitHub API response).
         Implementations may return [] on a no-op or if labels already exist.
+        """
+        ...
+
+    async def create_pr_review(
+        self,
+        event: UnifiedEvent,
+        pr_number: int,
+        *,
+        body: str,
+        event_type: Literal["APPROVE", "COMMENT"],
+        comments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Submit a single PR review (body + inline comments + verdict).
+
+        ``event_type`` is restricted to ``APPROVE`` and ``COMMENT`` on purpose:
+        OpenBot is advisory in v0.1 and must never block a merge with
+        ``REQUEST_CHANGES`` (PRD §13 — reviewer-locked decision).
+
+        ``comments`` is a list of ``{path, line, body}`` dicts (GitHub's PR
+        Review API shape). Repo-wide findings without a line number belong
+        in ``body``, not in this list — GitHub requires a line for every
+        inline comment.
+
+        Returns the GitHub PR review object on success. Raises on HTTP error
+        — the caller treats a failed review submission as a workflow failure.
         """
         ...
