@@ -100,7 +100,10 @@ def _pr_title(issue_title: str, issue_number: int) -> str:
     head = (issue_title or "").strip().replace("\n", " ")
     if not head:
         head = f"Fix for issue #{issue_number}"
-    return f"[OpenBot] {head}"[:240]  # GitHub caps PR titles at 256.
+    # GitHub caps PR titles at 256 chars; 240 leaves headroom for the
+    # ``[OpenBot] `` prefix (10 chars) plus a small ellipsis margin so
+    # truncation never lands mid-emoji or mid-issue-number.
+    return f"[OpenBot] {head}"[:240]
 
 
 def _pr_body(*, attempt_summary: str, issue_number: int, test_command: str) -> str:

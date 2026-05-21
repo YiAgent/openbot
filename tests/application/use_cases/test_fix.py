@@ -244,6 +244,48 @@ async def test_comments_with_truncated_output_when_tests_failed(monkeypatch):
     assert len(posted) < 10_000  # well under GitHub's 65k cap
 
 
+# ---------- Token-fetch failure (its own audit branch) ----------
+
+
+@pytest.mark.asyncio
+async def test_comments_when_token_fetch_fails(monkeypatch):
+    """``get_installation_token`` runs in its own try/except so audit
+    dashboards can distinguish ``token_failed`` from ``clone_failed``
+    even though the user-visible message is the same ``_CLONE_FAIL``.
+    """
+    sandbox = _FakeSandbox()
+    adapter = _adapter(
+        get_installation_token=AsyncMock(side_effect=RuntimeError("token endpoint 500")),
+    )
+    captured: list[str] = []
+
+    @asynccontextmanager
+    async def fake_audit_lifecycle(ctx, *, workflow):
+        rec = type("R", (), {"outcome": ""})()
+        try:
+            yield rec
+        finally:
+            captured.append(rec.outcome)
+
+    monkeypatch.setattr(fix_module, "audit_lifecycle", fake_audit_lifecycle)
+
+    ctx = _ctx(adapter=adapter, sandbox_factory=lambda: _sandbox_cm(sandbox))
+    await fix_module.maybe_run_fix(ctx)
+
+    # Sandbox is never opened — the early return happens before the
+    # ``async with factory() as sandbox:`` block.
+    assert sandbox.cloned == []
+    assert sandbox.closed is False
+    # No branch/PR work proceeds.
+    adapter.create_branch.assert_not_called()
+    adapter.open_pull_request.assert_not_called()
+    # User sees the shared _CLONE_FAIL message but audit records the
+    # distinct stage so ops can split the two on the dashboard.
+    posted = adapter.reply.call_args.args[1].lower()
+    assert "clone" in posted
+    assert captured == ["token_failed"]
+
+
 # ---------- Failure paths (parametrized over the stage that explodes) ----------
 
 
