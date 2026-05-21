@@ -554,6 +554,28 @@ class GitHubAdapter(ChannelAdapter):
             payload["comments"] = comments
         return await self._authed_json("POST", url, event, json_body=payload)
 
+    async def get_default_branch_sha(self, event: UnifiedEvent) -> str:
+        """Resolve repo's default branch then return its tip SHA.
+
+        Two ``_authed_json`` calls — both inherit the adapter's retry +
+        rate-limit-headroom instrumentation, so callers don't need to
+        re-wrap them. Raises on hard HTTP errors (the resolver bubbles
+        the failure up to the use case).
+        """
+        base = f"{self._api_base}/repos/{event.repo}"
+        repo_meta = await self._authed_json("GET", base, event)
+        default_branch = (
+            str(repo_meta.get("default_branch") or "main")
+            if isinstance(repo_meta, dict)
+            else "main"
+        )
+        ref = await self._authed_json("GET", f"{base}/git/ref/heads/{default_branch}", event)
+        return (
+            str(ref["object"]["sha"])
+            if isinstance(ref, dict) and isinstance(ref.get("object"), dict)
+            else ""
+        )
+
     async def get_issue(self, event: UnifiedEvent, issue_number: int) -> dict[str, Any]:
         """Return a normalized issue snapshot for the fix loop.
 

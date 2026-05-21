@@ -796,6 +796,95 @@ async def test_get_issue_raises_on_404(adapter_factory: Any) -> None:
         await adapter.get_issue(_event(issue_number=999), 999)
 
 
+# ───── get_default_branch_sha ─────
+
+
+async def test_get_default_branch_sha_resolves_repo_default_branch(
+    adapter_factory: Any,
+) -> None:
+    """Two-call dance: repo metadata to learn the default branch name,
+    then git/ref/heads/{branch} for the commit SHA. The resolver feeds
+    this into a CheckoutSpec when the event itself doesn't already
+    carry a SHA (e.g. label flips, ad-hoc chat mentions)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if url.endswith("/repos/YiAgent/openbot"):
+            return httpx.Response(
+                200,
+                json={
+                    "default_branch": "main",
+                    "clone_url": "https://github.com/YiAgent/openbot.git",
+                },
+            )
+        if url.endswith("/repos/YiAgent/openbot/git/ref/heads/main"):
+            return httpx.Response(
+                200,
+                json={"object": {"sha": "deadbeef1234567890abcdef1234567890abcdef"}},
+            )
+        raise AssertionError(f"unexpected url: {url}")
+
+    adapter, captured = adapter_factory(handler, auth=_FakeAuth())
+    sha = await adapter.get_default_branch_sha(_event(issue_number=None, pr_number=None))
+    assert sha == "deadbeef1234567890abcdef1234567890abcdef"
+    # Exactly two GETs — repo metadata + ref lookup. Caching across
+    # events stays out of scope for v0.1 (event volume is low; tokens
+    # are short-lived) so the call count is intentional.
+    assert len(captured) == 2
+
+
+async def test_get_default_branch_sha_follows_non_default_branch_name(
+    adapter_factory: Any,
+) -> None:
+    """Repos with a custom default branch ('trunk', 'develop', etc.) still resolve."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if url.endswith("/repos/YiAgent/openbot"):
+            return httpx.Response(200, json={"default_branch": "trunk"})
+        if url.endswith("/repos/YiAgent/openbot/git/ref/heads/trunk"):
+            return httpx.Response(200, json={"object": {"sha": "cafebabe"}})
+        raise AssertionError(f"unexpected url: {url}")
+
+    adapter, _ = adapter_factory(handler, auth=_FakeAuth())
+    sha = await adapter.get_default_branch_sha(_event())
+    assert sha == "cafebabe"
+
+
+async def test_get_default_branch_sha_defaults_to_main_when_metadata_missing(
+    adapter_factory: Any,
+) -> None:
+    """If the repo endpoint omits ``default_branch`` (unexpected but
+    possible on a permissions-stripped response), fall back to 'main'
+    rather than raising — the caller treats 'no SHA' as a clean failure."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if url.endswith("/repos/YiAgent/openbot"):
+            return httpx.Response(200, json={})
+        if url.endswith("/repos/YiAgent/openbot/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "abc123"}})
+        raise AssertionError(f"unexpected url: {url}")
+
+    adapter, _ = adapter_factory(handler, auth=_FakeAuth())
+    sha = await adapter.get_default_branch_sha(_event())
+    assert sha == "abc123"
+
+
+async def test_get_default_branch_sha_raises_on_repo_404(
+    adapter_factory: Any,
+) -> None:
+    """A 404 on the repo endpoint is a hard failure — the resolver
+    can't pick a checkout without it. Propagate so the use case can
+    short-circuit and post a tailored comment."""
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(404, json={"message": "Not Found"}),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.get_default_branch_sha(_event())
+
+
 async def test_get_issue_handles_empty_body_and_no_comments(adapter_factory: Any) -> None:
     """Issue with `body: null` and zero comments still produces a valid dict."""
 

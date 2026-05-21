@@ -38,6 +38,11 @@ class FakeChannelAdapter:
         }
     )
     fake_installation_token: str = "fake-install-token"
+    # Constant SHA returned by ``get_default_branch_sha`` — exposed as a
+    # field so the few resolver tests that care can override it without
+    # subclassing.
+    fake_default_branch_sha: str = "0" * 40
+    default_branch_sha_lookups: list[str | None] = field(default_factory=list)
 
     def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
         return  # always accept
@@ -149,3 +154,7 @@ class FakeChannelAdapter:
     async def get_installation_token(self, event: UnifiedEvent) -> str:
         self.token_lookups.append(event.resource_key)
         return self.fake_installation_token
+
+    async def get_default_branch_sha(self, event: UnifiedEvent) -> str:
+        self.default_branch_sha_lookups.append(event.resource_key)
+        return self.fake_default_branch_sha

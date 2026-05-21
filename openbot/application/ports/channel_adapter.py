@@ -211,6 +211,23 @@ class ChannelAdapterPort(Protocol):
         """
         ...
 
+    async def get_default_branch_sha(self, event: UnifiedEvent) -> str:
+        """Return the SHA at the tip of the repo's default branch.
+
+        Two-call dance: first ``GET /repos/{owner}/{repo}`` to learn
+        the default branch name, then ``GET /repos/{owner}/{repo}/
+        git/ref/heads/{branch}`` for the SHA. The resolver
+        (``openbot.application.checkout_resolver``) uses this when the
+        event itself doesn't carry a ref/SHA (e.g. label flips,
+        ad-hoc chat mentions) so the dispatcher can build a
+        ``CheckoutSpec`` before clone.
+
+        Raises on hard HTTP failures (404, 5xx, auth) — the caller
+        treats the absence of a SHA as a workflow-level failure and
+        posts a tailored comment rather than silently falling back.
+        """
+        ...
+
     async def get_installation_token(self, event: UnifiedEvent) -> str:
         """Return a short-lived push token for the event's installation.
 
