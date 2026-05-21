@@ -161,6 +161,7 @@ ignore = [
 # tangential to the openbot/ restructure and would touch stable tracing code.
 # Re-enable per file once each eval module is intentionally modernized.
 "evals/agents/structured_finalizer.py" = ["UP046", "UP047"]
+"evals/agents/middleware.py" = ["UP046", "UP047"]
 # Ports use TYPE_CHECKING with string forward refs to avoid circular imports.
 # UP037 would remove quotes, breaking the deferred import pattern.
 "openbot/application/dispatcher_deps.py" = ["UP037"]
