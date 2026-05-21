@@ -6,7 +6,12 @@ from collections.abc import Iterator
 
 import pytest
 
-from openbot.application.router import _CHAT_PREFIX_DEFAULT, derive_task_id, dispatch_for
+from openbot.application.router import (
+    _CHAT_PREFIX_DEFAULT,
+    SandboxPolicy,
+    derive_task_id,
+    dispatch_for,
+)
 from openbot.application.use_cases import (
     maybe_run_chat,
     maybe_run_fix,
@@ -269,3 +274,72 @@ def test_skips_comment_with_empty_body() -> None:
 def test_returns_none_for_unknown_kind() -> None:
     d = dispatch_for(_event(kind=EventKind.UNKNOWN))
     assert d is None
+
+
+# ───── sandbox policy (unified-sandbox-entry slice) ─────
+
+
+def test_sandbox_policy_has_required_and_no_sandbox() -> None:
+    # The dispatcher OR-merges this with classifier output. Exactly two
+    # static values keeps the merge truth-table small.
+    assert {p.value for p in SandboxPolicy} == {"required", "no_sandbox"}
+
+
+def test_dispatch_defaults_sandbox_policy_to_required() -> None:
+    # Every workflow route that needs to read code defaults to REQUIRED.
+    # Routes that explicitly don't need code override this to NO_SANDBOX.
+    d = dispatch_for(_event(kind=EventKind.ISSUE_OPENED))
+    assert d is not None
+    assert d.sandbox_policy is SandboxPolicy.REQUIRED
+
+
+def test_dispatch_marks_pr_synchronized_as_required() -> None:
+    d = dispatch_for(_event(kind=EventKind.PR_SYNCHRONIZED, issue_number=None, pr_number=42))
+    assert d is not None
+    assert d.sandbox_policy is SandboxPolicy.REQUIRED
+
+
+def test_dispatch_marks_fix_assignment_as_required() -> None:
+    d = dispatch_for(
+        _event(
+            kind=EventKind.ISSUE_ASSIGNED,
+            raw={"assignee": {"login": "openbot[bot]", "type": "Bot"}},
+        )
+    )
+    assert d is not None
+    assert d.sandbox_policy is SandboxPolicy.REQUIRED
+
+
+def test_dispatch_marks_chat_mention_as_required() -> None:
+    d = dispatch_for(
+        _event(
+            kind=EventKind.ISSUE_COMMENT_CREATED,
+            comment_body=f"{_CHAT_PREFIX_DEFAULT}what does foo() do?",
+        )
+    )
+    assert d is not None
+    assert d.sandbox_policy is SandboxPolicy.REQUIRED
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [EventKind.ISSUE_LABELED, EventKind.ISSUE_UNLABELED],
+)
+def test_dispatch_marks_issue_labeling_as_no_sandbox(kind: EventKind) -> None:
+    # Label flips never need to read code — the triage handler decides
+    # purely from event.raw['label'] + the cancel-openbot middleware
+    # gate. Skipping the sandbox saves ~10-25 s and a few cents per
+    # label event.
+    d = dispatch_for(_event(kind=kind))
+    assert d is not None
+    assert d.sandbox_policy is SandboxPolicy.NO_SANDBOX
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [EventKind.PR_LABELED, EventKind.PR_UNLABELED],
+)
+def test_dispatch_marks_pr_labeling_as_no_sandbox(kind: EventKind) -> None:
+    d = dispatch_for(_event(kind=kind, issue_number=None, pr_number=42))
+    assert d is not None
+    assert d.sandbox_policy is SandboxPolicy.NO_SANDBOX

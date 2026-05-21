@@ -42,12 +42,36 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
 from openbot.core.settings import get_settings
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.identifiers import derive_run_id, derive_task_id
 from openbot.domain.workflows import Feature
+
+
+class SandboxPolicy(StrEnum):
+    """Static per-dispatch flag — does this event need a sandbox at all?
+
+    Set by ``dispatch_for`` at routing time, OR-merged with the dynamic
+    LLM-classifier signal in ``dispatcher.run_dispatch`` (see spec
+    section 'Intent classification integration'). When the final merge
+    yields ``NO_SANDBOX``, the dispatcher skips clone+provisioning and
+    calls the handler with ``ctx.sandbox_handle is None``.
+
+      - ``REQUIRED``: standard path — provision + clone. Default for
+        every workflow that may need to read code.
+      - ``NO_SANDBOX``: bypass — label-only triage / PR-label events,
+        cancel events, and any direct-action route that never reads
+        code. The handler is still called (so the cancel-openbot
+        middleware can fire and the status-update path can run), but
+        with no sandbox attached.
+    """
+
+    REQUIRED = "required"
+    NO_SANDBOX = "no_sandbox"
+
 
 if TYPE_CHECKING:
     # Avoid the import-cycle: workflows import middleware → middleware
@@ -96,6 +120,13 @@ class Dispatch:
     prev_run_id: str | None = None
     event_seq: int = 0
     resource_key: str | None = None
+    # Unified-sandbox-entry slice: static per-route bypass hint. The
+    # dispatcher OR-merges this with the classifier output to decide
+    # whether to provision + clone before calling the handler. Defaults
+    # to REQUIRED so routes that genuinely need code don't have to opt
+    # in — only the bypass cases (label events, cancel direct actions)
+    # need to override.
+    sandbox_policy: SandboxPolicy = SandboxPolicy.REQUIRED
 
 
 def _resolve_handler(feature: Feature) -> Handler:
@@ -197,12 +228,25 @@ def dispatch_for(event: UnifiedEvent) -> Dispatch | None:
     if event.kind in (EventKind.ISSUE_LABELED, EventKind.ISSUE_UNLABELED):
         if event.issue_number is None or event.installation_id is None:
             return None
-        return Dispatch(Feature.TRIAGE, _resolve_handler(Feature.TRIAGE), task_id)
+        # Label flips never need to read code — handler decides purely
+        # from event.raw['label'] and the cancel-openbot middleware
+        # gate. Skipping the sandbox saves ~10-25 s + cents per label.
+        return Dispatch(
+            Feature.TRIAGE,
+            _resolve_handler(Feature.TRIAGE),
+            task_id,
+            sandbox_policy=SandboxPolicy.NO_SANDBOX,
+        )
 
     if event.kind in (EventKind.PR_LABELED, EventKind.PR_UNLABELED):
         if event.pr_number is None or event.installation_id is None:
             return None
-        return Dispatch(Feature.REVIEW, _resolve_handler(Feature.REVIEW), task_id)
+        return Dispatch(
+            Feature.REVIEW,
+            _resolve_handler(Feature.REVIEW),
+            task_id,
+            sandbox_policy=SandboxPolicy.NO_SANDBOX,
+        )
 
     return None
 
@@ -236,11 +280,14 @@ def upgrade_dispatch(
         prev_run_id=prev_run_id,
         event_seq=event_seq,
         resource_key=resource_key,
+        # Preserve the route's sandbox decision through the upgrade.
+        sandbox_policy=dispatch.sandbox_policy,
     )
 
 
 __all__ = [
     "Dispatch",
+    "SandboxPolicy",
     "derive_run_id",
     "derive_task_id",
     "dispatch_for",
