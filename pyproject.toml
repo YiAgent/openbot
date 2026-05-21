@@ -171,9 +171,16 @@ quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
 
+# ─────── pyright ───────
+[tool.pyright]
+pythonVersion = "3.12"
+pythonPlatform = "Linux"
+extraPaths = ["."]
+
 # ─────── pytest ───────
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = ["-q", "--strict-markers", "--strict-config"]
 filterwarnings = [

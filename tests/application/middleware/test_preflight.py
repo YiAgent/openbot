@@ -22,8 +22,8 @@ from openbot.application.middleware import (
 from openbot.application.router import Dispatch, derive_task_id
 from openbot.application.use_cases import maybe_run_triage
 from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.config_loader import baked_in_defaults
-from openbot.infrastructure.llm.model_router import Feature
 from openbot.infrastructure.persistence.models import WorkflowPhase
 
 

@@ -10,7 +10,7 @@ import pytest
 from openbot.application.middleware import MiddlewareResult
 from openbot.application.middleware.rate_limit import RateLimitMiddleware
 from openbot.domain.events import EventKind
-from openbot.infrastructure.llm.model_router import Feature
+from openbot.domain.workflows import Feature
 from tests.application.middleware.conftest import make_ctx, make_event
 
 

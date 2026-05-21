@@ -5,7 +5,7 @@ from __future__ import annotations
 import fakeredis.aioredis
 
 from openbot.domain.events import EventKind, UnifiedEvent
-from openbot.infrastructure.llm.model_router import Feature
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.queue import QueuePayload, deserialize_payload, enqueue
 from openbot.infrastructure.queue.payload import STREAM_NAME
 

@@ -15,7 +15,7 @@ from openbot.application.use_cases import (
 )
 from openbot.core.settings import get_settings
 from openbot.domain.events import EventKind, UnifiedEvent
-from openbot.infrastructure.llm.model_router import Feature
+from openbot.domain.workflows import Feature
 
 
 @pytest.fixture(autouse=True)

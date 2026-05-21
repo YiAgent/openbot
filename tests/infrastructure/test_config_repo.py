@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.config_loader import (
     EffectiveConfig,
     baked_in_defaults,
     clear_cache,
     load_for_repo,
 )
-from openbot.infrastructure.llm.model_router import Feature
 
 # ───── fixtures ─────
 

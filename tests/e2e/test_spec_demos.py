@@ -25,8 +25,8 @@ import pytest
 
 from openbot.application.router import derive_task_id
 from openbot.domain.events import EventKind
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.config_loader import RateLimitConfig
-from openbot.infrastructure.llm.model_router import Feature
 from openbot.infrastructure.persistence.models import Workflow, WorkflowPhase
 from openbot.infrastructure.queue import worker as queue_worker
 from openbot.infrastructure.queue.enqueue import enqueue

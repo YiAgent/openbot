@@ -47,6 +47,7 @@ from openbot.infrastructure.adapters.github import GitHubAdapter
 from openbot.infrastructure.config_loader import EffectiveConfig, baked_in_defaults
 from openbot.infrastructure.persistence.models import AuditLog, Base
 from openbot.infrastructure.persistence.rate_limiter_redis import RedisRateLimiter
+from tests._fakes.sandbox import FakeSandboxLifecycle as FakeSandbox
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -56,44 +57,6 @@ if TYPE_CHECKING:
 # Test-only webhook secret — only used inside RecordingGitHubAdapter so
 # the parent class' constructor doesn't reject an empty string.
 _E2E_SECRET = "e2e-test-secret"
-
-
-@dataclass
-class FakeSandbox:
-    """Partial ``SandboxPort`` stand-in for the E2E fix-loop demos.
-
-    Implements only the methods reachable when ``_generate_fix_outcome``
-    is monkeypatched: ``clone`` + ``commit_and_push`` + ``close`` +
-    ``workspace``. The agent-side surface (``read_file`` / ``write_file``
-    / ``list_files`` / ``run`` / ``git_diff``) is intentionally omitted —
-    if you extend a demo to exercise the real agent path, copy
-    ``_FakeSandbox`` from ``tests/application/use_cases/test_fix.py``
-    (full port shape) instead of growing this class.
-
-    Each call is recorded as a ``(repo_url, ref, token)`` /
-    ``(branch_ref, message, token)`` tuple so demos can assert on the
-    exact contract the use case must honour against the real
-    ``DaytonaSandboxAdapter``.
-
-    Token injection is the *adapter's* concern (see
-    ``DaytonaSandboxAdapter._inject_token`` + ``SandboxPort`` docstring);
-    the use case passes the raw URL + token through unchanged. The E2E
-    harness therefore asserts on raw values, not pre-injected URLs.
-    """
-
-    workspace: str = "/workspace/repo"
-    cloned: list[tuple[str, str, str]] = field(default_factory=list)
-    pushed: list[tuple[str, str, str]] = field(default_factory=list)
-    closed: bool = False
-
-    async def clone(self, *, repo_url: str, ref: str, token: str) -> None:
-        self.cloned.append((repo_url, ref, token))
-
-    async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
-        self.pushed.append((branch_ref, message, token))
-
-    async def close(self) -> None:
-        self.closed = True
 
 
 class RecordingGitHubAdapter(GitHubAdapter):

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -12,6 +11,7 @@ import pytest
 from openbot.application.use_cases import fix as fix_module
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.fix import FixAttempt, FixOutcome
+from tests._fakes.sandbox import FakeSandboxLifecycle
 
 
 def _event(**overrides: Any) -> UnifiedEvent:
@@ -52,31 +52,8 @@ def _issue() -> dict[str, Any]:
     }
 
 
-@dataclass
-class _FakeSandbox:
-    """In-test stand-in for ``SandboxPort``. Records each call as a
-    ``(repo_url, ref, token)`` or ``(branch_ref, message, token)`` tuple
-    so wiring tests can assert on the exact contract the use case must
-    honour against the real ``DaytonaSandboxAdapter``.
-    """
-
-    workspace: str = "/workspace/repo"
-    cloned: list[tuple[str, str, str]] = field(default_factory=list)
-    pushed: list[tuple[str, str, str]] = field(default_factory=list)
-    closed: bool = False
-
-    async def clone(self, *, repo_url: str, ref: str, token: str) -> None:
-        self.cloned.append((repo_url, ref, token))
-
-    async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
-        self.pushed.append((branch_ref, message, token))
-
-    async def close(self) -> None:
-        self.closed = True
-
-
 @asynccontextmanager
-async def _sandbox_cm(sandbox: _FakeSandbox):
+async def _sandbox_cm(sandbox: FakeSandboxLifecycle):
     try:
         yield sandbox
     finally:
@@ -129,7 +106,7 @@ async def test_skips_when_required_event_field_missing(field_to_drop: str):
     ctx = _ctx(
         event=_event(**{field_to_drop: None}),
         adapter=adapter,
-        sandbox_factory=lambda: _sandbox_cm(_FakeSandbox()),
+        sandbox_factory=lambda: _sandbox_cm(FakeSandboxLifecycle()),
     )
 
     await fix_module.maybe_run_fix(ctx)
@@ -153,7 +130,7 @@ async def test_comments_when_sandbox_factory_missing():
 
 @pytest.mark.asyncio
 async def test_fetches_issue_clones_and_opens_pr(monkeypatch):
-    sandbox = _FakeSandbox()
+    sandbox = FakeSandboxLifecycle()
     adapter = _adapter()
 
     async def fake_generate(*, sandbox, event, adapter, issue):
@@ -194,7 +171,7 @@ async def test_fetches_issue_clones_and_opens_pr(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_audit_lifecycle_records_pr_url_on_success(monkeypatch):
-    sandbox = _FakeSandbox()
+    sandbox = FakeSandboxLifecycle()
     adapter = _adapter()
     captured: list[str] = []
 
@@ -224,7 +201,7 @@ async def test_audit_lifecycle_records_pr_url_on_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_comments_with_truncated_output_when_tests_failed(monkeypatch):
-    sandbox = _FakeSandbox()
+    sandbox = FakeSandboxLifecycle()
     adapter = _adapter()
     huge = "X" * 50_000
 
@@ -255,7 +232,7 @@ async def test_comments_when_token_fetch_fails(monkeypatch):
     dashboards can distinguish ``token_failed`` from ``clone_failed``
     even though the user-visible message is the same ``_CLONE_FAIL``.
     """
-    sandbox = _FakeSandbox()
+    sandbox = FakeSandboxLifecycle()
     adapter = _adapter(
         get_installation_token=AsyncMock(side_effect=RuntimeError("token endpoint 500")),
     )
@@ -312,14 +289,14 @@ async def test_failure_in_stage_yields_tailored_comment(
     """One parametrized case per stage. Setup is shared — only the
     failing dependency varies, plus the user-visible comment phrase.
     """
-    sandbox: _FakeSandbox = _FakeSandbox()
+    sandbox: FakeSandboxLifecycle = FakeSandboxLifecycle()
     adapter_overrides: dict[str, Any] = {}
 
     if stage == "get_issue":
         adapter_overrides["get_issue"] = AsyncMock(side_effect=RuntimeError("404"))
     elif stage == "clone":
 
-        class ExplodingClone(_FakeSandbox):
+        class ExplodingClone(FakeSandboxLifecycle):
             async def clone(self, *args, **kwargs) -> None:
                 raise RuntimeError("clone refused")
 
@@ -336,7 +313,7 @@ async def test_failure_in_stage_yields_tailored_comment(
         )
     elif stage == "push":
 
-        class PushFail(_FakeSandbox):
+        class PushFail(FakeSandboxLifecycle):
             async def commit_and_push(self, *args, **kwargs) -> None:
                 raise RuntimeError("auth failed")
 

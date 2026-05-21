@@ -14,7 +14,7 @@ from openbot.application.middleware.cancel import (
     KillSwitchMiddleware,
 )
 from openbot.domain.events import EventKind
-from openbot.infrastructure.llm.model_router import Feature
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.persistence.models import WorkflowPhase
 from tests.application.middleware.conftest import make_ctx, make_event
 

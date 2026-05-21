@@ -15,7 +15,7 @@ import fakeredis.aioredis
 import pytest
 
 from openbot.domain.events import EventKind, UnifiedEvent
-from openbot.infrastructure.llm.model_router import Feature
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.queue import (
     QueuePayload,
     consume_loop,

@@ -11,12 +11,12 @@ from tests._fakes.llm import FakeLLM
 async def test_complete_returns_default_response() -> None:
     llm = FakeLLM(response="hello")
     out = await llm.complete(
-        model="gpt-4o-mini",
+        model="anthropic/GLM-5.1",
         messages=[{"role": "user", "content": "hi"}],
     )
     assert out == "hello"
     assert len(llm.calls) == 1
-    assert llm.calls[0]["model"] == "gpt-4o-mini"
+    assert llm.calls[0]["model"] == "anthropic/GLM-5.1"
     assert llm.calls[0]["temperature"] == 0.0
     assert llm.calls[0]["max_tokens"] is None
 

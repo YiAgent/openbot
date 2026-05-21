@@ -8,8 +8,8 @@ import pytest
 
 from openbot.application.middleware import MiddlewareResult
 from openbot.application.middleware.feature_toggle import FeatureToggleMiddleware
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.config_loader import baked_in_defaults
-from openbot.infrastructure.llm.model_router import Feature
 from openbot.infrastructure.persistence.models import WorkflowPhase
 from tests.application.middleware.conftest import make_ctx
 

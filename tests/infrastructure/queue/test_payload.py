@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from openbot.domain.events import EventKind, UnifiedEvent
-from openbot.infrastructure.llm.model_router import Feature
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.queue import QueuePayload, deserialize_payload
 from openbot.infrastructure.queue.payload import PAYLOAD_VERSION
 

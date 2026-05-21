@@ -250,11 +250,9 @@ async def test_f04_cancel_label_quick_exit(monkeypatch: pytest.MonkeyPatch) -> N
 # ── F-05 ─────────────────────────────────────────────────────────────────────
 
 
-def test_f05_preflight_chain_has_10_middleware_in_locked_order() -> None:
-    """F-05: build_preflight_chain() returns exactly 10 middleware in the locked order."""
+def test_f05_preflight_chain_has_locked_middleware_order() -> None:
+    """F-05: build_preflight_chain() returns middleware in the locked order."""
     chain = build_preflight_chain()
-
-    assert len(chain) == 10, f"Expected 10 middleware, got {len(chain)}: {chain}"
 
     expected_types = [
         SanitizeInputsMiddleware,
@@ -268,6 +266,10 @@ def test_f05_preflight_chain_has_10_middleware_in_locked_order() -> None:
         BudgetMiddleware,
         AuditStartMiddleware,
     ]
+
+    assert len(chain) == len(expected_types), (
+        f"Expected {len(expected_types)} middleware, got {len(chain)}: {[type(m).__name__ for m in chain]}"
+    )
 
     for i, (actual, expected_cls) in enumerate(zip(chain, expected_types, strict=True)):
         assert isinstance(actual, expected_cls), (

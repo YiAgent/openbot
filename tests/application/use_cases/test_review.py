@@ -14,8 +14,8 @@ from openbot.application.router import Dispatch, derive_task_id
 from openbot.application.use_cases.review import maybe_run_review
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.review import Finding, ReviewFindings
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.config_loader import baked_in_defaults
-from openbot.infrastructure.llm.model_router import Feature
 
 
 def _event(*, pr_number: int = 42) -> UnifiedEvent:

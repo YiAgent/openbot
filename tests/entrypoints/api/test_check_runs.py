@@ -72,7 +72,7 @@ async def test_run_dispatch_updates_check_run(monkeypatch: pytest.MonkeyPatch) -
     from openbot.application.dispatcher import run_dispatch
     from openbot.application.router import Dispatch
     from openbot.domain.events import EventKind, UnifiedEvent
-    from openbot.infrastructure.llm.model_router import Feature
+    from openbot.domain.workflows import Feature
 
     adapter = AsyncMock()
     event = UnifiedEvent(
@@ -129,7 +129,7 @@ async def test_run_dispatch_updates_check_run_on_failure(monkeypatch: pytest.Mon
     from openbot.application.dispatcher import run_dispatch
     from openbot.application.router import Dispatch
     from openbot.domain.events import EventKind, UnifiedEvent
-    from openbot.infrastructure.llm.model_router import Feature
+    from openbot.domain.workflows import Feature
 
     adapter = AsyncMock()
     event = UnifiedEvent(
