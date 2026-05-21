@@ -83,6 +83,11 @@ class RecordingGitHubAdapter(GitHubAdapter):
         self.actor_roles: dict[str, str] = {}
         self.labels_response: list[dict[str, Any]] = []
         self.comments_response: list[dict[str, Any]] = []
+        # Slice-A2 review tools — test-controlled file content + grep hits.
+        # ``file_responses[path]`` overrides the default empty string.
+        # ``grep_responses[(pattern, path_glob)]`` returns the canned list.
+        self.file_responses: dict[str, str] = {}
+        self.grep_responses: dict[tuple[str, str | None], list[str]] = {}
 
     async def reply(self, event: UnifiedEvent, message: str) -> dict[str, Any]:
         """Record + return a synthetic comment id (matches real shape)."""
@@ -118,6 +123,21 @@ class RecordingGitHubAdapter(GitHubAdapter):
     async def get_pr_comments(self, event: UnifiedEvent, pr_number: int) -> list[dict[str, Any]]:
         """Return the test-controlled comments list."""
         return list(self.comments_response)
+
+    async def read_file(self, event: UnifiedEvent, path: str) -> str:
+        """Return test-controlled file content keyed by path; '' if unset."""
+        return self.file_responses.get(path, "")
+
+    async def grep_repo(
+        self,
+        event: UnifiedEvent,
+        *,
+        pattern: str,
+        path_glob: str | None = None,
+        max_matches: int = 20,
+    ) -> list[str]:
+        """Return canned grep results keyed by (pattern, path_glob)."""
+        return list(self.grep_responses.get((pattern, path_glob), ()))[:max_matches]
 
     async def _installation_token(self, event: UnifiedEvent) -> Any:
         """Bypass App auth — return a minimal object whose ``.token`` is read."""

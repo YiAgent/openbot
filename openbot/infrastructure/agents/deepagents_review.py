@@ -1,27 +1,35 @@
-"""DeepAgent-backed PR review responder — slice A of the review workflow.
+"""DeepAgent-backed PR review responder — slice A2.
 
-Scope (slice A, locked):
-  - One inline diff in the prompt; no agent tools (``tools=[]`` like chat).
-  - The agent produces one consolidated review reply; ``maybe_run_review``
-    posts it as a single PR comment via the channel adapter.
-  - No structured findings, no severity filter, no multi-turn — those are
-    slice B/C in ``docs/superpowers/plans/2026-05-20-review-fix-deepagent.md``.
+What changed from slice A:
 
-Why inline diff over LangChain tools (the Q1=B alternative): the
-``ChannelAdapterPort`` only exposes ``get_pr_diff`` today; adding
-``read_file`` / ``grep_repo`` to the port would have widened slice A
-beyond what we want to ship this week. Slice A2 will introduce those
-tools and switch to a tool-using agent.
+  - The agent is now a *tool-using* ReAct loop. It still receives an inline
+    diff in the user prompt (cheap context that's always there), but it can
+    also call ``read_file`` to pull the rest of a file the diff touches and
+    ``grep_repo`` to find related code.
+  - The agent is rebuilt per event because tools close over
+    ``(adapter, event)``. Caching by model alone (slice A's
+    ``_agent_for_model``) is now a correctness bug, not just an optimization
+    miss — tools from event A would leak into event B's run.
+  - Runaway agent loops are bounded twice: ``ToolBudget`` (default 5 calls)
+    sits at the port boundary so each tool call is counted; ``recursion_limit``
+    on the langgraph config (25) catches non-tool loops the budget can't see.
+
+What's still out of scope (slice B):
+
+  - Structured findings (severity, file, line) via PR review API.
+  - Multi-turn / "ask the author" follow-up.
+  - Re-review on PR_SYNCHRONIZED (incremental review wiring lives in F3; the
+    responder is event-stateless today, by design).
 """
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from deepagents import create_deep_agent
 
 from openbot.domain.events import UnifiedEvent
+from openbot.infrastructure.agents._review_tools import make_review_tools
 from openbot.infrastructure.llm.model_router import Feature, primary_model_for
 
 if TYPE_CHECKING:
@@ -33,6 +41,12 @@ if TYPE_CHECKING:
 # Slice B will replace this with surgical diff slicing per-file.
 _MAX_DIFF_CHARS = 64_000
 
+# LangGraph counts every node visit toward this limit; a ReAct loop with
+# 5 tool calls visits ~15-20 nodes. 25 gives the agent a small budget over
+# the ToolBudget cap so it can still produce a final answer if the very
+# last tool call exhausts the budget.
+_RECURSION_LIMIT = 25
+
 _SYSTEM_PROMPT = """You are OpenBot, a senior code reviewer responding inline on a GitHub pull request.
 
 Your job:
@@ -41,10 +55,18 @@ Your job:
 - If the diff is empty or trivial (lockfile-only, docs-only, formatting), say so and approve briefly.
 - Quote the relevant `path:line` when you flag something so the author can find it.
 
+Tools available (use sparingly — total tool calls are budget-capped):
+- `read_file(path)` — fetch the UTF-8 text of a file in the repo. Use this when the diff
+  references a function or class you need to see in full to judge the change.
+- `grep_repo(pattern, path_glob=None)` — find lines matching `pattern` across the repo.
+  Useful for "is this function called elsewhere?" or "is there an existing helper for this?".
+  `path_glob` is GitHub's `path:` qualifier — substring match, not a real glob.
+
 Rules:
-- Use only the diff provided in the prompt — do not claim you ran code, fetched files, or inspected anything else.
-- One reply per call. No multi-step planning, no questions back to the author — produce the final review.
+- Default to the inline diff. Only reach for tools when the diff alone is genuinely insufficient.
+- One reply per call. No multi-step planning visible to the author — produce the final review.
 - Markdown formatting is fine; keep the reply under ~600 words.
+- Do not claim you ran code or executed tests. You can only read repo files and search code.
 """
 
 
@@ -121,18 +143,15 @@ def _extract_reply(result: dict[str, Any]) -> str:
     return reply
 
 
-@lru_cache(maxsize=4)
-def _agent_for_model(model: str):
-    """Build once, reuse across PR events for the same model."""
-    return create_deep_agent(
-        model=_normalize_model_name(model),
-        tools=[],
-        system_prompt=_SYSTEM_PROMPT,
-    )
-
-
 class DeepAgentsReviewResponder:
-    """Stateless responder — agents are cached per-model via ``_agent_for_model``."""
+    """Stateless responder — a fresh agent is built per call.
+
+    Why no cache: tools close over ``(adapter, event)``. Caching the
+    compiled graph by model would let tools from a previous event leak
+    into the current run. The cost of ``create_deep_agent`` is in-process
+    object wiring, not network, so building per call is cheap relative to
+    the LLM call itself.
+    """
 
     async def review_for_event(
         self,
@@ -143,7 +162,12 @@ class DeepAgentsReviewResponder:
         if event.pr_number is None:
             raise ValueError("deepagents_review_requires_pr_number")
         diff = await adapter.get_pr_diff(event, event.pr_number)
-        agent = _agent_for_model(primary_model_for(Feature.REVIEW))
+        tools = make_review_tools(adapter=adapter, event=event)
+        agent = create_deep_agent(
+            model=_normalize_model_name(primary_model_for(Feature.REVIEW)),
+            tools=tools,
+            system_prompt=_SYSTEM_PROMPT,
+        )
         result = await agent.ainvoke(
             {
                 "messages": [
@@ -152,7 +176,8 @@ class DeepAgentsReviewResponder:
                         "content": _user_prompt(event, diff),
                     }
                 ]
-            }
+            },
+            config={"recursion_limit": _RECURSION_LIMIT},
         )
         return _extract_reply(result)
 

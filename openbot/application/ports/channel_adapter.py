@@ -91,6 +91,37 @@ class ChannelAdapterPort(Protocol):
         """
         ...
 
+    async def read_file(self, event: UnifiedEvent, path: str) -> str:
+        """Return the UTF-8 text of a repo file at ``path``.
+
+        Returns ``""`` when the file is missing (404) or not UTF-8 decodable —
+        callers (review tools) treat an empty string as "no readable content
+        here" and do not branch on the failure mode. Implementations should
+        log the discriminating detail (404 vs decode error vs other).
+        """
+        ...
+
+    async def grep_repo(
+        self,
+        event: UnifiedEvent,
+        *,
+        pattern: str,
+        path_glob: str | None = None,
+        max_matches: int = 20,
+    ) -> list[str]:
+        """Search the repo for ``pattern`` and return up to ``max_matches`` hits.
+
+        Each hit is a single line formatted ``"{path}: {fragment}"`` — line
+        numbers are not promised because the underlying backend (GitHub Code
+        Search) only returns byte fragments. ``path_glob`` filters by GitHub
+        Code Search's ``path:`` qualifier (substring, not real glob).
+
+        Returns ``[]`` when nothing matches or the backend rejects the query
+        (e.g. 422 on unindexed repos) — callers must not infer "absent" from
+        an empty list; they should fall back to ``read_file`` on a known path.
+        """
+        ...
+
     async def add_label(self, event: UnifiedEvent, *labels: str) -> list[dict[str, Any]]:
         """Add one or more labels to the issue or PR referenced by *event*.
 

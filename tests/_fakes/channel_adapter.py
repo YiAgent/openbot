@@ -60,6 +60,19 @@ class FakeChannelAdapter:
     async def get_pr_diff(self, event: UnifiedEvent, pr_number: int) -> str:
         return ""  # empty diff = "no changes to review" in tests
 
+    async def read_file(self, event: UnifiedEvent, path: str) -> str:
+        return ""  # empty text = "file not interesting" — tools handle gracefully
+
+    async def grep_repo(
+        self,
+        event: UnifiedEvent,
+        *,
+        pattern: str,
+        path_glob: str | None = None,
+        max_matches: int = 20,
+    ) -> list[str]:
+        return []  # empty = "no matches"; callers must not infer absence
+
     async def add_label(self, event: UnifiedEvent, *labels: str) -> list[dict[str, Any]]:
         self.labels_added.append((event.resource_key, labels))
         return [{"name": lbl} for lbl in labels]

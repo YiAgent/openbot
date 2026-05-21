@@ -500,6 +500,132 @@ async def test_get_pr_diff_raises_on_5xx(adapter_factory: Any) -> None:
         await adapter.get_pr_diff(_event(issue_number=None, pr_number=7), 7)
 
 
+# ───── read_file ─────
+
+
+def _contents_payload(text: str | bytes) -> dict[str, str]:
+    """GitHub Contents API returns base64-encoded blobs."""
+    import base64 as _b64
+
+    raw = text.encode() if isinstance(text, str) else text
+    return {"content": _b64.b64encode(raw).decode(), "encoding": "base64"}
+
+
+async def test_read_file_returns_decoded_text(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, json=_contents_payload("hello world\n")),
+        auth=_FakeAuth(),
+    )
+
+    text = await adapter.read_file(_event(), "README.md")
+
+    assert text == "hello world\n"
+    assert str(captured[0].url).endswith("/contents/README.md")
+
+
+async def test_read_file_returns_empty_on_404(adapter_factory: Any) -> None:
+    adapter, _ = adapter_factory(lambda req: httpx.Response(404, text=""), auth=_FakeAuth())
+    assert await adapter.read_file(_event(), "missing.py") == ""
+
+
+async def test_read_file_returns_empty_on_binary(adapter_factory: Any) -> None:
+    # Non-UTF-8 bytes — Contents API still returns base64, but decode fails.
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(200, json=_contents_payload(b"\x80\x81\x82")),
+        auth=_FakeAuth(),
+    )
+    assert await adapter.read_file(_event(), "logo.png") == ""
+
+
+# ───── grep_repo ─────
+
+
+_GREP_RESPONSE = {
+    "total_count": 2,
+    "items": [
+        {
+            "path": "src/auth.py",
+            "text_matches": [
+                {"fragment": "def login(username):\n    raise NotImplementedError()"},
+            ],
+        },
+        {
+            "path": "src/db.py",
+            "text_matches": [{"fragment": "return User.find(login=login)"}],
+        },
+    ],
+}
+
+
+async def test_grep_repo_returns_path_and_fragment(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, json=_GREP_RESPONSE), auth=_FakeAuth()
+    )
+
+    matches = await adapter.grep_repo(_event(), pattern="login", path_glob="src")
+
+    assert len(matches) == 2
+    assert any(m.startswith("src/auth.py:") and "def login" in m for m in matches)
+    assert any(m.startswith("src/db.py:") for m in matches)
+
+    req = captured[0]
+    assert "/search/code" in str(req.url)
+    # GitHub Code Search query string carries the pattern + repo + path qualifiers.
+    # The adapter URL-encodes the whole `q=` value, so decode before matching.
+    from urllib.parse import unquote
+
+    qs = unquote(str(req.url))
+    assert "login" in qs
+    assert f"repo:{_event().repo}" in qs
+    assert "path:src" in qs
+    assert req.headers["accept"].startswith("application/vnd.github.text-match")
+
+
+async def test_grep_repo_omits_path_qualifier_when_glob_none(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, json={"total_count": 0, "items": []}),
+        auth=_FakeAuth(),
+    )
+
+    await adapter.grep_repo(_event(), pattern="login", path_glob=None)
+
+    qs = str(captured[0].url).replace("+", " ")
+    assert "path:" not in qs
+
+
+async def test_grep_repo_caps_to_max_matches(adapter_factory: Any) -> None:
+    items = [{"path": f"src/f{i}.py", "text_matches": [{"fragment": f"hit{i}"}]} for i in range(50)]
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(200, json={"total_count": 50, "items": items}),
+        auth=_FakeAuth(),
+    )
+
+    matches = await adapter.grep_repo(_event(), pattern="hit", path_glob=None, max_matches=10)
+
+    assert len(matches) == 10
+
+
+async def test_grep_repo_returns_empty_on_422(adapter_factory: Any) -> None:
+    # GitHub returns 422 when the search query is invalid or the repo isn't
+    # indexed yet — must not raise; review must still post a reply.
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(422, json={"message": "Validation failed"}),
+        auth=_FakeAuth(),
+    )
+    assert await adapter.grep_repo(_event(), pattern="x", path_glob=None) == []
+
+
+async def test_grep_repo_skips_items_without_text_matches(adapter_factory: Any) -> None:
+    # Defensive: GitHub may return items with no `text_matches` array if the
+    # caller forgot the Accept header — our adapter sets it, but a wire-level
+    # quirk shouldn't crash the agent.
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(200, json={"total_count": 1, "items": [{"path": "x.py"}]}),
+        auth=_FakeAuth(),
+    )
+    assert await adapter.grep_repo(_event(), pattern="x", path_glob=None) == []
+
+
 # ───── rate-limit warning ─────
 
 

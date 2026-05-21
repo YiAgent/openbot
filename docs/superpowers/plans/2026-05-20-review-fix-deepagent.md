@@ -1,6 +1,6 @@
 # Review / Fix DeepAgent integration — slice plan
 
-**Status:** slice A landed. Slice B/C deferred.
+**Status:** slices A + A2 landed. Slice B/C deferred.
 **Branch:** `feat/review-deepagent`
 **PRD anchors:** §4.2 (review), §4.3 (fix), §13 #2 (locked model routing)
 
@@ -48,20 +48,38 @@
 
 ---
 
-## Slice A2 (next — tools without changing the contract)
+## Slice A2 (DONE — tool-using reviewer)
 
-Goal: turn the inline-diff agent into a tool-using agent **without** breaking slice A's tests.
+### What landed
 
-Steps:
+- `ChannelAdapterPort.read_file(event, path) -> str`
+  - Returns UTF-8 text or `""` on missing/binary; tools don't branch on failure.
+  - `GitHubAdapter.read_file` delegates to `fetch_repo_file` for the bytes-level fetch and decodes.
+- `ChannelAdapterPort.grep_repo(event, *, pattern, path_glob, max_matches=20) -> list[str]`
+  - Backed by GitHub Code Search REST (`/search/code` with text-match Accept header).
+  - Returns `[]` on 422 (unindexed/malformed) so transient backend issues don't block review.
+  - Hits formatted `"{path}: {fragment}"` (first line of first text-match).
+- `openbot/infrastructure/agents/_review_tools.py` — `make_review_tools(adapter, event)` builds a per-event `[read_file, grep_repo]` list of `StructuredTool`s.
+- `ToolBudget` enforces `DEFAULT_TOOL_BUDGET = 5` total invocations per review run; the 6th call raises `ToolBudgetExceededError` (surfaced as a tool error to the agent so it synthesizes a final answer).
+- `DeepAgentsReviewResponder`:
+  - Removed `@lru_cache(_agent_for_model)` — tools close over `(adapter, event)`, so caching by model alone was a multi-tenant correctness bug, not just an optimization miss.
+  - Builds a fresh agent per `review_for_event` call. Cheap relative to the LLM call.
+  - Passes `config={"recursion_limit": 25}` on `ainvoke` to catch non-tool loops the budget guard can't see.
+  - System prompt teaches when to use tools vs trust the inline diff.
 
-1. Add `read_file(path) -> str` and `grep_repo(pattern, path_glob) -> list[str]` to `ChannelAdapterPort`. Implement on `GitHubAdapter` via the Contents API + (probably) a simple grep over fetched files. Keep `fetch_repo_file` as the bytes-level primitive.
-2. Wrap each port method as a LangChain `@tool` in `openbot/infrastructure/agents/_review_tools.py`. Tools close over the adapter + event.
-3. Rebuild the responder agent with `tools=[read_file_tool, grep_repo_tool]` per-event (can't cache by model anymore since tools close over event).
-4. Update system prompt to teach the agent when to fetch files vs trust the diff.
+### Tests
 
-Risks:
-- Token budget — opus-4-7 can chew through a lot of context if the agent grep-spams. Add a per-call tool-invocation cap (e.g., 5 tool calls / run).
-- Cache strategy needs revisiting — `_agent_for_model(model)` won't work once tools bind to event state.
+- 8 new adapter tests (3× `read_file`, 5× `grep_repo`) — all via `httpx.MockTransport`, no network.
+- 7 `_review_tools.py` tests — tool surface, budget enforcement, per-call freshness.
+- 8 responder tests (2 added: `test_review_responder_rebuilds_agent_per_event`, `test_review_responder_passes_recursion_limit`).
+- `FakeChannelAdapter` + `RecordingGitHubAdapter` got `read_file` / `grep_repo` stubs so the contract still holds.
+- 855 → 878 passing.
+
+### Out-of-scope for slice A2
+
+- Smarter tool selection (e.g. "AST-walk this function" vs raw `read_file`) — slice B.
+- Caching `read_file` results within a single review run — current call counts are low enough that an LRU on the tool wrapper would be premature.
+- Surfacing tool budget exhaustion in the PR reply — agent currently absorbs it via the final-answer path. If reviewers report "agent gave up early", revisit.
 
 ---
 
@@ -94,10 +112,21 @@ Goal: implement `openbot/application/use_cases/fix.py` end-to-end.
 - [x] No new network calls in unit tests (everything mocked via `httpx.MockTransport` + monkeypatched `create_deep_agent`).
 - [ ] Smoke test against a real PR — manual, after merge.
 
+## Acceptance checks (slice A2)
+
+- [x] `make check` passes (fmt + lint + 878 tests).
+- [x] `FakeChannelAdapter` + `RecordingGitHubAdapter` still satisfy `ChannelAdapterPort`.
+- [x] Tool budget exhaustion does not crash the responder (raises `ToolBudgetExceededError` to the agent; agent absorbs as tool-error path).
+- [x] No new prompt-quality assertions in `tests/`.
+- [x] No new network calls in unit tests.
+- [ ] Smoke test on a real PR — does the agent actually fetch files when the diff is insufficient? (manual, after merge.)
+- [ ] Cost test — how many tool calls does opus-4-7 average across a small batch of real PRs? Confirm `DEFAULT_TOOL_BUDGET = 5` is enough headroom.
+
 ---
 
 ## Files touched
 
+### Slice A
 ```
 openbot/application/ports/channel_adapter.py        +9   (port method)
 openbot/application/use_cases/review.py             ~50  (wired responder, error fallback)
@@ -107,4 +136,17 @@ openbot/infrastructure/agents/deepagents_review.py  +147 (new file)
 tests/_fakes/channel_adapter.py                     +3   (port conformance)
 tests/infrastructure/adapters/test_github.py        +40  (3 tests + sample diff)
 tests/infrastructure/agents/test_deepagents_review.py +170 (new file, 6 tests)
+```
+
+### Slice A2
+```
+openbot/application/ports/channel_adapter.py        +30  (read_file + grep_repo on port)
+openbot/infrastructure/adapters/github.py           +90  (read_file + grep_repo impl)
+openbot/infrastructure/agents/_review_tools.py      +130 (new — tool factory + ToolBudget)
+openbot/infrastructure/agents/deepagents_review.py  ~50  (per-event build, tools wired, prompt updated)
+tests/_fakes/channel_adapter.py                     +14  (port conformance)
+tests/e2e/conftest.py                               +22  (RecordingGitHubAdapter parity)
+tests/infrastructure/adapters/test_github.py        +130 (8 tests)
+tests/infrastructure/agents/test_deepagents_review.py +60 (2 new tests + ainvoke signature updates)
+tests/infrastructure/agents/test_review_tools.py    +130 (new file, 7 tests)
 ```

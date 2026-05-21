@@ -440,6 +440,94 @@ class GitHubAdapter(ChannelAdapter):
         response.raise_for_status()
         return response.text
 
+    async def read_file(self, event: UnifiedEvent, path: str) -> str:
+        """Return UTF-8 text of a repo file, or ``""`` if missing / non-text.
+
+        Delegates to ``fetch_repo_file`` for the bytes-level fetch and then
+        decodes. Binary files and non-UTF-8 encodings collapse to ``""`` so
+        the review agent doesn't have to branch on the failure mode.
+        """
+        raw = await self.fetch_repo_file(event, path)
+        if raw is None:
+            return ""
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            _logger.info(
+                "read_file_not_utf8",
+                extra={"repo": event.repo, "path": path, "size": len(raw)},
+            )
+            return ""
+
+    async def grep_repo(
+        self,
+        event: UnifiedEvent,
+        *,
+        pattern: str,
+        path_glob: str | None = None,
+        max_matches: int = 20,
+    ) -> list[str]:
+        """Search the repo via GitHub Code Search and return ``path: fragment`` hits.
+
+        GitHub Code Search is the cheapest grep we can give the agent — one
+        HTTP call vs O(files) for tree-walk-and-scan. Limitations the caller
+        should know about:
+
+        - Repo must be indexed (fresh repos may 422; we swallow that).
+        - ``path_glob`` is GitHub's ``path:`` qualifier — substring match, not
+          a real glob. ``src`` matches any path containing ``src``.
+        - Pattern is substring + GitHub boolean syntax, not real regex.
+
+        Format: each hit's first text-match fragment is joined with the path
+        on a single line. Line numbers are not surfaced because Code Search
+        only returns byte offsets; callers wanting exact lines should
+        ``read_file`` the path.
+        """
+        token = await self._installation_token(event)
+        # Quote each qualifier value to survive special chars in pattern/path.
+        # ``quote(..., safe="")`` aggressively escapes — GitHub accepts that.
+        q_parts = [pattern, f"repo:{event.repo}"]
+        if path_glob:
+            q_parts.append(f"path:{path_glob}")
+        q = " ".join(q_parts)
+        url = f"{self._api_base}/search/code?q={quote(q, safe='')}"
+        headers = {
+            **self._headers(token.token),
+            "Accept": "application/vnd.github.text-match+json",
+        }
+        response = await self._get_http().get(url, headers=headers)
+        if response.status_code in (404, 422):
+            # 422 = malformed / unindexed; treat both as "no matches" so the
+            # review still goes through. PR author shouldn't see "search died".
+            _logger.info(
+                "grep_repo_no_results",
+                extra={"repo": event.repo, "status": response.status_code},
+            )
+            return []
+        response.raise_for_status()
+        payload = response.json()
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if not isinstance(items, list):
+            return []
+        out: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            matches = item.get("text_matches")
+            if not isinstance(path, str) or not isinstance(matches, list) or not matches:
+                continue
+            first = matches[0]
+            fragment = (
+                first.get("fragment", "").splitlines()[0]
+                if isinstance(first, dict) and isinstance(first.get("fragment"), str)
+                else ""
+            )
+            out.append(f"{path}: {fragment}".strip())
+            if len(out) >= max_matches:
+                break
+        return out
+
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:
             await self._http.aclose()
