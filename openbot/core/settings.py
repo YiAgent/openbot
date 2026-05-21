@@ -161,12 +161,13 @@ class Settings(BaseSettings):
 
     # ─── LLM ───
     # LiteLLM / Anthropic base URL. When set, routes Anthropic model calls
-    # to this endpoint (e.g. GLM proxy). Reads from env var
-    # CLAUDE_SWITCH_GLM_BASE_URL (bypasses the OPENBOT_ prefix via alias).
+    # to this endpoint (e.g. BigModel GLM proxy). Reads from the standard
+    # ANTHROPIC_BASE_URL env var — the same variable langchain_anthropic picks
+    # up natively, so a single env var drives both LiteLLM and langchain paths.
     anthropic_api_base: str | None = Field(
         default=None,
-        alias="CLAUDE_SWITCH_GLM_BASE_URL",
-        description="Base URL for Anthropic-compatible models (e.g. GLM proxy).",
+        alias="ANTHROPIC_BASE_URL",
+        description="Base URL for Anthropic-compatible models (e.g. BigModel GLM proxy).",
     )
 
     # ─── Sentry ───
@@ -210,10 +211,9 @@ class Settings(BaseSettings):
     def _validate_proxy_url(cls, v: str | None) -> str | None:
         """Reject non-HTTPS and private-network URLs to prevent SSRF.
 
-        CLAUDE_SWITCH_GLM_BASE_URL is passed directly to litellm as
-        ``api_base``. Without validation, any value (file://, internal IPs,
-        cloud metadata endpoints) would cause litellm to POST all LLM
-        messages to that host.
+        ANTHROPIC_BASE_URL is passed directly to litellm as ``api_base``.
+        Without validation, any value (file://, internal IPs, cloud metadata
+        endpoints) would cause litellm to POST all LLM messages to that host.
         """
         if v is None:
             return v

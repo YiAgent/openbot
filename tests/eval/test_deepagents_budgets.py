@@ -93,7 +93,7 @@ def test_build_run_config_injects_recursion_limit() -> None:
         sample_id="s1",
         dataset_version="ds",
         solver_family="deepagents_baseline",
-        model="anthropic:claude-sonnet-4-6",
+        model="anthropic:GLM-5.1",
     )
     assert cfg["recursion_limit"] == _BASELINE_RECURSION_LIMIT
     assert cfg["run_name"] == "ds/s1"
@@ -118,7 +118,7 @@ def test_resolve_model_uses_shared_deepagents_env(monkeypatch) -> None:  # type:
 
 def test_resolve_model_treats_empty_shared_env_as_unset(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv(config.DEEPAGENTS_MODEL_ENV, "")
-    assert resolve_model(fallback="anthropic:claude-opus-4-7") == "anthropic:claude-opus-4-7"
+    assert resolve_model(fallback="anthropic:GLM-5.1") == "anthropic:GLM-5.1"
 
 
 def test_resolve_model_explicit_override_beats_shared_env(monkeypatch) -> None:  # type: ignore[no-untyped-def]

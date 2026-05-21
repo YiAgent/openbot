@@ -42,7 +42,7 @@ async def test_deepagents_chat_responder_builds_agent_with_chat_model(
     reply = await responder.reply_for_event(_event(), user_request="summarize this")
 
     assert reply == "Final answer from DeepAgents"
-    assert seen["kwargs"]["model"] == "anthropic:claude-sonnet-4-6"
+    assert seen["kwargs"]["model"] == "anthropic:GLM-5.1"
     assert seen["kwargs"]["tools"] == []
     assert "GitHub maintainer bot" in seen["kwargs"]["system_prompt"]
     prompt = seen["payload"]["messages"][0]["content"]

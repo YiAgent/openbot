@@ -39,7 +39,7 @@ async def test_record_persists_a_row(
             repo="YiAgent/openbot",
             feature="triage",
             task_id="deliv-1",
-            model="anthropic/claude-sonnet-4-6",
+            model="anthropic/GLM-5.1",
             cost_usd=Decimal("0.012345"),
             prompt_tokens=100,
             completion_tokens=50,

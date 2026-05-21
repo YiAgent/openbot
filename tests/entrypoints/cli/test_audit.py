@@ -90,7 +90,7 @@ async def seeded_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
                     repo="alpha/foo",
                     feature=Feature.REVIEW,
                     task_id="t4",
-                    model="anthropic/claude-opus-4-7",
+                    model="anthropic/GLM-5.1",
                     prompt_tokens=1000,
                     completion_tokens=400,
                     cost_usd=Decimal("1.50"),

@@ -97,7 +97,7 @@ async def test_costmeter_id_and_created_at_auto_populate(
             repo="x/y",
             feature="triage",
             task_id="t-1",
-            model="anthropic/claude-sonnet-4-6",
+            model="anthropic/GLM-5.1",
             prompt_tokens=10,
             completion_tokens=20,
             cost_usd=Decimal("0.01"),

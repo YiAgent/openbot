@@ -68,7 +68,7 @@ async def test_review_responder_builds_agent_with_review_model(monkeypatch) -> N
     assert result.summary == "Reviewed: no blocking findings."
     assert result.findings == ()
     assert adapter.calls == [("YiAgent/openbot", 42)]
-    assert seen["kwargs"]["model"] == "anthropic:claude-opus-4-7"
+    assert seen["kwargs"]["model"] == "anthropic:GLM-5.1"
     # Slice A2: agent gets read_file + grep_repo tools.
     tool_names = {getattr(t, "name", None) for t in seen["kwargs"]["tools"]}
     assert tool_names == {"read_file", "grep_repo"}

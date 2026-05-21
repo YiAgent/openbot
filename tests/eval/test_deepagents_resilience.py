@@ -62,7 +62,7 @@ def test_build_chat_model_propagates_timeout_and_retries() -> None:
     Without this, the http client falls back to httpx's "no read timeout"
     default and CLOSE_WAIT sockets hang the eval.
     """
-    model = build_chat_model("anthropic:claude-sonnet-4-6", timeout_s=7, max_retries=4)
+    model = build_chat_model("anthropic:GLM-5.1", timeout_s=7, max_retries=4)
     # ChatAnthropic exposes timeout as ``default_request_timeout``; other
     # langchain providers (OpenAI etc.) use ``request_timeout`` / ``timeout``.
     timeout = getattr(
@@ -77,7 +77,7 @@ def test_build_chat_model_propagates_timeout_and_retries() -> None:
 def test_build_chat_model_uses_env_when_unset(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv(config.DEEPAGENTS_MODEL_TIMEOUT_S_ENV, "11")
     monkeypatch.setenv(config.DEEPAGENTS_MODEL_MAX_RETRIES_ENV, "6")
-    model = build_chat_model("anthropic:claude-sonnet-4-6")
+    model = build_chat_model("anthropic:GLM-5.1")
     timeout = getattr(
         model,
         "default_request_timeout",
