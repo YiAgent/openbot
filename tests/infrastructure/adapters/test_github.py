@@ -237,6 +237,72 @@ def test_parse_missing_actor_type_defaults_to_none() -> None:
     assert event.is_from_bot is False
 
 
+# ───── clone_url / review_commit_id ingest (Task 1.8) ─────
+
+
+def test_parse_pr_opened_extracts_clone_url() -> None:
+    """PR webhooks carry the HTTPS clone URL — promote it to a typed field
+    so the dispatcher's checkout resolver doesn't have to dig through `raw`.
+    """
+    payload = {
+        "action": "opened",
+        "pull_request": {"number": 17},
+        "repository": {
+            "full_name": "YiAgent/openbot",
+            "clone_url": "https://github.com/YiAgent/openbot.git",
+        },
+        "sender": {"login": "contributor"},
+    }
+    body = json.dumps(payload).encode()
+    event = _adapter().parse_event(body, _sign(body, event="pull_request"))
+    assert event.clone_url == "https://github.com/YiAgent/openbot.git"
+
+
+def test_parse_issue_opened_extracts_clone_url() -> None:
+    payload = _issue_opened_payload() | {
+        "repository": {
+            "full_name": "YiAgent/openbot",
+            "clone_url": "https://github.com/YiAgent/openbot.git",
+        }
+    }
+    body = json.dumps(payload).encode()
+    event = _adapter().parse_event(body, _sign(body))
+    assert event.clone_url == "https://github.com/YiAgent/openbot.git"
+
+
+def test_parse_missing_clone_url_is_none() -> None:
+    """Adapter does not invent a URL — the resolver decides what to do."""
+    body = json.dumps(_issue_opened_payload()).encode()  # no `clone_url`
+    event = _adapter().parse_event(body, _sign(body))
+    assert event.clone_url is None
+
+
+def test_parse_pr_review_comment_extracts_commit_id() -> None:
+    """Inline PR review comments carry the commit SHA they were left on —
+    promote it so the review workflow can checkout the *exact* commit.
+    """
+    payload = {
+        "action": "created",
+        "pull_request": {"number": 17},
+        "comment": {
+            "body": "nit",
+            "commit_id": "abc123def456" + "0" * 28,
+        },
+        "repository": {"full_name": "YiAgent/openbot"},
+        "sender": {"login": "reviewer"},
+    }
+    body = json.dumps(payload).encode()
+    event = _adapter().parse_event(body, _sign(body, event="pull_request_review_comment"))
+    assert event.review_commit_id == "abc123def456" + "0" * 28
+
+
+def test_parse_missing_review_commit_id_is_none() -> None:
+    """Non-review events don't have a commit_id; field stays None."""
+    body = json.dumps(_issue_opened_payload()).encode()
+    event = _adapter().parse_event(body, _sign(body))
+    assert event.review_commit_id is None
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Write-back: reply / add_label / remove_label / get_actor_role
 # All requests go through httpx.MockTransport — no real network.

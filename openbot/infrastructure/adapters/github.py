@@ -234,9 +234,19 @@ class GitHubAdapter(ChannelAdapter):
             pr_number = None
             issue_number = issue.get("number")
 
-        comment_body = (payload.get("comment") or {}).get("body")
+        comment = payload.get("comment") or {}
+        comment_body = comment.get("body")
         installation_id = (payload.get("installation") or {}).get("id")
         event_seq = _extract_event_seq(pull_request, issue)
+
+        # Promoted fields for unified sandbox checkout (Task 1.8 of plan
+        # ``2026-05-21-unified-sandbox-entry``). Only present on payloads
+        # that actually carry them; downstream resolver tolerates None.
+        clone_url = (payload.get("repository") or {}).get("clone_url") or None
+        # ``commit_id`` is present on pull_request_review_comment events;
+        # we don't gate on event kind here because issue.comments / etc.
+        # simply won't have the key — ``.get`` returns None.
+        review_commit_id = comment.get("commit_id") or None
 
         return UnifiedEvent(
             channel=self.name,
@@ -250,6 +260,8 @@ class GitHubAdapter(ChannelAdapter):
             comment_body=comment_body,
             installation_id=installation_id,
             event_seq=event_seq,
+            clone_url=clone_url,
+            review_commit_id=review_commit_id,
             raw=payload,
         )
 
