@@ -1,6 +1,6 @@
 # Review / Fix DeepAgent integration — slice plan
 
-**Status:** slices A + A2 + B landed. Slice C deferred.
+**Status:** slices A + A2 + B + C landed (C complete 2026-05-21).
 **Branch:** `feat/review-deepagent`
 **PRD anchors:** §4.2 (review), §4.3 (fix), §13 #2 (locked model routing)
 
@@ -134,14 +134,21 @@
 - Suggested edits (`suggestion` code blocks) — GitHub renders them as one-click commits. Useful but the agent would need to emit a target line range, not just a single line. Defer until reviewers ask for it.
 - LangSmith feedback on individual findings — would require persisting `findings_id` per comment. Out of scope; the chain-level trace is enough for v0.1.
 
-## Slice C (Fix workflow)
+## Slice C (Fix workflow) — complete (2026-05-21)
 
 Goal: implement `openbot/application/use_cases/fix.py` end-to-end.
 
-- Needs sandbox (`SandboxPort`) — already pluggable via `evals.sandboxes.factory`, just needs wiring into the application layer.
-- Needs PR-creation permission on the GitHub App.
-- Needs a separate responder (`DeepAgentsFixResponder`) with tools = `read_file`, `write_file`, `run_tests`, `create_branch`, `open_pull_request`.
-- Defer until slice A2 + B are stable so we have a working reviewer to grade fix output against.
+Landed across nine subtasks under `docs/superpowers/plans/2026-05-20-fix-deepagent-slice-c-part{1..8}.md`:
+
+- C.1 — `FixAttempt` + `FixOutcome` domain types.
+- C.2 — `_fix_schema.py` pydantic bridge (domain stays pydantic-free).
+- C.3 — `SandboxPort` grown to `clone` / `read_file` / `write_file` / `list_files` / `run` / `git_diff` / `commit_and_push` / `close`; `FakeSandboxAdapter` (in-process tempdir) lands alongside.
+- C.4 — `ChannelAdapterPort` grows `get_issue`, `create_branch`, `open_pull_request`, `get_installation_token`; `GitHubAdapter` implements all four.
+- C.5 — `DaytonaSandboxAdapter` (production): HTTPS token interpolation, idempotent close, per-call workspace.
+- C.6 — `make_fix_tools` factory (read/write/run/diff) bound to the sandbox.
+- C.7 — `DeepAgentsFixResponder` (separate from the reviewer; tools wired via C.6).
+- C.8 — `maybe_run_fix` use case wired end-to-end with `audit_lifecycle`, per-stage error templates, and a `_generate_fix_outcome` seam mirroring `_generate_review_findings`.
+- C.9 — E2E demos: demo 03 rewritten to assert on the PR creation contract (replaces the old "sandbox not configured" ACK), demo 10 added for the tests-failed terminal. `run_dispatch` / `execute_handler` grow `sandbox_factory=None` so production wiring stays one-line in webapp/worker.
 
 ---
 

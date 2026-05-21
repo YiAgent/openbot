@@ -42,6 +42,9 @@ from openbot.application.middleware import (
 from openbot.infrastructure.config_loader import load_for_repo
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from contextlib import AbstractAsyncContextManager
+
     import redis.asyncio as redis_async
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -49,6 +52,7 @@ if TYPE_CHECKING:
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
     from openbot.application.ports.config_loader import ConfigLoaderPort
     from openbot.application.ports.rate_limiter import RateLimiterPort
+    from openbot.application.ports.sandbox import SandboxPort
     from openbot.application.router import Dispatch
     from openbot.domain.config_schema import EffectiveConfig
     from openbot.domain.events import UnifiedEvent
@@ -113,6 +117,7 @@ async def run_dispatch(
     audit: AuditLogPort | None = None,
     rate_limiter: RateLimiterPort | None = None,
     config_loader: ConfigLoaderPort | None = None,
+    sandbox_factory: (Callable[[], AbstractAsyncContextManager[SandboxPort]] | None) = None,
 ) -> None:
     """Load config → pre-flight → handler.
 
@@ -162,10 +167,11 @@ async def run_dispatch(
         check_run_id=check_run_id,
         audit=audit,
         rate_limiter=rate_limiter,
-        # TODO(C.9 DI): wire a DaytonaSandboxAdapter-backed factory here
-        # for Feature.FIX dispatches. Until then the fix use case posts a
-        # graceful "sandbox not configured" comment.
-        sandbox_factory=None,
+        # Slice-C DI: callers (webapp, worker, E2E harness) inject a
+        # ``DaytonaSandboxAdapter`` (or test fake) factory. ``None``
+        # keeps the fix use case on its graceful "sandbox not configured"
+        # branch for deployments that haven't enabled the sandbox.
+        sandbox_factory=sandbox_factory,
     )
 
     try:
@@ -268,6 +274,7 @@ async def execute_handler(
     check_run_id: int | None = None,
     audit: AuditLogPort | None = None,
     rate_limiter: RateLimiterPort | None = None,
+    sandbox_factory: (Callable[[], AbstractAsyncContextManager[SandboxPort]] | None) = None,
 ) -> None:
     """Execute workflow handler directly — no preflight.
 
@@ -284,10 +291,10 @@ async def execute_handler(
         check_run_id=check_run_id,
         audit=audit,
         rate_limiter=rate_limiter,
-        # TODO(C.9 DI): wire a DaytonaSandboxAdapter-backed factory here
-        # for Feature.FIX dispatches. Until then the fix use case posts a
-        # graceful "sandbox not configured" comment.
-        sandbox_factory=None,
+        # Slice-C DI: same shape as ``run_dispatch`` — the TaskSpec v3
+        # path also needs the sandbox factory so worker-side FIX
+        # dispatches can run the loop end-to-end.
+        sandbox_factory=sandbox_factory,
     )
     try:
         await dispatch.handler(ctx)
