@@ -24,7 +24,7 @@ import logging
 from inspect_ai.scorer import Score, Target, mean, scorer, stderr
 from inspect_ai.solver import TaskState
 
-from evals.agents.langsmith_feedback import ensure_feedback_config
+from evals.inspect.langsmith import ensure_feedback_config
 from evals.scorers.swe_qa_judge import (
     JUDGE_DEVIATIONS,
     SWE_QA_JUDGE_MODEL_ID,

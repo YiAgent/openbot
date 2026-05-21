@@ -36,9 +36,9 @@ from inspect_ai import Task, task
 from inspect_ai.dataset import MemoryDataset, Sample
 
 from evals.agents.baseline import resolve_model
-from evals.agents.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.common.prediction_export import prediction_exporter
 from evals.common.predictions import SwtBenchPrediction
+from evals.inspect.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.solvers.swe_test import deepagents_baseline_swt_solver
 
 _DATASET_VERSION = "test_swt_bench_verified"

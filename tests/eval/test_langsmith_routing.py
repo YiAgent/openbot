@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from evals.agents import langsmith as ls
+from evals.inspect import langsmith as ls
 
 
 def test_configure_tracing_skips_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
