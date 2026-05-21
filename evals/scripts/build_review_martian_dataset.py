@@ -37,6 +37,8 @@ import sys
 
 import httpx
 
+from evals.common.config import get_eval_config as _eval_cfg
+
 UPSTREAM_REPO = "withmartian/code-review-benchmark"
 UPSTREAM_COMMIT = "807d46980c3390efbe8324c0b7a05fe3aa60c455"  # 2026-05-01
 UPSTREAM_LICENSE = "MIT"
@@ -53,7 +55,7 @@ GOLDEN_RAW_BASE = (
     f"https://raw.githubusercontent.com/{UPSTREAM_REPO}/{UPSTREAM_COMMIT}/offline/golden_comments"
 )
 
-DATASET_NAME = "martian_2026w20"
+_DS_NAME = _eval_cfg().catalog.review.dataset_version
 
 _PR_URL_RE = re.compile(r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)")
 
@@ -187,7 +189,7 @@ def _row_to_example(row: dict, sha256: str) -> dict:
     metadata.update(
         {
             "sample_id": row["id"],
-            "dataset_version": DATASET_NAME,
+            "dataset_version": _DS_NAME,
             "dataset_sha256": sha256,
         }
     )
@@ -208,23 +210,23 @@ def _publish(samples: list[dict], sha256: str, *, force: bool) -> str:
     from langsmith import Client
 
     client = Client()
-    existing = next((d for d in client.list_datasets(dataset_name=DATASET_NAME)), None)
+    existing = next((d for d in client.list_datasets(dataset_name=_DS_NAME)), None)
     if existing and not force:
         print(
-            f"FATAL: LangSmith dataset {DATASET_NAME!r} already exists ({existing.id}). "
+            f"FATAL: LangSmith dataset {_DS_NAME!r} already exists ({existing.id}). "
             f"Re-run with --force to delete and recreate.",
             file=sys.stderr,
         )
         sys.exit(1)
     if existing and force:
         print(
-            f"--force: deleting existing dataset {DATASET_NAME} ({existing.id})",
+            f"--force: deleting existing dataset {_DS_NAME} ({existing.id})",
             file=sys.stderr,
         )
         client.delete_dataset(dataset_id=existing.id)
 
     ds = client.create_dataset(
-        dataset_name=DATASET_NAME,
+        dataset_name=_DS_NAME,
         description=(
             f"Martian code-review benchmark (50 PRs from 5 repos), pinned to "
             f"upstream commit {UPSTREAM_COMMIT[:12]}. sha256={sha256[:12]}. "
@@ -239,7 +241,7 @@ def _publish(samples: list[dict], sha256: str, *, force: bool) -> str:
         metadata=[p["metadata"] for p in payloads],
     )
     print(
-        f"[done] published {len(payloads)} examples to LangSmith dataset {DATASET_NAME} ({ds.id})",
+        f"[done] published {len(payloads)} examples to LangSmith dataset {_DS_NAME} ({ds.id})",
         file=sys.stderr,
     )
     return str(ds.id)

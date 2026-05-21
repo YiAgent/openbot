@@ -46,14 +46,12 @@ from __future__ import annotations
 from inspect_ai import Task, task
 from inspect_ai.scorer import mean, stderr
 
+from evals.common.config import get_eval_config
 from evals.common.datasets import langsmith_dataset, qa_example_to_agent_sample
 from evals.inspect.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.scorers.swe_qa_judge import SWE_QA_JUDGE_MODEL_ID, SWE_QA_JUDGE_VERSION
 from evals.scorers.swe_qa_pro import swe_qa_pro_judge_scorer
 from evals.solvers.swe_qa import deepagents_baseline_swe_qa_solver
-
-_DATASET_VERSION = "chat_swe_qa_pro_v1"
-_DATASET_SOURCE = "langsmith:chat_swe_qa_pro_v1 (mirror of huggingface:TIGER-Lab/SWE-QA-Pro-Bench)"
 
 
 @task
@@ -75,7 +73,9 @@ def chat_swe_qa_pro_openbot() -> Task:
     No Inspect-side Docker sandbox is involved — agent execution is fully
     decoupled from the evaluation surface.
     """
-    configure_tracing_for_dataset(_DATASET_VERSION)
+    catalog = get_eval_config().catalog
+    dataset_version = catalog.chat.dataset_version
+    configure_tracing_for_dataset(dataset_version)
     # Surface this run as a LangSmith Experiment. The ``swe_qa_pro_judge``
     # feedback key on the Experiment Run carries the normalized 0-1 scalar
     # so it shows as a metric column on the Experiments tab — distinct
@@ -85,25 +85,25 @@ def chat_swe_qa_pro_openbot() -> Task:
     # ``state.sample_id`` to the LangSmith Example via ``inputs.id`` (see
     # evals/scripts/build_chat_swe_qa_pro_dataset.py).
     experiment = LangSmithExperiment.start(
-        dataset_name=_DATASET_VERSION,
-        solver_family="deepagents_baseline",
+        dataset_name=dataset_version,
+        solver_family=catalog.solver_family_baseline,
         instance_id_field="id",
     )
     return Task(
-        dataset=langsmith_dataset(_DATASET_VERSION, converter=qa_example_to_agent_sample),
+        dataset=langsmith_dataset(dataset_version, converter=qa_example_to_agent_sample),
         solver=deepagents_baseline_swe_qa_solver(),
         scorer=experiment.wrap(
             swe_qa_pro_judge_scorer(),
             metrics=[mean(), stderr()],
             scorer_name="swe_qa_pro_judge",
             feedback_key="swe_qa_pro_judge",
-            feedback_config={"type": "continuous", "min": 0.0, "max": 1.0},
+            feedback_config=catalog.unit_feedback_config,
         ),
         metadata={
-            "dataset_version": _DATASET_VERSION,
-            "dataset_source": _DATASET_SOURCE,
-            "solver_id": "deepagents_baseline",
-            "solver_family": "deepagents_baseline",
+            "dataset_version": dataset_version,
+            "dataset_source": catalog.chat.dataset_source,
+            "solver_id": catalog.solver_family_baseline,
+            "solver_family": catalog.solver_family_baseline,
             "judge_label": "swe_qa_pro_5dim",
             "judge_model_id": SWE_QA_JUDGE_MODEL_ID,
             "judge_prompt_version": SWE_QA_JUDGE_VERSION,

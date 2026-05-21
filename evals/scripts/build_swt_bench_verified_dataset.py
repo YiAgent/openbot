@@ -28,8 +28,11 @@ import argparse
 import json
 import sys
 
-DATASET_NAME = "test_swt_bench_verified"
-HF_DATASET = "eth-sri/SWT-bench_Verified_bm25_27k_zsb"
+from evals.common.config import get_eval_config as _eval_cfg
+
+# Dataset identifiers from CatalogSettings — single source of truth.
+_DS_NAME = _eval_cfg().catalog.swt.dataset_version
+_DS_HF = _eval_cfg().catalog.swt.hf_dataset
 HF_SPLIT = "test"
 
 
@@ -51,8 +54,8 @@ def _load_examples() -> tuple[list[dict], str]:
     """
     from datasets import load_dataset
 
-    print(f"[hf] loading {HF_DATASET} ({HF_SPLIT})", file=sys.stderr)
-    ds = load_dataset(HF_DATASET, split=HF_SPLIT)
+    print(f"[hf] loading {_DS_HF} ({HF_SPLIT})", file=sys.stderr)
+    ds = load_dataset(_DS_HF, split=HF_SPLIT)
     # Best-effort revision capture. Older HF clients expose ``download_checksums``
     # only when ``info.download_checksums`` is populated; otherwise we fall
     # back to ``info.dataset_info.version`` or "unknown".
@@ -91,8 +94,8 @@ def _load_examples() -> tuple[list[dict], str]:
                 },
                 "metadata": {
                     "instance_id": instance_id,
-                    "dataset_version": DATASET_NAME,
-                    "hf_dataset": HF_DATASET,
+                    "dataset_version": _DS_NAME,
+                    "hf_dataset": _DS_HF,
                     "hf_split": HF_SPLIT,
                     "hf_revision": revision,
                     # Gold *code* fix — scorer applies this on top of the
@@ -116,25 +119,25 @@ def _publish(examples: list[dict], revision: str, *, force: bool) -> str:
     from langsmith import Client
 
     client = Client()
-    existing = next((d for d in client.list_datasets(dataset_name=DATASET_NAME)), None)
+    existing = next((d for d in client.list_datasets(dataset_name=_DS_NAME)), None)
     if existing and not force:
         print(
-            f"FATAL: LangSmith dataset {DATASET_NAME!r} already exists ({existing.id}). "
+            f"FATAL: LangSmith dataset {_DS_NAME!r} already exists ({existing.id}). "
             f"Re-run with --force to delete and recreate.",
             file=sys.stderr,
         )
         sys.exit(1)
     if existing and force:
         print(
-            f"--force: deleting existing dataset {DATASET_NAME} ({existing.id})",
+            f"--force: deleting existing dataset {_DS_NAME} ({existing.id})",
             file=sys.stderr,
         )
         client.delete_dataset(dataset_id=existing.id)
 
     ds = client.create_dataset(
-        dataset_name=DATASET_NAME,
+        dataset_name=_DS_NAME,
         description=(
-            f"SWT-Bench Verified mirror — {HF_DATASET} ({HF_SPLIT} split), "
+            f"SWT-Bench Verified mirror — {_DS_HF} ({HF_SPLIT} split), "
             f"HF revision {revision[:12]}. Sister benchmark to SWE-bench Verified "
             f"(same instance_ids, same Epoch Docker images). Source of truth "
             f"remains HuggingFace; this mirror exists so per-sample scorer runs "
@@ -157,7 +160,7 @@ def _publish(examples: list[dict], revision: str, *, force: bool) -> str:
         print(f"  uploaded {total}/{len(examples)}", file=sys.stderr)
 
     print(
-        f"[done] published {total} examples to LangSmith dataset {DATASET_NAME} ({ds.id})",
+        f"[done] published {total} examples to LangSmith dataset {_DS_NAME} ({ds.id})",
         file=sys.stderr,
     )
     return str(ds.id)
@@ -177,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "dataset_id": ds_id,
-                "dataset_name": DATASET_NAME,
+                "dataset_name": _DS_NAME,
                 "sample_count": len(examples),
                 "hf_revision": revision,
             }

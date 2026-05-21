@@ -32,15 +32,17 @@ import json
 import sys
 from typing import Any
 
-HF_REPO_ID = "TIGER-Lab/SWE-QA-Pro-Bench"
+from evals.common.config import get_eval_config as _eval_cfg
+
+# Dataset identifiers from CatalogSettings — single source of truth.
+_DS_NAME = _eval_cfg().catalog.chat.dataset_version
+_DS_HF = _eval_cfg().catalog.chat.hf_dataset
 # Pin to a known-good HF commit so reruns produce identical examples.
-# Resolved from `huggingface_hub.HfApi().dataset_info(HF_REPO_ID).sha` on
+# Resolved from `huggingface_hub.HfApi().dataset_info(_DS_HF).sha` on
 # 2026-05-15; bump after manually diffing the change set.
 HF_REVISION = "main"
 HF_SPLIT = "test"
 UPSTREAM_LICENSE = "see dataset card"  # SWE-QA-Pro-Bench card; verify upstream
-
-DATASET_NAME = "chat_swe_qa_pro_v1"
 
 
 def _row_to_sample(row: dict[str, Any]) -> dict[str, Any]:
@@ -85,8 +87,8 @@ def _collect_samples(revision: str) -> list[dict[str, Any]]:
     """Pull the HF dataset and convert to our canonical sample shape."""
     from datasets import load_dataset  # type: ignore[import-untyped]
 
-    print(f"[hf] loading {HF_REPO_ID}@{revision} split={HF_SPLIT}", file=sys.stderr)
-    ds = load_dataset(HF_REPO_ID, split=HF_SPLIT, revision=revision)
+    print(f"[hf] loading {_DS_HF}@{revision} split={HF_SPLIT}", file=sys.stderr)
+    ds = load_dataset(_DS_HF, split=HF_SPLIT, revision=revision)
     samples = [_row_to_sample(dict(row)) for row in ds]
     samples.sort(key=lambda s: str(s["id"]))
     print(f"[hf] {len(samples)} samples", file=sys.stderr)
@@ -111,9 +113,9 @@ def _row_to_example(row: dict[str, Any], sha256: str, revision: str) -> dict[str
     full_meta = {
         **sample_meta,
         "sample_id": row["id"],
-        "dataset_version": DATASET_NAME,
+        "dataset_version": _DS_NAME,
         "dataset_sha256": sha256,
-        "upstream_hf_repo": HF_REPO_ID,
+        "upstream_hf_repo": _DS_HF,
         "upstream_hf_revision": revision,
     }
     return {
@@ -138,26 +140,26 @@ def _publish(
     from langsmith import Client
 
     client = Client()
-    existing = next((d for d in client.list_datasets(dataset_name=DATASET_NAME)), None)
+    existing = next((d for d in client.list_datasets(dataset_name=_DS_NAME)), None)
     if existing and not force:
         print(
-            f"FATAL: LangSmith dataset {DATASET_NAME!r} already exists ({existing.id}). "
+            f"FATAL: LangSmith dataset {_DS_NAME!r} already exists ({existing.id}). "
             f"Re-run with --force to delete and recreate.",
             file=sys.stderr,
         )
         sys.exit(1)
     if existing and force:
         print(
-            f"--force: deleting existing dataset {DATASET_NAME} ({existing.id})",
+            f"--force: deleting existing dataset {_DS_NAME} ({existing.id})",
             file=sys.stderr,
         )
         client.delete_dataset(dataset_id=existing.id)
 
     ds = client.create_dataset(
-        dataset_name=DATASET_NAME,
+        dataset_name=_DS_NAME,
         description=(
             f"SWE-QA-Pro-Bench mirror (260 questions / 26 long-tail repos) "
-            f"from HF {HF_REPO_ID}@{revision}. sha256={sha256[:12]}. "
+            f"from HF {_DS_HF}@{revision}. sha256={sha256[:12]}. "
             f"License: {UPSTREAM_LICENSE}. Published by "
             f"evals/scripts/build_chat_swe_qa_pro_dataset.py."
         ),
@@ -170,7 +172,7 @@ def _publish(
         metadata=[p["metadata"] for p in payloads],
     )
     print(
-        f"[done] published {len(payloads)} examples to LangSmith dataset {DATASET_NAME} ({ds.id})",
+        f"[done] published {len(payloads)} examples to LangSmith dataset {_DS_NAME} ({ds.id})",
         file=sys.stderr,
     )
     return str(ds.id)
@@ -184,7 +186,7 @@ def build_dataset(*, force: bool, revision: str) -> int:
         json.dumps(
             {
                 "dataset_id": ds_id,
-                "dataset_name": DATASET_NAME,
+                "dataset_name": _DS_NAME,
                 "sample_count": len(samples),
                 "sha256": sha,
                 "hf_revision": revision,

@@ -32,72 +32,14 @@ one-off local override).
 
 from __future__ import annotations
 
-import subprocess
-
-from datasets import load_dataset
 from inspect_ai import Task, task
-from inspect_ai.dataset import MemoryDataset, Sample
 
-from evals.agents.baseline import resolve_model
-from evals.common.prediction_export import prediction_exporter
+from evals.common.config import get_eval_config
 from evals.common.predictions import SweBenchPrediction
-from evals.inspect.langsmith import LangSmithExperiment, configure_tracing_for_dataset
+from evals.inspect.hf_datasets import load_issue_dataset
+from evals.inspect.langsmith import configure_tracing_for_dataset
+from evals.inspect.task_runtime import build_export_experiment, git_sha, resolve_model_label
 from evals.solvers.swe_fix import deepagents_baseline_swe_solver
-
-_DATASET_VERSION = "fix_swe_bench_verified"
-_DATASET_SOURCE = "huggingface:princeton-nlp/SWE-bench_Verified"
-
-
-def _git_sha() -> str:
-    try:
-        out = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL)
-        return out.decode().strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return "unknown"
-
-
-def _resolve_model_label() -> str:
-    """Best-effort model label for experiment metadata."""
-    return resolve_model()
-
-
-def _hf_to_sample(row: dict[str, object]) -> Sample:
-    """SWE-bench Verified HF row → Inspect ``Sample``.
-
-    Only the fields the solver actually consumes are surfaced into
-    ``state.metadata`` — repo, base_commit, version. Everything else
-    (FAIL_TO_PASS / PASS_TO_PASS / patch / test_patch / environment_setup_commit)
-    is grading-side data and stays on the official harness; we don't need
-    to mirror it into our flow.
-    """
-    return Sample(
-        id=str(row["instance_id"]),
-        input=str(row.get("problem_statement", "")),
-        target="",
-        metadata={
-            "repo": str(row.get("repo", "")),
-            "base_commit": str(row.get("base_commit", "")),
-            "version": str(row.get("version", "")),
-        },
-    )
-
-
-def _load_dataset() -> MemoryDataset:
-    """Pull SWE-bench Verified directly from HuggingFace.
-
-    Bypassing LangSmith for SWE/SWT-Bench is deliberate: the upstream
-    Docker harness already wants the official HF schema, so re-mirroring
-    through LangSmith adds drift surface without benefit. (LangSmith
-    Experiment records remain wired through the scorer wrapper.)
-    """
-    ds = load_dataset("princeton-nlp/SWE-bench_Verified", split="test")
-    samples = [_hf_to_sample(dict(row)) for row in ds]
-    samples.sort(key=lambda s: str(s.id))
-    return MemoryDataset(
-        samples=samples,
-        name=_DATASET_VERSION,
-        location="huggingface://princeton-nlp/SWE-bench_Verified",
-    )
 
 
 @task
@@ -109,42 +51,40 @@ def fix_swe_bench_verified_deepagents() -> Task:
     (value=1 if the prediction validated and was appended, value=0 if the
     solver returned an unusable prediction). Real grading happens offline.
     """
-    configure_tracing_for_dataset(_DATASET_VERSION)
-    git_sha = _git_sha()
-    model_label = _resolve_model_label()
+    catalog = get_eval_config().catalog
+    dataset_version = catalog.fix.dataset_version
+    configure_tracing_for_dataset(dataset_version)
 
-    experiment = LangSmithExperiment.start(
-        dataset_name=_DATASET_VERSION,
-        solver_family="deepagents_baseline",
+    sha = git_sha()
+    model_label = resolve_model_label()
+
+    exp = build_export_experiment(
+        dataset_version=dataset_version,
+        solver_family=catalog.solver_family_baseline,
         model=model_label,
-        git_sha=git_sha,
-    )
-
-    exporter = prediction_exporter(
-        dataset_version=_DATASET_VERSION,
+        git_sha=sha,
         schema=SweBenchPrediction,
-        run_label=str(experiment.metadata().get("langsmith_experiment_name") or "run"),
+        # IMPORTANT: this is NOT official pass@1. The scorer is a
+        # JSONL exporter; value=1 means "non-empty prediction appended",
+        # value=0 means "no prediction / empty patch / schema invalid".
+        # Real grading is offline via `python -m swebench.harness.run_evaluation`.
+        scorer_name=catalog.swe_export_feedback_key,
+        feedback_key=catalog.swe_export_feedback_key,
     )
 
     return Task(
-        dataset=_load_dataset(),
-        solver=deepagents_baseline_swe_solver(),
-        scorer=experiment.wrap(
-            exporter,
-            # IMPORTANT: this is NOT official pass@1. The scorer is a
-            # JSONL exporter; value=1 means "non-empty prediction appended",
-            # value=0 means "no prediction / empty patch / schema invalid".
-            # Real grading is offline via `python -m swebench.harness.run_evaluation`.
-            scorer_name="swe_export_ok",
-            feedback_key="swe_export_ok",
-            feedback_config={"type": "continuous", "min": 0.0, "max": 1.0},
+        dataset=load_issue_dataset(
+            dataset_name=catalog.fix.hf_dataset,
+            dataset_version=dataset_version,
         ),
+        solver=deepagents_baseline_swe_solver(),
+        scorer=exp.scorer,
         metadata={
-            "dataset_version": _DATASET_VERSION,
-            "dataset_source": _DATASET_SOURCE,
-            "git_sha": git_sha,
-            "solver_family": "deepagents_baseline",
+            "dataset_version": dataset_version,
+            "dataset_source": catalog.fix.dataset_source,
+            "git_sha": sha,
+            "solver_family": catalog.solver_family_baseline,
             "model": model_label,
-            **experiment.metadata(),
+            **exp.metadata,
         },
     )

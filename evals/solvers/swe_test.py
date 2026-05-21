@@ -7,7 +7,6 @@ git diff into SwtBenchPrediction; grading is offline via SWT-Bench harness.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 
@@ -16,25 +15,13 @@ from evals.agents.test_generation import (
     build_test_generation_agent,
     build_test_generation_user_message,
 )
+from evals.common.messages import join_message_texts
 from evals.common.predictions import SwtBenchPrediction, empty_swt_prediction
 from evals.common.termination import assert_clean_termination
 from evals.common.usage import aggregate_provider_usage
 from evals.sandboxes import RepoSpec, create_sandbox_for_sample
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_text(message: Any) -> str:
-    text = message.content if hasattr(message, "content") else str(message)
-    if isinstance(text, list):
-        text = "\n".join(b.get("text", "") for b in text if isinstance(b, dict))
-    return str(text)
-
-
-def _join_message_text(messages: list[Any]) -> str:
-    """Concatenate all AI-visible message text for offline debugging."""
-    parts = [_extract_text(message).strip() for message in messages]
-    return "\n\n".join(part for part in parts if part)
 
 
 def deepagents_baseline_swt_solver(*, model: str | None = None) -> Solver:
@@ -106,7 +93,7 @@ def deepagents_baseline_swt_solver(*, model: str | None = None) -> Solver:
                 provider_usage = aggregate_provider_usage(messages)
                 if provider_usage is not None:
                     state.metadata["provider_usage"] = provider_usage
-                state.metadata["agent_raw_output"] = _join_message_text(messages)
+                state.metadata["agent_raw_output"] = join_message_texts(messages)
                 state.output.completion = prediction.model_dump_json()
             finally:
                 await backend.aclose()

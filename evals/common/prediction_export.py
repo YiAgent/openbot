@@ -112,6 +112,7 @@ def prediction_exporter(
     schema: type[BaseModel],
     run_label: str | None = None,
     metadata_key: str = "prediction",
+    scorer_name: str = "swe_export_ok",
 ) -> Scorer:
     """Return an Inspect ``@scorer`` that validates + appends predictions.
 
@@ -132,7 +133,7 @@ def prediction_exporter(
         run_label=effective_label,
     )
 
-    @scorer(metrics=[mean()], name="swe_export_ok")
+    @scorer(metrics=[mean()], name=scorer_name)
     def _scorer() -> Scorer:
         async def _score(state: TaskState, _target: Target) -> Score:
             raw = (state.metadata or {}).get(metadata_key)
