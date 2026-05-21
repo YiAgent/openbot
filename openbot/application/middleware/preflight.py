@@ -46,6 +46,8 @@ if TYPE_CHECKING:
     from openbot.application.ports.rate_limiter import RateLimiterPort
     from openbot.application.ports.sandbox import SandboxPort
     from openbot.application.router import Dispatch
+    from openbot.application.sandbox_handle import SandboxedHandle
+    from openbot.dispatcher.classifier import ClassifierOutput
     from openbot.domain.config_schema import EffectiveConfig
 
 _logger = logging.getLogger(__name__)
@@ -126,6 +128,22 @@ class PreflightContext:
     # Returns an async context manager so ``close()`` runs on every
     # exit, including the failure paths.
     sandbox_factory: Callable[[], AbstractAsyncContextManager[SandboxPort]] | None = None
+    # Unified sandbox entry (slice unified-sandbox-entry): the live
+    # handle bundling the open sandbox + resolved CheckoutSpec + GH
+    # installation token. The dispatcher attaches it via
+    # ``dataclasses.replace`` after the policy-merge yields REQUIRED
+    # AND the clone succeeds. ``None`` on every NO_SANDBOX path and on
+    # the degrade path (sandbox provisioning failed) — handlers branch
+    # on ``ctx.sandbox_handle is None``.
+    sandbox_handle: SandboxedHandle | None = None
+    # LLM intent classifier signal (one-shot, fail-open). The receive
+    # side calls ``classify_event`` between preflight and policy gate,
+    # then ``dataclasses.replace``-s the context with the result so
+    # handlers can specialize their reply (e.g. ask for repro steps).
+    # ``None`` means the classifier didn't run for this feature, timed
+    # out, or raised — the policy-gate code treats None as "respect
+    # the static SandboxPolicy" (see ``derive_sandbox_policy``).
+    classifier_output: ClassifierOutput | None = None
     # Reserved for slice B+: middlewares may stash cached lookups
     # (actor role, cancel set membership) keyed by their middleware name.
     # Frozen at construction; slice A leaves it empty.
