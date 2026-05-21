@@ -48,11 +48,11 @@ def _stub_finalizer(returned: Any) -> Any:
 
     with (
         patch(
-            "evals.agents.structured_finalizer.finalize_structured",
+            "evals.agents.middleware.finalize_structured",
             side_effect=_fake_finalize,
         ),
         patch(
-            "evals.agents.structured_finalizer.finalize_structured_sync",
+            "evals.agents.middleware.finalize_structured_sync",
             side_effect=_fake_finalize_sync,
         ) as p,
     ):

@@ -200,7 +200,7 @@ def test_build_baseline_agent_wraps_with_finalizer_when_response_format_set(
 
     import evals.agents.baseline as mod
     from evals.agents.baseline import build_baseline_agent
-    from evals.agents.structured_finalizer import _StructuredFinalizerWrapper
+    from evals.agents.middleware import _StructuredFinalizerWrapper
 
     captured_chat: dict[str, object] = {}
     captured_agent: dict[str, object] = {}
