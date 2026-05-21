@@ -38,9 +38,8 @@ from datasets import load_dataset
 from inspect_ai import Task, task
 from inspect_ai.dataset import MemoryDataset, Sample
 
-from evals.common.deepagents_baseline import resolve_model
-from evals.common.langsmith import configure_tracing_for_dataset
-from evals.common.langsmith_experiments import LangSmithExperiment
+from evals.agents.baseline import resolve_model
+from evals.agents.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.common.prediction_export import prediction_exporter
 from evals.common.predictions import SweBenchPrediction
 from evals.solvers.swe_fix import deepagents_baseline_swe_solver

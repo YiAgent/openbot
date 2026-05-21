@@ -27,8 +27,9 @@ demo assertions to the specific shape of FastAPI BackgroundTask scheduling.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import fakeredis.aioredis
 import pytest
@@ -48,11 +49,51 @@ from openbot.infrastructure.persistence.models import AuditLog, Base
 from openbot.infrastructure.persistence.rate_limiter_redis import RedisRateLimiter
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from openbot.application.router import Dispatch
 
 # Test-only webhook secret — only used inside RecordingGitHubAdapter so
 # the parent class' constructor doesn't reject an empty string.
 _E2E_SECRET = "e2e-test-secret"
+
+
+@dataclass
+class FakeSandbox:
+    """Partial ``SandboxPort`` stand-in for the E2E fix-loop demos.
+
+    Implements only the methods reachable when ``_generate_fix_outcome``
+    is monkeypatched: ``clone`` + ``commit_and_push`` + ``close`` +
+    ``workspace``. The agent-side surface (``read_file`` / ``write_file``
+    / ``list_files`` / ``run`` / ``git_diff``) is intentionally omitted —
+    if you extend a demo to exercise the real agent path, copy
+    ``_FakeSandbox`` from ``tests/application/use_cases/test_fix.py``
+    (full port shape) instead of growing this class.
+
+    Each call is recorded as a ``(repo_url, ref, token)`` /
+    ``(branch_ref, message, token)`` tuple so demos can assert on the
+    exact contract the use case must honour against the real
+    ``DaytonaSandboxAdapter``.
+
+    Token injection is the *adapter's* concern (see
+    ``DaytonaSandboxAdapter._inject_token`` + ``SandboxPort`` docstring);
+    the use case passes the raw URL + token through unchanged. The E2E
+    harness therefore asserts on raw values, not pre-injected URLs.
+    """
+
+    workspace: str = "/workspace/repo"
+    cloned: list[tuple[str, str, str]] = field(default_factory=list)
+    pushed: list[tuple[str, str, str]] = field(default_factory=list)
+    closed: bool = False
+
+    async def clone(self, *, repo_url: str, ref: str, token: str) -> None:
+        self.cloned.append((repo_url, ref, token))
+
+    async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
+        self.pushed.append((branch_ref, message, token))
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class RecordingGitHubAdapter(GitHubAdapter):
@@ -83,6 +124,26 @@ class RecordingGitHubAdapter(GitHubAdapter):
         self.actor_roles: dict[str, str] = {}
         self.labels_response: list[dict[str, Any]] = []
         self.comments_response: list[dict[str, Any]] = []
+        # Slice-A2 review tools — test-controlled file content + grep hits.
+        # ``file_responses[path]`` overrides the default empty string.
+        # ``grep_responses[(pattern, path_glob)]`` returns the canned list.
+        self.file_responses: dict[str, str] = {}
+        self.grep_responses: dict[tuple[str, str | None], list[str]] = {}
+        # Slice-B PR Review API — recorded submissions for assertion in demo 2.
+        self.pr_reviews: list[dict[str, Any]] = []
+        # Slice-C fix loop — recorded write-backs for assertion in demo 03/10.
+        self.branch_creates: list[tuple[str, str, str]] = []  # (repo, ref, sha)
+        self.pr_creates: list[dict[str, Any]] = []  # POST /pulls
+        # Test-controlled issue dict returned by ``get_issue``. Defaults
+        # to a minimal happy-path shape so the bot-assigned demos work
+        # without extra setup; tests override via ``harness.adapter.fake_issue``.
+        self.fake_issue: dict[str, Any] = {
+            "title": "Off-by-one in pagination",
+            "body": "Last item is dropped when total % page_size == 0.",
+            "base_sha": "abc1234567",
+            "default_branch": "main",
+            "clone_url": "https://github.com/acme/test-repo.git",
+        }
 
     async def reply(self, event: UnifiedEvent, message: str) -> dict[str, Any]:
         """Record + return a synthetic comment id (matches real shape)."""
@@ -118,6 +179,80 @@ class RecordingGitHubAdapter(GitHubAdapter):
     async def get_pr_comments(self, event: UnifiedEvent, pr_number: int) -> list[dict[str, Any]]:
         """Return the test-controlled comments list."""
         return list(self.comments_response)
+
+    async def read_file(self, event: UnifiedEvent, path: str) -> str:
+        """Return test-controlled file content keyed by path; '' if unset."""
+        return self.file_responses.get(path, "")
+
+    async def grep_repo(
+        self,
+        event: UnifiedEvent,
+        *,
+        pattern: str,
+        path_glob: str | None = None,
+        max_matches: int = 20,
+    ) -> list[str]:
+        """Return canned grep results keyed by (pattern, path_glob)."""
+        return list(self.grep_responses.get((pattern, path_glob), ()))[:max_matches]
+
+    async def create_pr_review(
+        self,
+        event: UnifiedEvent,
+        pr_number: int,
+        *,
+        body: str,
+        event_type: Literal["APPROVE", "COMMENT"],
+        comments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Record the PR Review submission; demo 2 asserts on the recorded shape."""
+        record = {
+            "repo": event.repo,
+            "pr_number": pr_number,
+            "body": body,
+            "event_type": event_type,
+            "comments": list(comments or ()),
+        }
+        self.pr_reviews.append(record)
+        return {"id": 20_000 + len(self.pr_reviews), **record}
+
+    async def get_issue(self, event: UnifiedEvent, issue_number: int) -> dict[str, Any]:
+        """Return the test-controlled fake_issue dict (slice C fix loop)."""
+        return dict(self.fake_issue)
+
+    async def create_branch(self, event: UnifiedEvent, branch_ref: str, from_sha: str) -> None:
+        """Record a branch creation; tests assert via ``branch_creates``."""
+        self.branch_creates.append((event.repo, branch_ref, from_sha))
+
+    async def open_pull_request(
+        self,
+        event: UnifiedEvent,
+        *,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+    ) -> dict[str, Any]:
+        """Record the POST /pulls call; demo 03 asserts on the recording."""
+        record = {
+            "repo": event.repo,
+            "title": title,
+            "body": body,
+            "head": head,
+            "base": base,
+        }
+        self.pr_creates.append(record)
+        # GitHub's POST /pulls returns a PR object; the use case reads
+        # ``html_url`` to embed in the success comment.
+        pr_id = 30_000 + len(self.pr_creates)
+        return {
+            "id": pr_id,
+            "html_url": f"https://github.com/{event.repo}/pull/{pr_id}",
+            **record,
+        }
+
+    async def get_installation_token(self, event: UnifiedEvent) -> str:
+        """Return the same fake token ``_installation_token`` uses."""
+        return "fake-installation-token"
 
     async def _installation_token(self, event: UnifiedEvent) -> Any:
         """Bypass App auth — return a minimal object whose ``.token`` is read."""
@@ -173,6 +308,17 @@ class WebhookHarness:
     repo: str = "acme/test-repo"
     installation_id: int = 99
     raw_overrides: dict[str, Any] = field(default_factory=dict)
+    # Slice-C fix loop — single shared FakeSandbox per test so demos
+    # assert on its recorded ``cloned`` / ``pushed`` lists. Demos that
+    # exercise the tests-failed branch flip
+    # ``fix_outcome_tests_passed = False`` instead of swapping the fake.
+    sandbox: FakeSandbox = field(default_factory=FakeSandbox)
+    fix_outcome_tests_passed: bool = True
+    # Sandbox factory injected into ``run_dispatch`` for the FIX use case.
+    # ``None`` keeps the other demos working unchanged (the use case
+    # then takes the "sandbox not configured" early-return). The
+    # ``webhook_harness`` fixture sets this to a working factory.
+    sandbox_factory_override: Callable[[], AbstractAsyncContextManager[Any]] | None = None
 
     def make_event(
         self,
@@ -219,6 +365,7 @@ class WebhookHarness:
             session_factory=self.session_factory,
             redis=self.redis,
             rate_limiter=RedisRateLimiter(self.redis),
+            sandbox_factory=self.sandbox_factory_override,
         )
 
     async def audit_rows(self, *, delivery_id: str | None = None) -> Sequence[AuditLog]:
@@ -277,6 +424,67 @@ async def webhook_harness(
     monkeypatch.setattr(
         "openbot.application.use_cases.chat._generate_freeform_reply",
         _fake_chat_reply,
+    )
+
+    from openbot.domain.review import ReviewFindings as _ReviewFindings
+
+    async def _fake_review_findings(*, event: UnifiedEvent, adapter: Any) -> _ReviewFindings:
+        # E2E doesn't exercise the real reviewer — only the audit + PR Review
+        # API plumbing. PRD §8.3: prompt-quality assertions live in evals/.
+        return _ReviewFindings(summary=f"DeepAgents review summary for PR #{event.pr_number}")
+
+    monkeypatch.setattr(
+        "openbot.application.use_cases.review._generate_review_findings",
+        _fake_review_findings,
+    )
+
+    # Slice-C fix loop — sandbox factory + DeepAgents stand-in.
+    #
+    # The real fix use case opens a ``DaytonaSandboxAdapter`` via
+    # ``ctx.sandbox_factory()`` and runs ``DeepAgentsFixResponder`` inside it.
+    # E2E demos don't exercise either of those — adapter unit tests cover
+    # the Daytona wiring (C.5) and responder unit tests cover the agent
+    # (C.7). Here we wire a single shared ``FakeSandbox`` factory and
+    # monkeypatch ``_generate_fix_outcome`` to return a deterministic
+    # ``FixOutcome`` keyed by ``harness.fix_outcome_tests_passed``.
+    from contextlib import asynccontextmanager
+
+    from openbot.domain.fix import FixAttempt as _FixAttempt
+    from openbot.domain.fix import FixOutcome as _FixOutcome
+
+    @asynccontextmanager
+    async def _sandbox_factory() -> AsyncIterator[FakeSandbox]:
+        try:
+            yield harness.sandbox
+        finally:
+            await harness.sandbox.close()
+
+    harness.sandbox_factory_override = _sandbox_factory
+
+    async def _fake_fix_outcome(
+        *, sandbox: Any, event: UnifiedEvent, adapter: Any, issue: dict[str, Any]
+    ) -> _FixOutcome:
+        # Default: tests passed. Demos that need the tests-failed branch
+        # flip ``harness.fix_outcome_tests_passed = False`` before dispatch.
+        passed = harness.fix_outcome_tests_passed
+        return _FixOutcome(
+            attempt=_FixAttempt(
+                summary=f"DeepAgents fix summary for issue #{event.issue_number}",
+                files_changed=("src/api/list.py",),
+                tests_passed=passed,
+                test_command="pytest -q",
+                test_output=(
+                    "3 passed in 0.05s"
+                    if passed
+                    else "1 failed, 2 passed in 0.05s\nFAILED tests/test_api.py::test_list"
+                ),
+                diff="diff --git a/src/api/list.py b/src/api/list.py\n",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "openbot.application.use_cases.fix._generate_fix_outcome",
+        _fake_fix_outcome,
     )
 
     try:

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from inspect_ai.scorer import Score
 
-from evals.common.langsmith_experiments import LangSmithExperiment, _await_or_call
+from evals.agents.langsmith import LangSmithExperiment, _await_or_call
 
 
 def test_start_without_api_key_returns_noop(monkeypatch: pytest.MonkeyPatch) -> None:

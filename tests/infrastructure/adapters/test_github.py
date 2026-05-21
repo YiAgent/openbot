@@ -459,6 +459,233 @@ async def test_get_actor_role_defaults_to_none_when_missing(adapter_factory: Any
     assert await adapter.get_actor_role(_event()) == "none"
 
 
+# ───── get_pr_diff ─────
+
+_SAMPLE_DIFF = (
+    "diff --git a/foo.py b/foo.py\n"
+    "index 0000000..1111111 100644\n"
+    "--- a/foo.py\n"
+    "+++ b/foo.py\n"
+    "@@ -1 +1 @@\n"
+    "-old\n"
+    "+new\n"
+)
+
+
+async def test_get_pr_diff_returns_raw_diff_text(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, text=_SAMPLE_DIFF), auth=_FakeAuth()
+    )
+
+    diff = await adapter.get_pr_diff(_event(issue_number=None, pr_number=7), 7)
+
+    assert diff == _SAMPLE_DIFF
+    req = captured[0]
+    assert req.method == "GET"
+    assert str(req.url) == "https://api.github.com/repos/YiAgent/openbot/pulls/7"
+    assert req.headers["accept"] == "application/vnd.github.v3.diff"
+    assert req.headers["authorization"] == f"token {_INSTALL_TOKEN}"
+
+
+async def test_get_pr_diff_returns_empty_on_404(adapter_factory: Any) -> None:
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(404, text="Not Found"), auth=_FakeAuth()
+    )
+    assert await adapter.get_pr_diff(_event(issue_number=None, pr_number=7), 7) == ""
+
+
+async def test_get_pr_diff_raises_on_5xx(adapter_factory: Any) -> None:
+    adapter, _ = adapter_factory(lambda req: httpx.Response(503, text="upstream"), auth=_FakeAuth())
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.get_pr_diff(_event(issue_number=None, pr_number=7), 7)
+
+
+# ───── read_file ─────
+
+
+def _contents_payload(text: str | bytes) -> dict[str, str]:
+    """GitHub Contents API returns base64-encoded blobs."""
+    import base64 as _b64
+
+    raw = text.encode() if isinstance(text, str) else text
+    return {"content": _b64.b64encode(raw).decode(), "encoding": "base64"}
+
+
+async def test_read_file_returns_decoded_text(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, json=_contents_payload("hello world\n")),
+        auth=_FakeAuth(),
+    )
+
+    text = await adapter.read_file(_event(), "README.md")
+
+    assert text == "hello world\n"
+    assert str(captured[0].url).endswith("/contents/README.md")
+
+
+async def test_read_file_returns_empty_on_404(adapter_factory: Any) -> None:
+    adapter, _ = adapter_factory(lambda req: httpx.Response(404, text=""), auth=_FakeAuth())
+    assert await adapter.read_file(_event(), "missing.py") == ""
+
+
+async def test_read_file_returns_empty_on_binary(adapter_factory: Any) -> None:
+    # Non-UTF-8 bytes — Contents API still returns base64, but decode fails.
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(200, json=_contents_payload(b"\x80\x81\x82")),
+        auth=_FakeAuth(),
+    )
+    assert await adapter.read_file(_event(), "logo.png") == ""
+
+
+# ───── grep_repo ─────
+
+
+_GREP_RESPONSE = {
+    "total_count": 2,
+    "items": [
+        {
+            "path": "src/auth.py",
+            "text_matches": [
+                {"fragment": "def login(username):\n    raise NotImplementedError()"},
+            ],
+        },
+        {
+            "path": "src/db.py",
+            "text_matches": [{"fragment": "return User.find(login=login)"}],
+        },
+    ],
+}
+
+
+async def test_grep_repo_returns_path_and_fragment(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, json=_GREP_RESPONSE), auth=_FakeAuth()
+    )
+
+    matches = await adapter.grep_repo(_event(), pattern="login", path_glob="src")
+
+    assert len(matches) == 2
+    assert any(m.startswith("src/auth.py:") and "def login" in m for m in matches)
+    assert any(m.startswith("src/db.py:") for m in matches)
+
+    req = captured[0]
+    assert "/search/code" in str(req.url)
+    # GitHub Code Search query string carries the pattern + repo + path qualifiers.
+    # The adapter URL-encodes the whole `q=` value, so decode before matching.
+    from urllib.parse import unquote
+
+    qs = unquote(str(req.url))
+    assert "login" in qs
+    assert f"repo:{_event().repo}" in qs
+    assert "path:src" in qs
+    assert req.headers["accept"].startswith("application/vnd.github.text-match")
+
+
+async def test_grep_repo_omits_path_qualifier_when_glob_none(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, json={"total_count": 0, "items": []}),
+        auth=_FakeAuth(),
+    )
+
+    await adapter.grep_repo(_event(), pattern="login", path_glob=None)
+
+    qs = str(captured[0].url).replace("+", " ")
+    assert "path:" not in qs
+
+
+async def test_grep_repo_caps_to_max_matches(adapter_factory: Any) -> None:
+    items = [{"path": f"src/f{i}.py", "text_matches": [{"fragment": f"hit{i}"}]} for i in range(50)]
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(200, json={"total_count": 50, "items": items}),
+        auth=_FakeAuth(),
+    )
+
+    matches = await adapter.grep_repo(_event(), pattern="hit", path_glob=None, max_matches=10)
+
+    assert len(matches) == 10
+
+
+async def test_grep_repo_returns_empty_on_422(adapter_factory: Any) -> None:
+    # GitHub returns 422 when the search query is invalid or the repo isn't
+    # indexed yet — must not raise; review must still post a reply.
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(422, json={"message": "Validation failed"}),
+        auth=_FakeAuth(),
+    )
+    assert await adapter.grep_repo(_event(), pattern="x", path_glob=None) == []
+
+
+async def test_grep_repo_skips_items_without_text_matches(adapter_factory: Any) -> None:
+    # Defensive: GitHub may return items with no `text_matches` array if the
+    # caller forgot the Accept header — our adapter sets it, but a wire-level
+    # quirk shouldn't crash the agent.
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(200, json={"total_count": 1, "items": [{"path": "x.py"}]}),
+        auth=_FakeAuth(),
+    )
+    assert await adapter.grep_repo(_event(), pattern="x", path_glob=None) == []
+
+
+# ───── create_pr_review ─────
+
+
+_REVIEW_RESPONSE = {"id": 9000, "state": "COMMENTED"}
+
+
+async def test_create_pr_review_posts_to_pulls_reviews_endpoint(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, json=_REVIEW_RESPONSE), auth=_FakeAuth()
+    )
+
+    result = await adapter.create_pr_review(
+        _event(pr_number=77),
+        pr_number=77,
+        body="LGTM overall",
+        event_type="APPROVE",
+    )
+
+    assert result == _REVIEW_RESPONSE
+    req = captured[0]
+    assert req.method == "POST"
+    assert str(req.url) == "https://api.github.com/repos/YiAgent/openbot/pulls/77/reviews"
+    sent = json.loads(req.content)
+    assert sent["body"] == "LGTM overall"
+    assert sent["event"] == "APPROVE"
+    # No comments key means GitHub treats it as a body-only review — that's
+    # exactly what we want for an APPROVE with no inline findings.
+    assert sent.get("comments", []) == []
+
+
+async def test_create_pr_review_sends_inline_comments(adapter_factory: Any) -> None:
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(200, json=_REVIEW_RESPONSE), auth=_FakeAuth()
+    )
+    inline = [
+        {"path": "src/auth.py", "line": 42, "body": "**high** — bug here"},
+        {"path": "src/db.py", "line": 10, "body": "**medium** — race"},
+    ]
+
+    await adapter.create_pr_review(
+        _event(pr_number=12),
+        pr_number=12,
+        body="2 findings",
+        event_type="COMMENT",
+        comments=inline,
+    )
+
+    sent = json.loads(captured[0].content)
+    assert sent["event"] == "COMMENT"
+    assert sent["comments"] == inline
+
+
+async def test_create_pr_review_raises_when_no_auth(adapter_factory: Any) -> None:
+    adapter, _ = adapter_factory(lambda req: httpx.Response(500), auth=None)
+    with pytest.raises(RuntimeError, match="write-back unavailable"):
+        await adapter.create_pr_review(
+            _event(pr_number=1), pr_number=1, body="x", event_type="COMMENT"
+        )
+
+
 # ───── rate-limit warning ─────
 
 
@@ -503,3 +730,212 @@ async def test_aclose_releases_owned_http_client() -> None:
     await adapter.aclose()
     # Calling it twice is safe even though the client is already closed.
     await adapter.aclose()
+
+
+# ───── get_issue ─────
+
+
+async def test_get_issue_batches_three_calls(adapter_factory: Any) -> None:
+    """Issue body + comments + default-branch repo metadata fetched in one batch."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if url.endswith("/issues/42") and not url.endswith("/comments"):
+            return httpx.Response(
+                200,
+                json={
+                    "title": "Bug: pagination off-by-one",
+                    "body": "Page 2 returns rows 9-17 instead of 10-19.",
+                },
+            )
+        if url.endswith("/issues/42/comments"):
+            return httpx.Response(
+                200,
+                json=[
+                    {"user": {"login": "alice"}, "body": "Repro on main."},
+                    {"user": {"login": "bob"}, "body": "Looks like LIMIT/OFFSET swap."},
+                ],
+            )
+        if url.endswith("/repos/YiAgent/openbot"):
+            return httpx.Response(
+                200,
+                json={
+                    "default_branch": "main",
+                    "clone_url": "https://github.com/YiAgent/openbot.git",
+                },
+            )
+        if url.endswith("/repos/YiAgent/openbot/git/ref/heads/main"):
+            return httpx.Response(
+                200,
+                json={"object": {"sha": "deadbeefcafebabe1234567890abcdef12345678"}},
+            )
+        raise AssertionError(f"unexpected url: {url}")
+
+    adapter, captured = adapter_factory(handler, auth=_FakeAuth())
+    issue = await adapter.get_issue(_event(issue_number=42), 42)
+
+    assert issue["title"] == "Bug: pagination off-by-one"
+    assert issue["body"].startswith("Page 2")
+    assert issue["comments"] == [
+        {"author": "alice", "body": "Repro on main."},
+        {"author": "bob", "body": "Looks like LIMIT/OFFSET swap."},
+    ]
+    assert issue["default_branch"] == "main"
+    assert issue["clone_url"] == "https://github.com/YiAgent/openbot.git"
+    assert issue["base_sha"] == "deadbeefcafebabe1234567890abcdef12345678"
+    # 4 requests: issue, comments, repo metadata, default-branch ref
+    assert len(captured) == 4
+
+
+async def test_get_issue_raises_on_404(adapter_factory: Any) -> None:
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(404, json={"message": "Not Found"}),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.get_issue(_event(issue_number=999), 999)
+
+
+async def test_get_issue_handles_empty_body_and_no_comments(adapter_factory: Any) -> None:
+    """Issue with `body: null` and zero comments still produces a valid dict."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if url.endswith("/issues/7") and not url.endswith("/comments"):
+            return httpx.Response(200, json={"title": "thin", "body": None})
+        if url.endswith("/issues/7/comments"):
+            return httpx.Response(200, json=[])
+        if url.endswith("/repos/YiAgent/openbot"):
+            return httpx.Response(
+                200,
+                json={
+                    "default_branch": "trunk",
+                    "clone_url": "https://github.com/YiAgent/openbot.git",
+                },
+            )
+        if "/git/ref/heads/trunk" in url:
+            return httpx.Response(200, json={"object": {"sha": "abc1234567890"}})
+        raise AssertionError(f"unexpected url: {url}")
+
+    adapter, _ = adapter_factory(handler, auth=_FakeAuth())
+    issue = await adapter.get_issue(_event(issue_number=7), 7)
+
+    assert issue["title"] == "thin"
+    assert issue["body"] == ""  # null body normalized to empty string
+    assert issue["comments"] == []
+    assert issue["default_branch"] == "trunk"
+
+
+# ───── create_branch ─────
+
+
+async def test_create_branch_posts_git_refs(adapter_factory: Any) -> None:
+    """POST /repos/{r}/git/refs with body {ref, sha}."""
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(
+            201,
+            json={"ref": "refs/heads/openbot/fix-issue-42-deadbee", "object": {"sha": "deadbee"}},
+        ),
+        auth=_FakeAuth(),
+    )
+
+    await adapter.create_branch(
+        _event(),
+        "openbot/fix-issue-42-deadbee",
+        from_sha="deadbeefcafebabe1234567890abcdef12345678",
+    )
+
+    assert len(captured) == 1
+    req = captured[0]
+    assert req.method == "POST"
+    assert str(req.url) == "https://api.github.com/repos/YiAgent/openbot/git/refs"
+    body = json.loads(req.content)
+    # GitHub expects the *full ref path*, not the short name.
+    assert body == {
+        "ref": "refs/heads/openbot/fix-issue-42-deadbee",
+        "sha": "deadbeefcafebabe1234567890abcdef12345678",
+    }
+
+
+async def test_create_branch_raises_on_422_conflict(adapter_factory: Any) -> None:
+    """422 = branch already exists. Caller surfaces a tailored comment."""
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(422, json={"message": "Reference already exists"}),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await adapter.create_branch(_event(), "openbot/fix-issue-42-deadbee", from_sha="deadbee")
+    assert exc_info.value.response.status_code == 422
+
+
+# ───── open_pull_request ─────
+
+
+async def test_open_pull_request_posts_pulls(adapter_factory: Any) -> None:
+    """draft=False is implicit (GitHub default) — fix loop never opens drafts."""
+    adapter, captured = adapter_factory(
+        lambda req: httpx.Response(
+            201,
+            json={
+                "number": 123,
+                "html_url": "https://github.com/YiAgent/openbot/pull/123",
+                "head": {"ref": "openbot/fix-issue-42-deadbee"},
+            },
+        ),
+        auth=_FakeAuth(),
+    )
+
+    pr = await adapter.open_pull_request(
+        _event(),
+        title="Fix #42: pagination off-by-one",
+        body="Closes #42\n\nSwapped LIMIT and OFFSET.",
+        head="openbot/fix-issue-42-deadbee",
+        base="main",
+    )
+
+    assert pr["html_url"] == "https://github.com/YiAgent/openbot/pull/123"
+    assert len(captured) == 1
+    req = captured[0]
+    assert req.method == "POST"
+    assert str(req.url) == "https://api.github.com/repos/YiAgent/openbot/pulls"
+    body = json.loads(req.content)
+    assert body == {
+        "title": "Fix #42: pagination off-by-one",
+        "body": "Closes #42\n\nSwapped LIMIT and OFFSET.",
+        "head": "openbot/fix-issue-42-deadbee",
+        "base": "main",
+    }
+    # draft must not be in the payload — never set explicitly, never True.
+    assert "draft" not in body
+
+
+async def test_open_pull_request_raises_on_422_no_diff(adapter_factory: Any) -> None:
+    """No-commit branch → 422 "No commits between base and head".
+    Use case surfaces this as the "tests passed but no changes" path."""
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(
+            422,
+            json={
+                "message": "Validation Failed",
+                "errors": [{"message": "No commits between main and ..."}],
+            },
+        ),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await adapter.open_pull_request(_event(), title="t", body="b", head="x", base="main")
+    assert exc_info.value.response.status_code == 422
+
+
+# ───── get_installation_token ─────
+
+
+async def test_get_installation_token_returns_raw_string(adapter_factory: Any) -> None:
+    """The application layer never sees InstallationToken — only the raw bearer."""
+    auth = _FakeAuth()
+    adapter, _ = adapter_factory(lambda req: httpx.Response(500), auth=auth)
+
+    token = await adapter.get_installation_token(_event())
+
+    assert token == _INSTALL_TOKEN
+    assert auth.calls == [_INSTALL_ID]

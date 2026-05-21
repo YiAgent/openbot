@@ -1,4 +1,11 @@
-"""Wire Inspect AI sample runs into LangSmith Experiments — PRD §3.1.
+"""LangSmith trace routing and Experiment projection for agent evals.
+
+This module owns the LangSmith surfaces used by eval tasks:
+
+- ``configure_tracing_for_dataset(...)`` sets LangChain/LangSmith tracing
+  environment variables for agent and judge calls.
+- ``LangSmithExperiment`` projects Inspect sample scores into LangSmith
+  Experiment rows.
 
 Inspect AI ships its own log-and-score pipeline (``.inspect/logs/...``) but
 does not register evals as LangSmith Experiments. This module adds that
@@ -50,7 +57,29 @@ from inspect_ai.scorer import Metric, Score, Scorer, Target, mean, std
 from inspect_ai.scorer import scorer as scorer_decorator
 from inspect_ai.solver import TaskState
 
+from evals.common import config
+
 logger = logging.getLogger(__name__)
+
+
+def configure_tracing_for_dataset(dataset_version: str) -> dict[str, str | None]:
+    """Set LangChain / LangSmith env vars so LLM calls auto-trace."""
+    del dataset_version  # reserved for future per-dataset routing
+
+    if not os.environ.get("LANGSMITH_API_KEY"):
+        return {"project": None, "tracing": None, "source": "skipped:no-api-key"}
+
+    project = os.environ.get(config.LANGSMITH_EVAL_PROJECT_ENV, "")
+    if project:
+        os.environ["LANGSMITH_PROJECT"] = project
+
+    if "LANGSMITH_TRACING" not in os.environ and "LANGCHAIN_TRACING_V2" not in os.environ:
+        os.environ["LANGSMITH_TRACING"] = "true"
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+
+    tracing = os.environ.get("LANGSMITH_TRACING") or os.environ.get("LANGCHAIN_TRACING_V2")
+    source = "eval-project" if project else "eval-project:unset"
+    return {"project": project or None, "tracing": tracing, "source": source}
 
 
 def _utc_now_iso() -> str:
@@ -209,9 +238,9 @@ class LangSmithExperiment:
         is missing — keeps unit tests / offline dev paths working without
         a hard dep on the network.
         """
-        # Lazy import to avoid a cycle — deepagents_baseline pulls in
+        # Lazy import to avoid a cycle — baseline pulls in
         # langchain stacks we don't want loaded at module top in this file.
-        from evals.common.deepagents_baseline import display_model_name
+        from evals.agents.baseline import display_model_name
 
         ts = dt.datetime.now(dt.UTC).strftime("%Y%m%d-%H%M%S")
         experiment_name = f"{dataset_name}-{solver_family}-{ts}"
@@ -427,7 +456,7 @@ class LangSmithExperiment:
                     "scorer_name": scorer_name,
                 }
                 if feedback_config is not None:
-                    from evals.common.langsmith_feedback import ensure_feedback_config
+                    from evals.agents.langsmith_feedback import ensure_feedback_config
 
                     ensure_feedback_config(client, feedback_key, feedback_config)
                 client.create_feedback(

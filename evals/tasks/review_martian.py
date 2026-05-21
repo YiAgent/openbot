@@ -4,7 +4,7 @@ Dataset lives in **LangSmith** (published by
 ``evals/scripts/build_review_martian_dataset.py``); this task pulls Examples via
 ``evals.common.datasets.langsmith_dataset``. There is no local JSONL — routing
 between the public / internal LangSmith projects is driven by the allowlist
-in ``evals.common.langsmith`` (``configure_tracing_for_dataset``).
+in ``evals.agents.langsmith`` (``configure_tracing_for_dataset``).
 
 Run::
 
@@ -24,9 +24,8 @@ from inspect_ai import Task, task
 from inspect_ai.scorer import Score, Target, mean, scorer, stderr
 from inspect_ai.solver import Solver, TaskState
 
+from evals.agents.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.common.datasets import langsmith_dataset
-from evals.common.langsmith import configure_tracing_for_dataset
-from evals.common.langsmith_experiments import LangSmithExperiment
 from evals.scorers.review_judge import (
     MARTIAN_JUDGE_MODEL_ID,
     MARTIAN_JUDGE_VERSION,
@@ -98,9 +97,8 @@ def _build_task(
     configure_tracing_for_dataset(_DATASET_VERSION)
 
     # solver_family is the LangSmith Experiment grouping key. Use the same
-    # vocabulary as fix/test cells ('deepagents_baseline' / 'deepagents_agent'
-    # / future 'openbot_prod') so the Experiments tab stays comparable across
-    # the 4 task families.
+    # deepagents_baseline vocabulary across all v0.1 task agents so the
+    # Experiments tab stays comparable across the 4 task families.
     solver_family = solver_id
 
     # Surface this run as a LangSmith Experiment so review F1 shows up on the

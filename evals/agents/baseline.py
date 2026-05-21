@@ -237,7 +237,7 @@ def build_budget_middlewares(
     """
     # Local import keeps the langchain-pull at this file's top out of
     # convergence_middleware's own import path → avoids a cycle.
-    from evals.common.convergence_middleware import build_convergence_middlewares
+    from evals.agents.convergence_middleware import build_convergence_middlewares
 
     resolved_model_limit = (
         model_call_limit if model_call_limit is not None else get_model_call_limit()
@@ -323,7 +323,7 @@ def _register_baseline_profile(model: str) -> None:
     Enabling the plan tool gives the model a deterministic surface to
     commit interim observations, which empirically reduces stall loops
     on review / fix tasks. The harness-level convergence guards (see
-    :mod:`evals.common.convergence_middleware`) remain as the backstop.
+    :mod:`evals.agents.convergence_middleware`) remain as the backstop.
 
     ``general_purpose_subagent.enabled=False`` is kept because eval cells
     are single-objective — the auto-attached delegation ``task`` tool
@@ -404,7 +404,7 @@ def build_baseline_agent(
     )
     middleware.extend(extra_middleware)
     # Structured output is enforced *after* the agent loop by
-    # :mod:`evals.common.structured_finalizer`, not by binding
+    # :mod:`evals.agents.structured_finalizer`, not by binding
     # ``response_format`` into the deepagents graph. That decoupling
     # is what lets us keep extended thinking on for QA / review
     # without triggering the Anthropic ``tool_choice=forced +
@@ -433,7 +433,7 @@ def build_baseline_agent(
     schema = _resolve_response_schema(response_format)
     # Local import — structured_finalizer imports build_chat_model from
     # this module, so a top-level import would be circular.
-    from evals.common.structured_finalizer import wrap_agent_with_finalizer
+    from evals.agents.structured_finalizer import wrap_agent_with_finalizer
 
     return wrap_agent_with_finalizer(agent, schema=schema, model=model)
 
@@ -479,7 +479,7 @@ def build_run_config(
     The ``run_name`` follows ``{dataset_version}/{sample_id}`` so that each
     sample's trace is identifiable at a glance in the LangSmith project view.
     Metadata is propagated to both the trace AND any LangSmith Experiment
-    Run created by :class:`evals.common.langsmith_experiments.LangSmithExperiment`.
+    Run created by :class:`evals.agents.langsmith.LangSmithExperiment`.
 
     ``recursion_limit`` caps total LangGraph node transitions for the
     invocation. ``None`` → :func:`get_recursion_limit` (env-overridable).

@@ -18,15 +18,14 @@ Sister to :mod:`evals.solvers.swe_fix`. The differences:
 from __future__ import annotations
 
 import logging
-import textwrap
 from typing import Any
 
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 
-from evals.common.deepagents_baseline import (
-    build_baseline_agent,
-    build_run_config,
-    resolve_model,
+from evals.agents.baseline import build_run_config, resolve_model
+from evals.agents.test_generation import (
+    build_test_generation_agent,
+    build_test_generation_user_message,
 )
 from evals.common.predictions import SwtBenchPrediction, empty_swt_prediction
 from evals.common.termination import assert_clean_termination
@@ -34,66 +33,6 @@ from evals.common.usage import aggregate_provider_usage
 from evals.sandboxes import RepoSpec, create_sandbox_for_sample
 
 logger = logging.getLogger(__name__)
-
-_SYSTEM_PROMPT = textwrap.dedent(
-    """\
-    ROLE: You are a senior software engineer writing a regression test
-    for one GitHub issue.
-
-    GOAL: Add ONE pytest test (or a small new ``test_*.py`` file) that
-    FAILS on the current buggy code and would PASS once the issue is
-    fixed. This is the inverse of the fix task: production code stays
-    untouched; the diff must be test-only.
-
-    SUCCESS CRITERIA:
-      - Exactly one new failing test, in the project's existing test
-        layout (use ``glob`` / ``ls`` to find where similar tests live;
-        mirror that location and import style).
-      - No edits to production code. Any non-test file modification will
-        be rejected by the grader.
-      - The test fails for the right reason — i.e., it triggers the
-        actual buggy behaviour described in the issue, not an unrelated
-        ImportError or fixture problem.
-      - No git commit, push, branch switch. Grader captures via
-        ``git diff``.
-
-    ENVIRONMENT:
-      - /workspace: repo at the issue's base commit. No network, no new
-        deps — work with whatever's already installable.
-      - Tools (sandbox-aware, single round-trip each):
-        · ls / read_file / glob / grep — read
-        · write_file (new test file) / edit_file (extend existing test
-          module — exact-string replace, replace_all=True for repeats)
-        · execute — ``bash -lc`` for ``pytest -k …`` iteration only.
-      - Use the plan tool (write_todos) to track: locate the bug, find
-        the test home, draft the test, verify it fails for the right
-        reason.
-
-    WORKFLOW:
-      1. Read the issue. Identify the exact buggy behaviour to trigger
-         (input → wrong output, exception path, etc.).
-      2. Locate the production code that owns this behaviour via
-         grep / glob.
-      3. Locate the existing test file for that production code (search
-         ``tests/`` or ``test_*.py`` near the production module).
-      4. Read enough of the existing tests to copy conventions
-         (fixtures, imports, helpers).
-      5. Write the new test with write_file or extend the existing
-         module with edit_file. ONE test, minimal asserts.
-      6. Optionally run ``pytest -k <new_test_name>`` via execute to
-         confirm it fails — but a confident write without verification
-         is OK if execute is slow.
-      7. Stop. Reply with a one-paragraph summary.
-
-    DISCIPLINE:
-      - Run independent tool calls in parallel (3 reads = 1 round-trip).
-      - Cap at ~10 tool calls before you must commit the test. Most
-        regression tests need ≤5 reads + 1 write.
-      - Do NOT modify production code "just to see what happens" — the
-        grader rejects any production-code change in the diff.
-      - Do NOT write multiple tests. ONE focused failure is the contract.
-    """
-)
 
 
 def _extract_text(message: Any) -> str:
@@ -146,18 +85,8 @@ def deepagents_baseline_swt_solver(*, model: str | None = None) -> Solver:
                 repo_spec=RepoSpec(repo=repo, base_commit=base_commit),
             )
             try:
-                agent = build_baseline_agent(
-                    system_prompt=_SYSTEM_PROMPT,
-                    model=resolved_model,
-                    backend=backend,
-                )
-                user_msg = (
-                    "Write a single regression pytest test (or a new "
-                    "test_*.py file) that FAILS on the current buggy code "
-                    "and would PASS once the following GitHub issue is "
-                    "fixed. Only edit test files.\n\n"
-                    f"<issue>\n{state.input_text}\n</issue>"
-                )
+                agent = build_test_generation_agent(model=resolved_model, backend=backend)
+                user_msg = build_test_generation_user_message(state.input_text)
                 ls_config = build_run_config(
                     sample_id=instance_id,
                     dataset_version=md.get("dataset_version", "test_swt_bench_verified"),

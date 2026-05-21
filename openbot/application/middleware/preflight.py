@@ -36,6 +36,7 @@ from openbot.domain.workflows import WorkflowPhase
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from contextlib import AbstractAsyncContextManager
 
     import redis.asyncio as redis_async
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
     from openbot.application.ports.audit_log import AuditLogPort
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
     from openbot.application.ports.rate_limiter import RateLimiterPort
+    from openbot.application.ports.sandbox import SandboxPort
     from openbot.application.router import Dispatch
     from openbot.domain.config_schema import EffectiveConfig
 
@@ -118,6 +120,12 @@ class PreflightContext:
     # RateLimiterPort adapter — when set, used by RateLimitMiddleware instead
     # of calling Redis directly. Falls open when None (same as no-Redis).
     rate_limiter: RateLimiterPort | None = None
+    # Per-event sandbox factory — slice C. ``None`` means the sandbox
+    # backend is not configured; the fix use case treats that as a
+    # graceful comment ("sandbox unavailable") rather than raising.
+    # Returns an async context manager so ``close()`` runs on every
+    # exit, including the failure paths.
+    sandbox_factory: Callable[[], AbstractAsyncContextManager[SandboxPort]] | None = None
     # Reserved for slice B+: middlewares may stash cached lookups
     # (actor role, cancel set membership) keyed by their middleware name.
     # Frozen at construction; slice A leaves it empty.

@@ -7,9 +7,8 @@ vendored SWT-bench harness (``evals.third_party.swt_bench``) grades
 each prediction offline against the official 6-pass test grid, writing
 ``evals/logs/swt_bench/results/<model>.<run_id>.json``. This script reads that
 report and attaches the **real** ``swt_bench_pass_at_1`` feedback to
-the matching prediction Run — the key
-:mod:`evals.common.langsmith_experiments` deliberately reserved for
-offline grading writeback (see its line 503 docstring).
+the matching prediction Run. That feedback key is reserved for offline
+grading writeback.
 
 Resolution semantics (SWT-Bench):
   * ``instance_id ∈ resolved_ids``    → 1.0 (witnesses-to-pass; W2P)
@@ -46,8 +45,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Reserved key — see evals/common/langsmith_experiments.py:503 for why
-# this name MUST NOT be used by the in-task export sentinel scorer.
+# Reserved offline-grading key. This name MUST NOT be used by the in-task
+# export sentinel scorer.
 FEEDBACK_KEY = "swt_bench_pass_at_1"
 FEEDBACK_CONFIG = {"type": "continuous", "min": 0.0, "max": 1.0}
 
@@ -77,7 +76,7 @@ def _find_runs_by_instance(client: Any, experiment_name: str) -> dict[str, Any]:
     """Return {instance_id: Run} for every sample Run in the experiment.
 
     The in-task scorer creates one Run per sample with ``name =
-    instance_id`` (see langsmith_experiments.py:393); we filter on name
+    instance_id``; we filter on name
     + project_name to map them back. Cheaper than per-instance lookups
     when writing back a 50-sample batch.
     """
@@ -96,7 +95,7 @@ def _write_feedback(
     report_path: Path,
 ) -> None:
     """Attach the swt_bench_pass_at_1 feedback to one prediction Run."""
-    from evals.common.langsmith_feedback import ensure_feedback_config
+    from evals.agents.langsmith_feedback import ensure_feedback_config
 
     ensure_feedback_config(client, FEEDBACK_KEY, FEEDBACK_CONFIG)
     client.create_feedback(

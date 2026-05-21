@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from openbot.application.ports.sandbox import ExecResult
 from tests._fakes.sandbox import FakeSandbox
 
 
@@ -11,19 +12,19 @@ from tests._fakes.sandbox import FakeSandbox
 async def test_run_returns_default_result() -> None:
     sb = FakeSandbox()
     out = await sb.run(command=["echo", "hi"])
-    assert out["exit_code"] == 0
-    assert out["timed_out"] is False
+    assert out.exit_code == 0
+    assert out.timed_out is False
     assert sb.calls == [(["echo", "hi"], None, 60)]
 
 
 @pytest.mark.asyncio
 async def test_queued_result_drains_first() -> None:
-    sb = FakeSandbox(results=[{"stdout": "x", "stderr": "", "exit_code": 1, "timed_out": False}])
+    sb = FakeSandbox(results=[ExecResult(stdout="x", stderr="", exit_code=1, timed_out=False)])
     out = await sb.run(command=["true"])
-    assert out["exit_code"] == 1
+    assert out.exit_code == 1
     # After queue exhausted, falls back to default
     out2 = await sb.run(command=["true"])
-    assert out2["exit_code"] == 0
+    assert out2.exit_code == 0
 
 
 @pytest.mark.asyncio

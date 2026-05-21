@@ -10,7 +10,7 @@ This module exposes an idempotent, per-process-cached
 :func:`ensure_feedback_config` that reconciles the stored config to a
 canonical shape before any ``create_feedback`` is issued. Used both by
 :mod:`evals.scorers.swe_qa_pro` (multi-dim trace feedback) and
-:mod:`evals.common.langsmith_experiments` (single-scalar Experiment Run
+:mod:`evals.agents.langsmith` (single-scalar Experiment Run
 feedback) so any new feedback key declared anywhere in this codebase
 gets a consistent range/type registered on first contact.
 """

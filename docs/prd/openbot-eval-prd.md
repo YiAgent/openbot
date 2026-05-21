@@ -30,7 +30,7 @@
 | **Review** | `review_martian_baseline_crb` | `deepagents_baseline` | none | Martian-overlap (F1) |
 | **Fix** | `fix_swe_bench_verified_deepagents` | `deepagents_baseline` | Local Docker | JSONL Export (Offline Grading) |
 | **Test** | `test_swt_bench_verified_deepagents` | `deepagents_baseline` | Local Docker | custom `swt_bench_scorer` |
-| **Chat** | `chat_swe_qa_pro_openbot` | `deepagents_agent` (+Agent) | Local Docker | SWE-QA-Pro 5-dim judge |
+| **Chat** | `chat_swe_qa_pro_openbot` | `deepagents_baseline` | Local Docker | SWE-QA-Pro 5-dim judge |
 
 ---
 
@@ -118,7 +118,8 @@ make -C evals view-open     # 启动 Inspect 可视化看板
 ## 7. 存储布局 (evals/)
 
 - `tasks/`: 定义 Inspect Task 接入点。
-- `solvers/`: 实现业务逻辑 (DeepAgents)。
+- `agents/`: 统一封装 baseline agent、任务 agent、LangSmith agent tracing/experiment glue。
+- `solvers/`: 只做 TaskState 编排和 prediction/metadata 写回，不直接构造 DeepAgents。
 - `scorers/`: 实现评测算法与 Judge 逻辑。
 - `sandboxes/`: Docker/Modal 环境初始化逻辑。
-- `common/`: LangSmith 实验投影与 Dataset 加载通用函数。
+- `common/`: Dataset、prediction、termination、usage 等非 agent 通用函数。

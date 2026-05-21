@@ -90,22 +90,35 @@ async def test_demo_02_pr_opens_review_stub_acks(webhook_harness: WebhookHarness
     rows = await webhook_harness.audit_rows(delivery_id="d-review-1")
     assert _phases(rows) == [WorkflowPhase.STARTED, WorkflowPhase.COMPLETED]
     assert all(row.workflow is Workflow.REVIEW for row in rows)
-    assert len(webhook_harness.adapter.replies) == 1
-    _, number, body = webhook_harness.adapter.replies[0]
-    assert number == 42
-    assert "OpenBot received this PR" in body
+    # Slice B: review goes through the PR Review API, not a free-form comment.
+    # The fake responder in conftest emits zero findings, so we expect a single
+    # APPROVE review with the summary as the body.
+    assert len(webhook_harness.adapter.pr_reviews) == 1
+    review = webhook_harness.adapter.pr_reviews[0]
+    assert review["pr_number"] == 42
+    assert review["event_type"] == "APPROVE"
+    assert review["body"] == "DeepAgents review summary for PR #42"
+    assert review["comments"] == []
+    # Free-form `reply()` is no longer the review path — this also acts as a
+    # regression guard against accidentally re-routing through `issues/.../comments`.
+    assert webhook_harness.adapter.replies == []
 
 
-# ───────────────────────── demo 03: bot-assigned fix stub ─────────────────────────
+# ───────────────────────── demo 03: bot-assigned fix opens a PR ───────────────
 
 
-async def test_demo_03_bot_assigned_fix_stub(webhook_harness: WebhookHarness) -> None:
-    """Issue assigned to the bot → FIX workflow ACK.
+async def test_demo_03_bot_assigned_fix_opens_pr(
+    webhook_harness: WebhookHarness,
+) -> None:
+    """Issue assigned to the bot → FIX workflow opens a PR.
 
-    Router gates fix on ``assignee.type == "Bot"``. ActorRoleMiddleware
-    then checks the *actor's* role against the FIX allow-list; the
-    RecordingGitHubAdapter defaults actor_role to "admin" so the gate
-    passes without further setup.
+    The harness monkeypatches ``_generate_fix_outcome`` so DeepAgents is
+    never invoked — what we assert is the wiring around it: the sandbox
+    is cloned with the raw clone URL + base SHA + installation token
+    (token injection is the adapter's concern, not the use case's), a
+    branch is created from the base SHA, the PR is opened with
+    ``Closes #N`` in the body, and the user gets a final comment with
+    the PR URL.
     """
     event = webhook_harness.make_event(
         kind=EventKind.ISSUE_ASSIGNED,
@@ -118,10 +131,50 @@ async def test_demo_03_bot_assigned_fix_stub(webhook_harness: WebhookHarness) ->
     rows = await webhook_harness.audit_rows(delivery_id="d-fix-1")
     assert _phases(rows) == [WorkflowPhase.STARTED, WorkflowPhase.COMPLETED]
     assert all(row.workflow is Workflow.FIX for row in rows)
+
+    # Sandbox was cloned with the raw clone URL + base SHA + installation
+    # token. Token injection happens inside ``DaytonaSandboxAdapter`` per
+    # the SandboxPort contract — the use case passes raw values through.
+    assert webhook_harness.sandbox.cloned == [
+        (
+            "https://github.com/acme/test-repo.git",
+            "abc1234567",
+            "fake-installation-token",
+        ),
+    ]
+
+    # Branch was created with the predictable openbot/fix-issue-N-SHORTSHA pattern.
+    assert len(webhook_harness.adapter.branch_creates) == 1
+    repo, branch_ref, from_sha = webhook_harness.adapter.branch_creates[0]
+    assert repo == "acme/test-repo"
+    assert branch_ref.startswith("refs/heads/openbot/fix-issue-11-")
+    assert "abc1234" in branch_ref
+    assert from_sha == "abc1234567"
+
+    # Sandbox push ran between branch creation and PR open. The push
+    # receives the *short* branch_ref (no ``refs/heads/`` prefix) + the
+    # raw token — the adapter handles auth interpolation. Assert on the
+    # full tuple so a regression in any of the three kwargs surfaces here.
+    assert len(webhook_harness.sandbox.pushed) == 1
+    pushed_branch, pushed_message, pushed_token = webhook_harness.sandbox.pushed[0]
+    assert pushed_branch.startswith("openbot/fix-issue-11-")
+    assert not pushed_branch.startswith("refs/heads/")  # short ref, not full
+    assert pushed_message == "openbot: fix #11"
+    assert pushed_token == "fake-installation-token"
+
+    # PR was opened with Closes-#N in the body.
+    assert len(webhook_harness.adapter.pr_creates) == 1
+    pr = webhook_harness.adapter.pr_creates[0]
+    assert pr["base"] == "main"
+    assert pr["head"].startswith("openbot/fix-issue-11-")
+    assert "Closes #11" in pr["body"]
+    assert pr["title"].startswith("[OpenBot]")
+
+    # The user-facing comment carries the PR URL.
     assert len(webhook_harness.adapter.replies) == 1
     _, number, body = webhook_harness.adapter.replies[0]
     assert number == 11
-    assert "fix assignment on issue #11" in body
+    assert "https://github.com/acme/test-repo/pull/" in body
 
 
 # ───────────────────────── demo 04: @openbot chat ack ─────────────────────────
@@ -276,9 +329,12 @@ async def test_demo_07_fork_pr_default_off_ok_to_test_opens(
     ok_rows = await webhook_harness.audit_rows(delivery_id="d-fork-ok")
     assert _phases(ok_rows) == [WorkflowPhase.STARTED, WorkflowPhase.COMPLETED]
     assert all(row.workflow is Workflow.REVIEW for row in ok_rows)
-    # Step 1 posted 1 reply (the BLOCK notice); Step 2 posts another
-    # (the review ACK) — 2 total across the two dispatches.
-    assert len(webhook_harness.adapter.replies) == 2
+    # Step 1 posted 1 reply (the BLOCK notice via `reply`); Step 2 now goes
+    # through the PR Review API (slice B), so `replies` stays at 1 and
+    # `pr_reviews` gets a new entry.
+    assert len(webhook_harness.adapter.replies) == 1
+    assert len(webhook_harness.adapter.pr_reviews) == 1
+    assert webhook_harness.adapter.pr_reviews[0]["pr_number"] == 77
 
 
 # ───────────────────────── demo 08: rate limit announce_once ─────────────────────
@@ -434,3 +490,49 @@ async def test_demo_09_worker_restart_does_not_drop_message(
     assert int(pending_count) == 0, (
         f"expected empty PEL after reclaim+XACK, got pending={pending} (entry_id={entry_id})"
     )
+
+
+# ───────────────────────── demo 10: fix attempt with failing tests ──────────────
+
+
+async def test_demo_10_bot_assigned_fix_tests_failed_yields_comment(
+    webhook_harness: WebhookHarness,
+) -> None:
+    """When the (stubbed) agent reports tests_passed=False, the loop
+    must comment with the truncated test output and NOT open a PR.
+
+    This is the second observable terminal of the fix loop. Per-stage
+    failure paths (clone failed, push failed, etc.) are covered by the
+    use case parametrize in ``tests/application/use_cases/test_fix.py``
+    — this demo carries the contract that the tests-failed terminal
+    also routes correctly through the pre-flight chain + audit pipeline.
+    """
+    webhook_harness.fix_outcome_tests_passed = False
+
+    event = webhook_harness.make_event(
+        kind=EventKind.ISSUE_ASSIGNED,
+        delivery_id="d-fix-10",
+        issue_number=22,
+        raw={"assignee": {"type": "Bot", "login": "openbot[bot]"}},
+    )
+    await webhook_harness.dispatch(event)
+
+    # Workflow still completed (this is a successful agent run with a
+    # bad-test outcome — not a workflow error).
+    rows = await webhook_harness.audit_rows(delivery_id="d-fix-10")
+    assert _phases(rows) == [WorkflowPhase.STARTED, WorkflowPhase.COMPLETED]
+    assert all(row.workflow is Workflow.FIX for row in rows)
+
+    # Sandbox was cloned (with the base SHA from fake_issue) but no
+    # branch/PR was attempted.
+    assert webhook_harness.sandbox.cloned
+    assert webhook_harness.sandbox.cloned[0][1] == "abc1234567"  # ref
+    assert webhook_harness.adapter.branch_creates == []
+    assert webhook_harness.adapter.pr_creates == []
+
+    # User got the tests-failed comment with the test output snippet.
+    assert len(webhook_harness.adapter.replies) == 1
+    _, number, body = webhook_harness.adapter.replies[0]
+    assert number == 22
+    assert "tests did not pass" in body.lower()
+    assert "1 failed" in body

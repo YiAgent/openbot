@@ -23,7 +23,7 @@ import json
 import logging
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, Literal
 from urllib.parse import quote
 
 import httpx
@@ -419,6 +419,230 @@ class GitHubAdapter(ChannelAdapter):
             )
             raise ValueError(f"Unexpected encoding from GitHub Contents API: {encoding!r}")
         return base64.b64decode(encoded, validate=False)
+
+    async def get_pr_diff(self, event: UnifiedEvent, pr_number: int) -> str:
+        """Fetch the PR's unified diff via the Accept-header content switch.
+
+        Endpoint: GET /repos/{owner}/{repo}/pulls/{pr_number}
+        with ``Accept: application/vnd.github.v3.diff`` — GitHub returns the
+        raw diff as ``text/plain`` instead of the usual PR JSON. Bypasses
+        ``_authed_json`` because that helper expects a JSON body.
+
+        Returns ``""`` on 404 (closed / deleted PRs must not block review).
+        Raises on other HTTP errors so transient gateway failures surface.
+        """
+        token = await self._installation_token(event)
+        url = f"{self._api_base}/repos/{event.repo}/pulls/{pr_number}"
+        headers = {**self._headers(token.token), "Accept": "application/vnd.github.v3.diff"}
+        response = await self._get_http().get(url, headers=headers)
+        if response.status_code == 404:
+            return ""
+        response.raise_for_status()
+        return response.text
+
+    async def read_file(self, event: UnifiedEvent, path: str) -> str:
+        """Return UTF-8 text of a repo file, or ``""`` if missing / non-text.
+
+        Delegates to ``fetch_repo_file`` for the bytes-level fetch and then
+        decodes. Binary files and non-UTF-8 encodings collapse to ``""`` so
+        the review agent doesn't have to branch on the failure mode.
+        """
+        raw = await self.fetch_repo_file(event, path)
+        if raw is None:
+            return ""
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            _logger.info(
+                "read_file_not_utf8",
+                extra={"repo": event.repo, "path": path, "size": len(raw)},
+            )
+            return ""
+
+    async def grep_repo(
+        self,
+        event: UnifiedEvent,
+        *,
+        pattern: str,
+        path_glob: str | None = None,
+        max_matches: int = 20,
+    ) -> list[str]:
+        """Search the repo via GitHub Code Search and return ``path: fragment`` hits.
+
+        GitHub Code Search is the cheapest grep we can give the agent — one
+        HTTP call vs O(files) for tree-walk-and-scan. Limitations the caller
+        should know about:
+
+        - Repo must be indexed (fresh repos may 422; we swallow that).
+        - ``path_glob`` is GitHub's ``path:`` qualifier — substring match, not
+          a real glob. ``src`` matches any path containing ``src``.
+        - Pattern is substring + GitHub boolean syntax, not real regex.
+
+        Format: each hit's first text-match fragment is joined with the path
+        on a single line. Line numbers are not surfaced because Code Search
+        only returns byte offsets; callers wanting exact lines should
+        ``read_file`` the path.
+        """
+        token = await self._installation_token(event)
+        # Quote each qualifier value to survive special chars in pattern/path.
+        # ``quote(..., safe="")`` aggressively escapes — GitHub accepts that.
+        q_parts = [pattern, f"repo:{event.repo}"]
+        if path_glob:
+            q_parts.append(f"path:{path_glob}")
+        q = " ".join(q_parts)
+        url = f"{self._api_base}/search/code?q={quote(q, safe='')}"
+        headers = {
+            **self._headers(token.token),
+            "Accept": "application/vnd.github.text-match+json",
+        }
+        response = await self._get_http().get(url, headers=headers)
+        if response.status_code in (404, 422):
+            # 422 = malformed / unindexed; treat both as "no matches" so the
+            # review still goes through. PR author shouldn't see "search died".
+            _logger.info(
+                "grep_repo_no_results",
+                extra={"repo": event.repo, "status": response.status_code},
+            )
+            return []
+        response.raise_for_status()
+        payload = response.json()
+        items = payload.get("items") if isinstance(payload, dict) else None
+        if not isinstance(items, list):
+            return []
+        out: list[str] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            matches = item.get("text_matches")
+            if not isinstance(path, str) or not isinstance(matches, list) or not matches:
+                continue
+            first = matches[0]
+            fragment = (
+                first.get("fragment", "").splitlines()[0]
+                if isinstance(first, dict) and isinstance(first.get("fragment"), str)
+                else ""
+            )
+            out.append(f"{path}: {fragment}".strip())
+            if len(out) >= max_matches:
+                break
+        return out
+
+    async def create_pr_review(
+        self,
+        event: UnifiedEvent,
+        pr_number: int,
+        *,
+        body: str,
+        event_type: Literal["APPROVE", "COMMENT"],
+        comments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Submit a PR review with optional inline comments (slice B).
+
+        Endpoint: POST /repos/{owner}/{repo}/pulls/{pr_number}/reviews
+
+        ``event_type`` is locked to APPROVE / COMMENT — OpenBot is advisory
+        (PRD §13), never block merge with REQUEST_CHANGES.
+
+        Each entry in ``comments`` must shape as ``{path, line, body}``;
+        GitHub rejects inline comments without a line number, so callers
+        fold repo-wide findings into ``body`` instead.
+        """
+        url = f"{self._api_base}/repos/{event.repo}/pulls/{pr_number}/reviews"
+        payload: dict[str, Any] = {"body": body, "event": event_type}
+        if comments:
+            payload["comments"] = comments
+        return await self._authed_json("POST", url, event, json_body=payload)
+
+    async def get_issue(self, event: UnifiedEvent, issue_number: int) -> dict[str, Any]:
+        """Return a normalized issue snapshot for the fix loop.
+
+        Three GitHub calls (issue, comments, repo metadata) + one for the
+        branch ref so we know the SHA to fork the fix branch from. Issued
+        sequentially through ``_authed_json`` so the existing retry +
+        rate-limit-headroom logging fires for each.
+        """
+        base = f"{self._api_base}/repos/{event.repo}"
+        issue = await self._authed_json("GET", f"{base}/issues/{issue_number}", event)
+        comments_raw = await self._authed_json(
+            "GET", f"{base}/issues/{issue_number}/comments", event
+        )
+        repo_meta = await self._authed_json("GET", base, event)
+        default_branch = (
+            str(repo_meta.get("default_branch") or "main")
+            if isinstance(repo_meta, dict)
+            else "main"
+        )
+        ref = await self._authed_json("GET", f"{base}/git/ref/heads/{default_branch}", event)
+        base_sha = (
+            str(ref["object"]["sha"])
+            if isinstance(ref, dict) and isinstance(ref.get("object"), dict)
+            else ""
+        )
+
+        comments: list[dict[str, str]] = []
+        if isinstance(comments_raw, list):
+            for c in comments_raw:
+                if not isinstance(c, dict):
+                    continue
+                user = c.get("user") if isinstance(c.get("user"), dict) else {}
+                comments.append(
+                    {
+                        "author": str(user.get("login") or "unknown"),
+                        "body": str(c.get("body") or ""),
+                    }
+                )
+
+        return {
+            "title": str(issue.get("title") or "") if isinstance(issue, dict) else "",
+            "body": str(issue.get("body") or "") if isinstance(issue, dict) else "",
+            "comments": comments,
+            "base_sha": base_sha,
+            "default_branch": default_branch,
+            "clone_url": (
+                str(repo_meta.get("clone_url") or f"https://github.com/{event.repo}.git")
+                if isinstance(repo_meta, dict)
+                else f"https://github.com/{event.repo}.git"
+            ),
+        }
+
+    async def create_branch(
+        self,
+        event: UnifiedEvent,
+        branch_ref: str,
+        from_sha: str,
+    ) -> None:
+        """POST /repos/{r}/git/refs — prepend ``refs/heads/`` (GitHub requires it)."""
+        url = f"{self._api_base}/repos/{event.repo}/git/refs"
+        await self._authed_json(
+            "POST",
+            url,
+            event,
+            json_body={"ref": f"refs/heads/{branch_ref}", "sha": from_sha},
+        )
+
+    async def open_pull_request(
+        self,
+        event: UnifiedEvent,
+        *,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+    ) -> dict[str, Any]:
+        """POST /repos/{r}/pulls — never sends ``draft`` (default False)."""
+        url = f"{self._api_base}/repos/{event.repo}/pulls"
+        return await self._authed_json(
+            "POST",
+            url,
+            event,
+            json_body={"title": title, "body": body, "head": head, "base": base},
+        )
+
+    async def get_installation_token(self, event: UnifiedEvent) -> str:
+        """Expose the raw bearer for sandbox push URLs (see port docstring)."""
+        token = await self._installation_token(event)
+        return str(token.token)
 
     async def aclose(self) -> None:
         if self._owns_http and self._http is not None:

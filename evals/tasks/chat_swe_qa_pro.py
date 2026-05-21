@@ -46,12 +46,11 @@ from __future__ import annotations
 from inspect_ai import Task, task
 from inspect_ai.scorer import mean, stderr
 
+from evals.agents.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.common.datasets import langsmith_dataset, qa_example_to_agent_sample
-from evals.common.langsmith import configure_tracing_for_dataset
-from evals.common.langsmith_experiments import LangSmithExperiment
 from evals.scorers.swe_qa_judge import SWE_QA_JUDGE_MODEL_ID, SWE_QA_JUDGE_VERSION
 from evals.scorers.swe_qa_pro import swe_qa_pro_judge_scorer
-from evals.solvers.swe_qa import deepagents_agent_swe_qa_solver
+from evals.solvers.swe_qa import deepagents_baseline_swe_qa_solver
 
 _DATASET_VERSION = "chat_swe_qa_pro_v1"
 _DATASET_SOURCE = "langsmith:chat_swe_qa_pro_v1 (mirror of huggingface:TIGER-Lab/SWE-QA-Pro-Bench)"
@@ -66,7 +65,7 @@ def chat_swe_qa_pro_openbot() -> Task:
       1. The solver spins up its own Docker container via
          :class:`evals.sandboxes.DockerSandboxBackend.create_for_sample`,
          which clones the repo at the pinned commit into ``/workspace``.
-      2. ``deepagents_agent_swe_qa_solver`` drives deepagents with the
+      2. ``deepagents_baseline_swe_qa_solver`` drives deepagents with the
          verbatim Appendix D system + user prompts and the sandbox-aware
          ``ls`` / ``glob`` / ``grep`` / ``read_file`` / ``execute`` tools.
       3. The final answer is extracted from the required
@@ -87,12 +86,12 @@ def chat_swe_qa_pro_openbot() -> Task:
     # evals/scripts/build_chat_swe_qa_pro_dataset.py).
     experiment = LangSmithExperiment.start(
         dataset_name=_DATASET_VERSION,
-        solver_family="deepagents_agent",
+        solver_family="deepagents_baseline",
         instance_id_field="id",
     )
     return Task(
         dataset=langsmith_dataset(_DATASET_VERSION, converter=qa_example_to_agent_sample),
-        solver=deepagents_agent_swe_qa_solver(),
+        solver=deepagents_baseline_swe_qa_solver(),
         scorer=experiment.wrap(
             swe_qa_pro_judge_scorer(),
             metrics=[mean(), stderr()],
@@ -103,8 +102,8 @@ def chat_swe_qa_pro_openbot() -> Task:
         metadata={
             "dataset_version": _DATASET_VERSION,
             "dataset_source": _DATASET_SOURCE,
-            "solver_id": "deepagents_agent",
-            "solver_family": "deepagents_agent",
+            "solver_id": "deepagents_baseline",
+            "solver_family": "deepagents_baseline",
             "judge_label": "swe_qa_pro_5dim",
             "judge_model_id": SWE_QA_JUDGE_MODEL_ID,
             "judge_prompt_version": SWE_QA_JUDGE_VERSION,

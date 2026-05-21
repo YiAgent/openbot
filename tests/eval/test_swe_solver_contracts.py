@@ -119,7 +119,7 @@ async def test_swe_fix_solver_emits_swebench_prediction(
             ),
         ],
     )
-    monkeypatch.setattr(swe_fix, "build_baseline_agent", lambda **_: agent)
+    monkeypatch.setattr(swe_fix, "build_fix_agent", lambda **_: agent)
     monkeypatch.setattr(swe_fix, "build_run_config", lambda **_: {"cfg": True})
 
     state = _swe_state(dataset_version="fix_swe_bench_verified")
@@ -171,7 +171,7 @@ async def test_swe_fix_solver_uses_shared_deepagents_model_by_default(
     _patch_backend(monkeypatch, swe_fix, backend)
 
     agent = _FakeAgent(content="fixed summary", usage_metadata=None)
-    monkeypatch.setattr(swe_fix, "build_baseline_agent", lambda **_: agent)
+    monkeypatch.setattr(swe_fix, "build_fix_agent", lambda **_: agent)
     monkeypatch.setattr(swe_fix, "build_run_config", lambda **_: {"cfg": True})
     monkeypatch.delenv("OPENBOT_FIX_MODEL_ID", raising=False)
     monkeypatch.setenv("OPENBOT_DEEPAGENTS_MODEL", "mimo-v2.5")
@@ -200,7 +200,7 @@ async def test_swt_solver_emits_swtbench_prediction(
             ),
         ],
     )
-    monkeypatch.setattr(swe_test, "build_baseline_agent", lambda **_: agent)
+    monkeypatch.setattr(swe_test, "build_test_generation_agent", lambda **_: agent)
     monkeypatch.setattr(swe_test, "build_run_config", lambda **_: {"cfg": True})
 
     state = _swe_state(dataset_version="test_swt_bench_verified")
@@ -231,7 +231,7 @@ async def test_swt_solver_uses_shared_deepagents_model_by_default(
     backend = _FakeBackend()
     _patch_backend(monkeypatch, swe_test, backend)
     agent = _FakeAgent(content="test summary", usage_metadata=None)
-    monkeypatch.setattr(swe_test, "build_baseline_agent", lambda **_: agent)
+    monkeypatch.setattr(swe_test, "build_test_generation_agent", lambda **_: agent)
     monkeypatch.setattr(swe_test, "build_run_config", lambda **_: {"cfg": True})
     monkeypatch.delenv("OPENBOT_TEST_MODEL_ID", raising=False)
     monkeypatch.setenv("OPENBOT_DEEPAGENTS_MODEL", "mimo-v2.5")
@@ -265,7 +265,7 @@ async def test_swe_qa_agent_solver_consumes_structured_response(
 
     backend = _FakeBackend()
     _patch_backend(monkeypatch, swe_qa, backend)
-    monkeypatch.setattr(swe_qa, "build_baseline_agent", lambda **_: _Agent())
+    monkeypatch.setattr(swe_qa, "build_chat_agent", lambda **_: _Agent())
     monkeypatch.setattr(swe_qa, "build_run_config", lambda **_: {"cfg": True})
 
     state = SimpleNamespace(
@@ -279,7 +279,7 @@ async def test_swe_qa_agent_solver_consumes_structured_response(
         },
         output=SimpleNamespace(completion=None),
     )
-    out = await swe_qa.deepagents_agent_swe_qa_solver(model="anthropic:test")(state, None)
+    out = await swe_qa.deepagents_baseline_swe_qa_solver(model="anthropic:test")(state, None)
 
     assert out.output.completion == structured.answer
     pred = out.metadata["prediction"]
@@ -312,7 +312,7 @@ async def test_swe_qa_agent_solver_raises_when_structured_response_missing(
 
     backend = _FakeBackend()
     _patch_backend(monkeypatch, swe_qa, backend)
-    monkeypatch.setattr(swe_qa, "build_baseline_agent", lambda **_: _Agent())
+    monkeypatch.setattr(swe_qa, "build_chat_agent", lambda **_: _Agent())
     monkeypatch.setattr(swe_qa, "build_run_config", lambda **_: {"cfg": True})
 
     state = SimpleNamespace(
@@ -327,6 +327,6 @@ async def test_swe_qa_agent_solver_raises_when_structured_response_missing(
         output=SimpleNamespace(completion=None),
     )
     with pytest.raises(AgentTerminationError):
-        await swe_qa.deepagents_agent_swe_qa_solver()(state, None)
+        await swe_qa.deepagents_baseline_swe_qa_solver()(state, None)
     # Sandbox still torn down on the error path.
     assert backend.closed is True
