@@ -54,15 +54,22 @@ def _issue() -> dict[str, Any]:
 
 @dataclass
 class _FakeSandbox:
-    cloned: list[tuple[str, str | None]] = field(default_factory=list)
+    """In-test stand-in for ``SandboxPort``. Records each call as a
+    ``(repo_url, ref, token)`` or ``(branch_ref, message, token)`` tuple
+    so wiring tests can assert on the exact contract the use case must
+    honour against the real ``DaytonaSandboxAdapter``.
+    """
+
+    workspace: str = "/workspace/repo"
+    cloned: list[tuple[str, str, str]] = field(default_factory=list)
     pushed: list[tuple[str, str, str]] = field(default_factory=list)
     closed: bool = False
 
-    async def clone(self, repo_url: str, *, ref: str | None = None) -> None:
-        self.cloned.append((repo_url, ref))
+    async def clone(self, *, repo_url: str, ref: str, token: str) -> None:
+        self.cloned.append((repo_url, ref, token))
 
-    async def commit_and_push(self, *, branch: str, message: str, remote_url: str) -> None:
-        self.pushed.append((branch, message, remote_url))
+    async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
+        self.pushed.append((branch_ref, message, token))
 
     async def close(self) -> None:
         self.closed = True
@@ -157,9 +164,10 @@ async def test_fetches_issue_clones_and_opens_pr(monkeypatch):
     ctx = _ctx(adapter=adapter, sandbox_factory=lambda: _sandbox_cm(sandbox))
     await fix_module.maybe_run_fix(ctx)
 
-    # Token injected into HTTPS URL; clone uses base SHA.
+    # Use case passes raw clone_url + ref + token through to the port —
+    # token injection is the adapter's job (see SandboxPort docstring).
     assert sandbox.cloned == [
-        ("https://x-access-token:tok123@github.com/o/r.git", "abc1234567"),
+        ("https://github.com/o/r.git", "abc1234567", "tok123"),
     ]
     assert sandbox.closed is True
 
@@ -173,7 +181,10 @@ async def test_fetches_issue_clones_and_opens_pr(monkeypatch):
     assert pr_kwargs["base"] == "main"
     assert pr_kwargs["head"].startswith("openbot/fix-issue-7-")
     assert "Closes #7" in pr_kwargs["body"]
-    assert sandbox.pushed and sandbox.pushed[0][0].startswith("openbot/fix-issue-7-")
+    # commit_and_push receives the *short* branch_ref + the raw token.
+    assert sandbox.pushed
+    assert sandbox.pushed[0][0].startswith("openbot/fix-issue-7-")
+    assert sandbox.pushed[0][2] == "tok123"
 
     # Final comment carries the PR URL.
     assert "https://github.com/o/r/pull/9" in adapter.reply.call_args.args[1]

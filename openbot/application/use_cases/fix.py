@@ -88,18 +88,6 @@ def _truncate(text: str, *, limit: int = _MAX_TEST_OUTPUT_CHARS) -> str:
     return text[:limit] + f"\n\n[truncated — {dropped} bytes of test output omitted]"
 
 
-def _inject_token(clone_url: str, token: str) -> str:
-    """Embed the installation token in an HTTPS clone URL.
-
-    GitHub accepts ``https://x-access-token:<TOKEN>@host/owner/repo.git``
-    as a credential carrier. Refuse non-HTTPS — the token is a bearer
-    secret and inserting it into ``ssh://`` or ``file://`` leaks it.
-    """
-    if not clone_url.startswith("https://"):
-        raise ValueError(f"fix_clone_url_not_https:{clone_url[:32]}")
-    return f"https://x-access-token:{token}@{clone_url[len('https://') :]}"
-
-
 def _short_sha(sha: str) -> str:
     return sha[:7] if sha else "nosha"
 
@@ -186,18 +174,23 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
         base_sha = str(issue.get("base_sha", ""))
         default_branch = str(issue.get("default_branch", "main"))
 
+        # The token is a bearer secret. We pass it through to the
+        # ``SandboxPort`` as a separate argument rather than baking it
+        # into the clone URL — the adapter owns the interpolation and
+        # the HTTPS-only invariant (see ``DaytonaSandboxAdapter._inject_token``).
         try:
             token = await adapter.get_installation_token(event)
-            authed_url = _inject_token(clone_url, token)
         except Exception:
             _logger.exception("fix_token_failed", extra=_log_extra(event))
             await _safe_reply(adapter, event, _CLONE_FAIL)
             audit.outcome = "token_failed"
             return
 
-        async with ctx.sandbox_factory() as sandbox:
+        factory = ctx.sandbox_factory
+        assert factory is not None  # narrowed by the early return above.
+        async with factory() as sandbox:
             try:
-                await sandbox.clone(authed_url, ref=base_sha)
+                await sandbox.clone(repo_url=clone_url, ref=base_sha, token=token)
             except Exception:
                 _logger.exception("fix_clone_failed", extra=_log_extra(event))
                 await _safe_reply(adapter, event, _CLONE_FAIL)
@@ -243,9 +236,9 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
 
             try:
                 await sandbox.commit_and_push(
-                    branch=branch,
+                    branch_ref=branch,
                     message=f"openbot: fix #{issue_number}",
-                    remote_url=authed_url,
+                    token=token,
                 )
             except Exception:
                 _logger.exception("fix_push_failed", extra=_log_extra(event))
