@@ -37,6 +37,7 @@ from openbot.infrastructure.agents._fix_tools import make_fix_tools
 from openbot.infrastructure.llm.model_router import Feature, primary_model_for
 
 if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
     from langgraph.checkpoint.base import BaseCheckpointSaver
 
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
@@ -184,7 +185,7 @@ class DeepAgentsFixResponder:
             response_format=FixOutcomeSchema,
             checkpointer=checkpointer,
         )
-        config: dict = {"recursion_limit": _RECURSION_LIMIT}
+        config: RunnableConfig = {"recursion_limit": _RECURSION_LIMIT}
         if run_id and checkpointer:
             config["configurable"] = {"thread_id": run_id}
         result = await agent.ainvoke(
