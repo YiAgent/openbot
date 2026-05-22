@@ -279,6 +279,48 @@ async def test_worker_stores_last_reviewed_sha_after_successful_review(
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_agent_checkpointer_threaded_to_execute_handler(monkeypatch) -> None:
+    """agent_checkpointer sentinel flows consume_loop → execute_handler."""
+    from tests._fakes.config_loader import FakeConfigLoader
+
+    sentinel = object()
+    captured: list[object] = []
+
+    async def fake_execute_handler(**kw: object) -> None:
+        captured.append(kw.get("agent_checkpointer"))
+
+    monkeypatch.setattr(
+        "openbot.infrastructure.queue.worker.execute_handler",
+        fake_execute_handler,
+    )
+    fake_loader = FakeConfigLoader()
+    monkeypatch.setattr(
+        "openbot.infrastructure.queue.worker.load_for_repo",
+        fake_loader.load_for_repo,
+    )
+
+    redis = fakeredis.aioredis.FakeRedis()
+    await ensure_consumer_group(redis)
+    spec = _make_spec()
+    await redis.xadd(STREAM_NAME, {"json": spec.to_json()})
+
+    shutdown = asyncio.Event()
+    asyncio.get_running_loop().call_later(0.15, shutdown.set)
+    await consume_loop(
+        redis=redis,
+        adapter=AsyncMock(),
+        session_factory=None,
+        consumer_name="test-checkpointer-thread",
+        shutdown=shutdown,
+        read_block_ms=50,
+        agent_checkpointer=sentinel,
+    )
+
+    assert len(captured) == 1
+    assert captured[0] is sentinel
+
+
 @pytest.fixture(autouse=True)
 def _no_anyio_marker():
     """asyncio mode=auto; fixture is a no-op kept as a clear marker."""

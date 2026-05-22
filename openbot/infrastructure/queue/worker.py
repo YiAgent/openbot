@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from openbot.application.dispatcher import execute_handler, run_dispatch
 from openbot.application.router import dispatch_for, upgrade_dispatch
@@ -138,6 +138,7 @@ async def _execute_task_spec(
     redis: redis_async.Redis,
     adapter: GitHubAdapter,
     session_factory: async_sessionmaker[AsyncSession] | None,
+    agent_checkpointer: Any | None = None,
 ) -> None:
     """W1-W8: Process one TaskSpec v3 entry.
 
@@ -223,6 +224,7 @@ async def _execute_task_spec(
                 redis=redis,
                 check_run_id=spec.check_run_id,
                 classifier_output=classifier_output,
+                agent_checkpointer=agent_checkpointer,
             )
         except Exception:
             _logger.exception(
@@ -291,6 +293,7 @@ async def consume_loop(
     consumer_name: str,
     shutdown: asyncio.Event | None = None,
     read_block_ms: int = _READ_BLOCK_MS,
+    agent_checkpointer: Any | None = None,
 ) -> None:
     """One async consumer. Run N copies concurrently for parallelism.
 
@@ -316,6 +319,7 @@ async def consume_loop(
                 adapter=adapter,
                 session_factory=session_factory,
                 consumer_name=consumer_name,
+                agent_checkpointer=agent_checkpointer,
             )
             await _read_and_dispatch(
                 redis=redis,
@@ -323,6 +327,7 @@ async def consume_loop(
                 session_factory=session_factory,
                 consumer_name=consumer_name,
                 read_block_ms=read_block_ms,
+                agent_checkpointer=agent_checkpointer,
             )
         except asyncio.CancelledError:
             raise
@@ -352,6 +357,7 @@ async def _read_and_dispatch(
     session_factory: async_sessionmaker[AsyncSession] | None,
     consumer_name: str,
     read_block_ms: int = _READ_BLOCK_MS,
+    agent_checkpointer: Any | None = None,
 ) -> None:
     """One XREADGROUP round."""
     response = await redis.xreadgroup(
@@ -379,6 +385,7 @@ async def _read_and_dispatch(
                 session_factory=session_factory,
                 entry_id=_as_str(entry_id),
                 fields=fields,
+                agent_checkpointer=agent_checkpointer,
             )
 
 
@@ -388,6 +395,7 @@ async def _reclaim_abandoned(
     adapter: GitHubAdapter,
     session_factory: async_sessionmaker[AsyncSession] | None,
     consumer_name: str,
+    agent_checkpointer: Any | None = None,
 ) -> None:
     """XAUTOCLAIM idle entries from dead consumers."""
     try:
@@ -418,6 +426,7 @@ async def _reclaim_abandoned(
             session_factory=session_factory,
             entry_id=_as_str(entry_id),
             fields=fields,
+            agent_checkpointer=agent_checkpointer,
         )
 
 
@@ -428,6 +437,7 @@ async def _process_entry(
     session_factory: async_sessionmaker[AsyncSession] | None,
     entry_id: str,
     fields: dict,
+    agent_checkpointer: Any | None = None,
 ) -> None:
     """Deserialize → dispatch → ack/dlq one entry."""
     blob = _extract_payload_blob(fields)
@@ -448,6 +458,7 @@ async def _process_entry(
             redis=redis,
             adapter=adapter,
             session_factory=session_factory,
+            agent_checkpointer=agent_checkpointer,
         )
         return
 

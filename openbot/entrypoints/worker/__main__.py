@@ -108,62 +108,66 @@ async def _main() -> int:
         await create_schema(db_engine)
         session_factory = make_session_factory(db_engine)
 
-    await ensure_consumer_group(redis_client)
+    from openbot.infrastructure.persistence.agent_checkpointer import agent_checkpointer
 
-    shutdown = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        # SIGTERM handler must be re-entrant safe; a second signal
-        # is treated as a no-op so a SIGTERM-then-SIGINT pair doesn't
-        # spam the log. The Event is the single source of truth.
-        loop.add_signal_handler(sig, shutdown.set)
+    async with agent_checkpointer(settings.postgres_url) as cp:
+        await ensure_consumer_group(redis_client)
 
-    consumers = [
-        asyncio.create_task(
-            consume_loop(
-                redis=redis_client,
-                adapter=adapter,
-                session_factory=session_factory,
-                consumer_name=f"consumer-{i}",
-                shutdown=shutdown,
-            ),
-            name=f"openbot-consumer-{i}",
-        )
-        for i in range(settings.worker_concurrency)
-    ]
-    _logger.info(
-        "worker_started",
-        extra={
-            "version": __version__,
-            "concurrency": settings.worker_concurrency,
-            "postgres_configured": db_engine is not None,
-        },
-    )
+        shutdown = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            # SIGTERM handler must be re-entrant safe; a second signal
+            # is treated as a no-op so a SIGTERM-then-SIGINT pair doesn't
+            # spam the log. The Event is the single source of truth.
+            loop.add_signal_handler(sig, shutdown.set)
 
-    try:
-        await shutdown.wait()
-    finally:
-        _logger.info("worker_shutting_down")
-        for task in consumers:
-            task.cancel()
-        # Wait for consumers to finish their in-flight iteration; suppress
-        # the CancelledError we just sent. A consumer that hangs past
-        # 30s gets dropped — better an unclean exit than a stuck pod.
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*consumers, return_exceptions=True),
-                timeout=30,
+        consumers = [
+            asyncio.create_task(
+                consume_loop(
+                    redis=redis_client,
+                    adapter=adapter,
+                    session_factory=session_factory,
+                    consumer_name=f"consumer-{i}",
+                    shutdown=shutdown,
+                    agent_checkpointer=cp,
+                ),
+                name=f"openbot-consumer-{i}",
             )
-        except TimeoutError:
-            _logger.warning("worker_shutdown_timeout_consumers_dropped")
+            for i in range(settings.worker_concurrency)
+        ]
+        _logger.info(
+            "worker_started",
+            extra={
+                "version": __version__,
+                "concurrency": settings.worker_concurrency,
+                "postgres_configured": db_engine is not None,
+            },
+        )
 
-        await adapter.aclose()
-        if auth is not None:
-            await auth.aclose()
-        if db_engine is not None:
-            await db_engine.dispose()
-        await redis_client.aclose()
-        _logger.info("worker_stopped")
+        try:
+            await shutdown.wait()
+        finally:
+            _logger.info("worker_shutting_down")
+            for task in consumers:
+                task.cancel()
+            # Wait for consumers to finish their in-flight iteration; suppress
+            # the CancelledError we just sent. A consumer that hangs past
+            # 30s gets dropped — better an unclean exit than a stuck pod.
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*consumers, return_exceptions=True),
+                    timeout=30,
+                )
+            except TimeoutError:
+                _logger.warning("worker_shutdown_timeout_consumers_dropped")
+
+            await adapter.aclose()
+            if auth is not None:
+                await auth.aclose()
+            if db_engine is not None:
+                await db_engine.dispose()
+            await redis_client.aclose()
+            _logger.info("worker_stopped")
     return 0
 
 
