@@ -2,12 +2,10 @@
 
 Plan IDs reference ``docs/_archive/webhook-worker/webhook-worker-test-plan.md``.
 
-I-32 note: when ``enqueue`` raises, the webapp falls through to
-``BackgroundTasks.add_task(_decide_and_enqueue_bg, ...)``. With ``ASGITransport``,
-background tasks ARE executed (Starlette runs them as part of the response
-lifecycle). We patch ``openbot.entrypoints.api.routes.github_webhook.decide_and_enqueue``
-to a no-op so no real GitHub API or LLM calls occur — we only assert the HTTP
-layer degrades gracefully.
+I-32 note: when ``enqueue`` raises, the webapp raises ``RuntimeError``,
+causing Starlette to return HTTP 500. GitHub retries the webhook with
+exponential backoff (up to several days). We patch the queue port so no
+real GitHub API or LLM calls occur.
 """
 
 from __future__ import annotations
