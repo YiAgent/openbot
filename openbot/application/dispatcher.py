@@ -52,6 +52,7 @@ from openbot.application.middleware import (
 )
 from openbot.application.router import SandboxPolicy
 from openbot.application.sandbox_handle import SandboxedHandle
+from openbot.core.metrics import dispatch_sandbox_total
 from openbot.domain.checkout import CheckoutResolutionError
 from openbot.domain.workflows import Workflow
 from openbot.infrastructure.config_loader import load_for_repo
@@ -74,6 +75,25 @@ if TYPE_CHECKING:
     from openbot.domain.events import UnifiedEvent
 
 _logger = logging.getLogger(__name__)
+
+
+def _emit_sandbox_metric(*, feature: str, policy: SandboxPolicy, bypass_source: str) -> None:
+    """Fire ``openbot_dispatch_sandbox_total`` exactly once per dispatch.
+
+    Each call site in ``_run_with_sandbox`` invokes this with the
+    finalised ``policy`` + ``bypass_source`` pair just before / after
+    the handler runs (we always emit, even on the happy path, so
+    dashboards can compute ratios without joining on absence).
+
+    Looked up via ``_sys.modules`` on every call so tests that
+    monkeypatch ``openbot.application.dispatcher.dispatch_sandbox_total``
+    observe the substitution.
+    """
+    _shim = _sys.modules.get("openbot.application.dispatcher")
+    counter = (
+        getattr(_shim, "dispatch_sandbox_total", None) if _shim is not None else None
+    ) or dispatch_sandbox_total
+    counter.labels(feature=feature, policy=policy.value, bypass_source=bypass_source).inc()
 
 
 async def _run_with_sandbox(ctx: PreflightContext) -> None:
@@ -115,6 +135,30 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
         # NO_SANDBOX path: handler runs immediately with ``sandbox_handle
         # is None``. ``ctx.classifier_output`` is already in place — the
         # caller set it before invoking us.
+        #
+        # ``bypass_source`` distinguishes three production-relevant
+        # cases: ``static`` (router shipped NO_SANDBOX), ``classifier``
+        # (OR-merge bypassed at runtime), ``degrade`` (factory missing —
+        # the deployment never wired a sandbox backend). Ops dashboards
+        # need to tell these apart because they imply different fixes.
+        #
+        # Precedence is *cause*-ordered: a static NO_SANDBOX trumps the
+        # classifier (router already decided), and a classifier-driven
+        # bypass trumps a missing factory (the dispatch was going to
+        # skip the sandbox anyway). ``degrade`` only fires when
+        # ``effective_policy`` is REQUIRED but the deployment has no
+        # factory wired — that's the case ops needs to act on.
+        if dispatch.sandbox_policy is SandboxPolicy.NO_SANDBOX:
+            bypass_source = "static"
+        elif effective_policy is SandboxPolicy.NO_SANDBOX:
+            bypass_source = "classifier"
+        else:
+            bypass_source = "degrade"
+        _emit_sandbox_metric(
+            feature=dispatch.feature.value,
+            policy=effective_policy,
+            bypass_source=bypass_source,
+        )
         await dispatch.handler(ctx)
         return
 
@@ -141,6 +185,9 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
                 "error": str(exc),
             },
         )
+        _emit_sandbox_metric(
+            feature=dispatch.feature.value, policy=effective_policy, bypass_source="degrade"
+        )
         await dispatch.handler(ctx)
         return
     except Exception:
@@ -151,6 +198,9 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
                 "repo": event.repo,
                 "feature": dispatch.feature.value,
             },
+        )
+        _emit_sandbox_metric(
+            feature=dispatch.feature.value, policy=effective_policy, bypass_source="degrade"
         )
         await dispatch.handler(ctx)
         return
@@ -176,8 +226,20 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
                     },
                     exc_info=True,
                 )
+                _emit_sandbox_metric(
+                    feature=dispatch.feature.value,
+                    policy=effective_policy,
+                    bypass_source="degrade",
+                )
                 await dispatch.handler(ctx)
                 return
+            # Happy path — sandbox + clone both succeeded. Emit ``none``
+            # so the dashboard's "sandbox open" rate is computable.
+            _emit_sandbox_metric(
+                feature=dispatch.feature.value,
+                policy=effective_policy,
+                bypass_source="none",
+            )
             ctx_with_handle = dataclasses.replace(
                 ctx,
                 sandbox_handle=SandboxedHandle(sandbox=sandbox, checkout=checkout, token=token),
@@ -194,6 +256,9 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
                 "repo": event.repo,
                 "feature": dispatch.feature.value,
             },
+        )
+        _emit_sandbox_metric(
+            feature=dispatch.feature.value, policy=effective_policy, bypass_source="degrade"
         )
         await dispatch.handler(ctx)
 

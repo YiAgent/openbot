@@ -89,6 +89,27 @@ try:
         "openbot_queue_depth",
         "Number of entries in the openbot:workflows Redis stream",
     )
+    # Unified-sandbox-entry slice. Tracks each dispatch's sandbox
+    # provisioning decision so ops dashboards can answer "how often do
+    # we open a sandbox vs bypass" and "which bypass source dominates"
+    # without scraping logs. ``bypass_source`` cardinality is bounded:
+    # ``none`` (happy path), ``static`` (router said NO_SANDBOX),
+    # ``classifier`` (OR-merge bypassed), ``degrade`` (provisioning
+    # tried and failed).
+    _dispatch_sandbox_total = Counter(
+        "openbot_dispatch_sandbox_total",
+        "Sandbox provisioning outcomes per dispatch",
+        ["feature", "policy", "bypass_source"],
+    )
+    # Fail-open counter for the LLM intent classifier. Increments once
+    # per swallowed exception in ``classify_for_dispatch``; that helper
+    # never re-raises, so without this metric the only sign of a
+    # regressing classifier is a buried WARN log.
+    _classifier_error_total = Counter(
+        "openbot_classifier_error_total",
+        "Classifier exceptions swallowed by the fail-open wrap",
+        ["feature"],
+    )
 
     class WorkflowCounter:
         def labels(self, **kwargs: Any) -> WorkflowCounter:
@@ -125,9 +146,36 @@ try:
         def dec(self, amount: float = 1) -> None:
             _queue_depth.dec(amount)
 
+    class _LabelledSentryCounter:
+        """Generic Prometheus + Sentry mirror for labelled counters.
+
+        Used by metrics that are too narrow to warrant a hand-rolled
+        wrapper class but still want the Sentry side-channel for
+        production observability. Constructor takes the underlying
+        prometheus counter + the Sentry metric name; ``labels()``
+        captures the kwargs for the next ``inc()``.
+        """
+
+        def __init__(self, counter: Counter, sentry_name: str) -> None:
+            self._counter = counter
+            self._sentry_name = sentry_name
+            self._kwargs: dict[str, str] = {}
+
+        def labels(self, **kwargs: Any) -> _LabelledSentryCounter:
+            self._kwargs = kwargs
+            return self
+
+        def inc(self, amount: float = 1) -> None:
+            self._counter.labels(**self._kwargs).inc(amount)
+            from openbot.core.sentry_metrics import metrics
+
+            metrics.incr(self._sentry_name, amount, tags=self._kwargs)
+
     workflow_total = WorkflowCounter()
     llm_cost_usd_total = CostCounter()
     queue_depth = QueueGauge()
+    dispatch_sandbox_total = _LabelledSentryCounter(_dispatch_sandbox_total, "dispatch_sandbox")
+    classifier_error_total = _LabelledSentryCounter(_classifier_error_total, "classifier_error")
 
 except ImportError:
     _logger.warning("prometheus_client_not_installed_metrics_disabled")
@@ -159,9 +207,34 @@ except ImportError:
         def dec(self, amount: float = 1) -> None:
             pass
 
+    class SentryOnlyLabelledCounter:
+        """Sentry-only mirror for ``dispatch_sandbox_total`` /
+        ``classifier_error_total`` when ``prometheus_client`` is absent
+        (slim CI image). Same protocol as the Prometheus-backed
+        ``_LabelledSentryCounter`` so call sites don't branch."""
+
+        def __init__(self, sentry_name: str) -> None:
+            self._sentry_name = sentry_name
+            self._kwargs: dict[str, str] = {}
+
+        def labels(self, **kwargs: Any) -> SentryOnlyLabelledCounter:
+            self._kwargs = kwargs
+            return self
+
+        def inc(self, amount: float = 1) -> None:
+            metrics.incr(self._sentry_name, amount, tags=self._kwargs)
+
     workflow_total = SentryOnlyWorkflowCounter()
     llm_cost_usd_total = SentryOnlyCostCounter()
     queue_depth = SentryOnlyQueueGauge()
+    dispatch_sandbox_total = SentryOnlyLabelledCounter("dispatch_sandbox")
+    classifier_error_total = SentryOnlyLabelledCounter("classifier_error")
 
 
-__all__ = ["llm_cost_usd_total", "queue_depth", "workflow_total"]
+__all__ = [
+    "classifier_error_total",
+    "dispatch_sandbox_total",
+    "llm_cost_usd_total",
+    "queue_depth",
+    "workflow_total",
+]

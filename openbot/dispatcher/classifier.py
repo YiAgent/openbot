@@ -14,6 +14,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from openbot.core.metrics import classifier_error_total
 from openbot.dispatcher.context import extract_event_context
 from openbot.domain.workflows import Feature
 
@@ -295,4 +296,16 @@ async def classify_for_dispatch(
             "classifier_exception_in_dispatch",
             extra={"delivery_id": event.delivery_id, "repo": event.repo},
         )
+        # ``classifier_error_total{feature}`` is the only metric signal
+        # that the classifier is regressing — the fail-open return below
+        # means the dispatcher itself never raises, so a buried WARN log
+        # is otherwise the only trace. Looked up via ``sys.modules`` so
+        # tests can monkeypatch the module attribute.
+        import sys as _sys
+
+        _shim = _sys.modules.get("openbot.dispatcher.classifier")
+        _counter = (
+            getattr(_shim, "classifier_error_total", None) if _shim is not None else None
+        ) or classifier_error_total
+        _counter.labels(feature=feature.value).inc()
         return None
