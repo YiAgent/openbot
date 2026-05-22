@@ -2,9 +2,8 @@
 
 Verifies the observable-outcome criteria from spec §8:
   F-01  decide_and_enqueue enqueues TaskSpec v3 (not QueuePayload)
-  F-02  Worker routes v3 TaskSpec to execute_handler (not run_dispatch)
-  F-03  Worker falls back to run_dispatch for legacy v2 QueuePayload entries
-  F-04  cancel-openbot in initial_labels → worker quick-exit, no handler
+  F-02  Worker routes v3 TaskSpec to execute_handler
+  F-04  cancel-openbot in initial_labels -> worker quick-exit, no handler
   F-05  Preflight chain contains 10 middleware in the locked order
 """
 
@@ -43,7 +42,7 @@ from tests._fakes.config_loader import FakeConfigLoader
 from tests._fakes.queue import FakeQueue
 from tests.application.middleware.conftest import make_event
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# -- helpers ------------------------------------------------------------------
 
 
 def _make_spec(initial_labels: list[str] | None = None) -> TaskSpec:
@@ -55,7 +54,7 @@ def _make_spec(initial_labels: list[str] | None = None) -> TaskSpec:
     return TaskSpec.from_event_and_dispatch(event, dispatch, initial_labels=initial_labels or [])
 
 
-# ── F-01 ─────────────────────────────────────────────────────────────────────
+# -- F-01 ---------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -85,35 +84,27 @@ async def test_f01_decide_and_enqueue_produces_task_spec_v3() -> None:
     assert len(queue.task_specs) == 1, f"Expected 1 task_spec, got {len(queue.task_specs)}"
     spec = queue.task_specs[0]
     assert spec.spec_version == 3
-    assert spec.classifier_skipped is True
+    # The classifier runs inside decide_and_enqueue, so classifier_skipped is False
+    assert spec.classifier_skipped is False
 
     # The old enqueue() path (QueuePayload) should NOT have been called
     assert queue.calls == [], "QueuePayload.enqueue() must NOT be called for v3 path"
 
 
-# ── F-02 ─────────────────────────────────────────────────────────────────────
+# -- F-02 ---------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_f02_worker_routes_v3_to_execute_handler(monkeypatch: pytest.MonkeyPatch) -> None:
-    """F-02: Worker calls execute_handler (not run_dispatch) for v3 TaskSpec blobs."""
+    """F-02: Worker calls execute_handler for v3 TaskSpec blobs."""
     handler_calls: list[str] = []
 
     async def fake_execute_handler(**kw: object) -> None:
         handler_calls.append(cast(UnifiedEvent, kw["event"]).delivery_id)
 
-    run_dispatch_calls: list[str] = []
-
-    async def fake_run_dispatch(**kw: object) -> None:
-        run_dispatch_calls.append(cast(UnifiedEvent, kw["event"]).delivery_id)
-
     monkeypatch.setattr(
         "openbot.infrastructure.queue.worker.execute_handler",
         fake_execute_handler,
-    )
-    monkeypatch.setattr(
-        "openbot.infrastructure.queue.worker.run_dispatch",
-        fake_run_dispatch,
     )
     monkeypatch.setattr(
         "openbot.infrastructure.queue.worker.load_for_repo",
@@ -139,74 +130,14 @@ async def test_f02_worker_routes_v3_to_execute_handler(monkeypatch: pytest.Monke
 
     assert len(handler_calls) == 1
     assert handler_calls[0] == spec.delivery_id
-    assert run_dispatch_calls == [], "run_dispatch must NOT be called for v3 TaskSpec"
 
 
-# ── F-03 ─────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_f03_worker_falls_back_to_run_dispatch_for_v2(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """F-03: Worker routes legacy v2 QueuePayload blobs to run_dispatch."""
-    from openbot.application.router import dispatch_for
-    from openbot.infrastructure.queue.payload import QueuePayload
-
-    run_dispatch_calls: list[str] = []
-
-    async def fake_run_dispatch(**kw: object) -> None:
-        run_dispatch_calls.append(cast(UnifiedEvent, kw["event"]).delivery_id)
-
-    execute_handler_calls: list[str] = []
-
-    async def fake_execute_handler(**kw: object) -> None:
-        execute_handler_calls.append(cast(UnifiedEvent, kw["event"]).delivery_id)
-
-    monkeypatch.setattr(
-        "openbot.infrastructure.queue.worker.run_dispatch",
-        fake_run_dispatch,
-    )
-    monkeypatch.setattr(
-        "openbot.infrastructure.queue.worker.execute_handler",
-        fake_execute_handler,
-    )
-
-    redis = fakeredis.aioredis.FakeRedis()
-    await ensure_consumer_group(redis)
-
-    event = make_event()
-    dispatch = dispatch_for(event)
-    assert dispatch is not None
-    payload = QueuePayload.from_event(
-        event,
-        feature=dispatch.feature,
-        task_id=dispatch.task_id,
-    )
-    await redis.xadd(STREAM_NAME, {"json": payload.to_json()})
-
-    shutdown = asyncio.Event()
-    asyncio.get_running_loop().call_later(0.15, shutdown.set)
-    await consume_loop(
-        redis=redis,
-        adapter=AsyncMock(),
-        session_factory=None,
-        consumer_name="f03-test",
-        shutdown=shutdown,
-        read_block_ms=50,
-    )
-
-    assert len(run_dispatch_calls) == 1
-    assert run_dispatch_calls[0] == event.delivery_id
-    assert execute_handler_calls == [], "execute_handler must NOT be called for v2 payload"
-
-
-# ── F-04 ─────────────────────────────────────────────────────────────────────
+# -- F-04 ---------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_f04_cancel_label_quick_exit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """F-04: cancel-openbot in initial_labels → worker quick-exit, no handler, PEL empty."""
+    """F-04: cancel-openbot in initial_labels -> worker quick-exit, no handler, PEL empty."""
     handler_calls: list[str] = []
 
     async def fake_execute_handler(**_kw: object) -> None:
@@ -242,12 +173,12 @@ async def test_f04_cancel_label_quick_exit(monkeypatch: pytest.MonkeyPatch) -> N
         "execute_handler must NOT be called when cancel-openbot label is set"
     )
 
-    # PEL must be empty — entry was XACK'd
+    # PEL must be empty -- entry was XACK'd
     pending = await redis.xpending(STREAM_NAME, GROUP_NAME)
     assert pending["pending"] == 0, "Entry must be XACK'd (PEL must be empty)"
 
 
-# ── F-05 ─────────────────────────────────────────────────────────────────────
+# -- F-05 ---------------------------------------------------------------------
 
 
 def test_f05_preflight_chain_has_locked_middleware_order() -> None:
