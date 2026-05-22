@@ -20,7 +20,7 @@
 
 | Part | Status | Commits |
 |---|---|---|
-| 1 — Port + key + in-memory cache | 🚧 in progress (1.1 ✅ `28c20b3`, 1.2 ✅ `78c14e2`; 1.3–1.4 pending) | — |
+| 1 — Port + key + in-memory cache | 🚧 in progress (1.1 ✅ `28c20b3`, 1.2 ✅ `78c14e2`, 1.3 ✅ `4201223`; 1.4 pending) | — |
 | 2 — Dispatcher wiring + observability | ⏳ pending | — |
 | 3 — Daytona snapshot adapter | ⏳ pending | — |
 | 4 — Rollout, guardrails, E2E | ⏳ pending | — |
@@ -111,17 +111,18 @@ If a name in a later part doesn't match this table, **fix the earliest part and 
   - Uses `hashlib.sha256`, 24-char hex prefix.
 - [x] Run `make check`. Commit: `feat(application): sandbox cache key derivation` — landed as `78c14e2`. (Note: `make check` is currently red on unrelated `test_agent_checkpointer.py` from commit `e0bb06f`; this task's own files pass fmt + lint + tests cleanly.)
 
-### Task 1.3: `NoOpSandboxCache`
+### Task 1.3: `NoOpSandboxCache` ✅ (commit `4201223`)
 
-- [ ] **Write failing test** `tests/infrastructure/sandboxes/test_cache_noop.py`:
+- [x] **Write failing test** `tests/infrastructure/sandboxes/test_cache_noop.py`:
   - `test_noop_acquire_returns_none` — even with a valid `CheckoutSpec`, returns `None`.
   - `test_noop_publish_is_idempotent_noop` — call twice with the same handle; never raises.
   - `test_noop_evict_repo_is_idempotent_noop`.
   - `test_noop_satisfies_port` — `isinstance(NoOpSandboxCache(), SandboxCachePort) is True`.
-- [ ] **Implement** `openbot/infrastructure/sandboxes/cache_noop.py`:
+- [x] **Implement** `openbot/infrastructure/sandboxes/cache_noop.py`:
   - Class implements the three methods; each returns `None` (or does nothing).
-  - Module docstring: "Default cache backend for deployments without snapshot support. Cold path always runs."
-- [ ] Run `make check`. Commit: `feat(sandbox-cache): NoOpSandboxCache default backend`.
+  - Module docstring covers the null-object rationale (no `if cache is None` guards at the call site).
+  - Also exported from `openbot/infrastructure/sandboxes/__init__.py` alongside `DaytonaSandboxAdapter` / `FakeSandboxAdapter` so wiring imports stay tidy.
+- [x] Run targeted tests + lint + import contract; commit as `feat(sandbox-cache): NoOpSandboxCache default backend`.
 
 ### Task 1.4: `InMemorySandboxCache` (LRU + TTL warm pool)
 
