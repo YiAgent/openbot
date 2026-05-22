@@ -18,7 +18,7 @@ The fixture builds a **WebhookHarness** with three swappable backends:
 
 We deliberately bypass ``TestClient(app)`` for chain-behavior tests because
 the webhook → queue serialization is already locked down by
-``tests/test_webhook_endpoint.py``. Demos 1-8 call ``run_dispatch`` directly
+``tests/test_webhook_endpoint.py``. Demos 1-8 call ``execute_handler`` directly
 with a synthetic ``UnifiedEvent``; demo 9 exercises the worker loop end-to-
 end. Doing it this way keeps each test under 60 lines and avoids tying
 demo assertions to the specific shape of FastAPI BackgroundTask scheduling.
@@ -40,7 +40,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from openbot.application.dispatcher import run_dispatch
+from openbot.application.dispatcher import _run_with_sandbox, build_preflight_chain
+from openbot.application.middleware.preflight import run_preflight
 from openbot.application.router import dispatch_for
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.infrastructure.adapters.github import GitHubAdapter
@@ -300,7 +301,7 @@ class WebhookHarness:
     # ``fix_outcome_tests_passed = False`` instead of swapping the fake.
     sandbox: FakeSandbox = field(default_factory=FakeSandbox)
     fix_outcome_tests_passed: bool = True
-    # Sandbox factory injected into ``run_dispatch`` for the FIX use case.
+    # Sandbox factory injected into ``execute_handler`` for the FIX use case.
     # ``None`` keeps the other demos working unchanged (the use case
     # then takes the "sandbox not configured" early-return). The
     # ``webhook_harness`` fixture sets this to a working factory.
@@ -342,25 +343,40 @@ class WebhookHarness:
         )
 
     async def dispatch(self, event: UnifiedEvent) -> None:
-        """Run the full pre-flight chain + workflow handler for ``event``.
+        """Run the full preflight chain + workflow handler for ``event``.
 
-        Mirrors what the worker does after popping an entry from the queue.
+        Mirrors what the ingest path + worker together do: preflight first,
+        then sandbox + handler — using a SINGLE shared ``PreflightContext`` so
+        cache flags set by ``AuditStartMiddleware`` are visible to the handler's
+        ``audit_lifecycle`` helper (prevents double STARTED audit rows).
+
         ``dispatch_for`` may return ``None`` (router decides it's not relevant);
         we treat that as a no-op so tests can pass irrelevant events without
         a special-case branch.
         """
+        from openbot.application.middleware import MiddlewareResult, PreflightContext
+
         decision: Dispatch | None = dispatch_for(event)
         if decision is None:
             return
-        await run_dispatch(
-            adapter=self.adapter,
+        ctx = PreflightContext(
             event=event,
             dispatch=decision,
+            config=self.config,
+            adapter=self.adapter,
             session_factory=self.session_factory,
             redis=self.redis,
             rate_limiter=RedisRateLimiter(self.redis),
             sandbox_factory=self.sandbox_factory_override,
         )
+        import contextlib
+
+        chain = build_preflight_chain()
+        preflight_decision = await run_preflight(ctx, chain)
+        if preflight_decision.result is MiddlewareResult.BLOCKED:
+            return
+        with contextlib.suppress(Exception):
+            await _run_with_sandbox(ctx)
 
     async def audit_rows(self, *, delivery_id: str | None = None) -> Sequence[AuditLog]:
         """All audit_log rows, optionally filtered by ``delivery_id``."""
@@ -404,15 +420,21 @@ async def webhook_harness(
 
     harness = WebhookHarness(adapter=adapter, redis=redis, session_factory=session_factory)
 
-    # The real loader reaches out to GitHub over httpx. In tests we just
-    # hand back whatever the test put on ``harness.config`` (frozen
-    # dataclass — mutation requires ``dataclasses.replace``).
+    # ``WebhookHarness.dispatch`` uses ``self.config`` directly (no load_for_repo
+    # call in the harness path). For the demo-09 worker path we patch the
+    # worker's load_for_repo so it returns harness.config without hitting GitHub.
     async def _fake_load_for_repo(_adapter: Any, _event: UnifiedEvent) -> EffectiveConfig:
         return harness.config
 
-    monkeypatch.setattr("openbot.application.dispatcher.load_for_repo", _fake_load_for_repo)
+    monkeypatch.setattr("openbot.infrastructure.queue.worker.load_for_repo", _fake_load_for_repo)
 
-    async def _fake_chat_reply(*, event: UnifiedEvent, user_request: str) -> str:
+    async def _fake_chat_reply(
+        *,
+        event: UnifiedEvent,
+        user_request: str,
+        run_id: str | None = None,
+        checkpointer: Any = None,
+    ) -> str:
         return f"DeepAgents test reply: {user_request}"
 
     monkeypatch.setattr(
@@ -456,7 +478,13 @@ async def webhook_harness(
     harness.sandbox_factory_override = _sandbox_factory
 
     async def _fake_fix_outcome(
-        *, sandbox: Any, event: UnifiedEvent, adapter: Any, issue: dict[str, Any]
+        *,
+        sandbox: Any,
+        event: UnifiedEvent,
+        adapter: Any,
+        issue: dict[str, Any],
+        run_id: str | None = None,
+        checkpointer: Any = None,
     ) -> _FixOutcome:
         # Default: tests passed. Demos that need the tests-failed branch
         # flip ``harness.fix_outcome_tests_passed = False`` before dispatch.

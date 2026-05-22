@@ -158,7 +158,8 @@ async def test_webhook_enqueues_when_redis_present(
     invoking the in-process BackgroundTask path. Slice D behavior."""
     import fakeredis.aioredis  # local import: dev-only dep
 
-    from openbot.infrastructure.queue.payload import STREAM_NAME, deserialize_payload
+    from openbot.infrastructure.queue.payload import STREAM_NAME
+    from openbot.infrastructure.queue.task_spec import deserialize_task_spec
 
     monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SECRET)
     get_settings.cache_clear()
@@ -195,10 +196,10 @@ async def test_webhook_enqueues_when_redis_present(
         entries = await fake.xrange(STREAM_NAME, count=10)
         assert len(entries) == 1
         _entry_id, fields = entries[0]
-        restored = deserialize_payload(fields["json"])
+        restored = deserialize_task_spec(fields["json"])
         assert restored is not None
         assert restored.delivery_id == "queue-test-id"
-        assert restored.feature == "triage"
+        assert restored.scenario == "triage"
         assert restored.repo == "YiAgent/openbot"
     finally:
         get_settings.cache_clear()

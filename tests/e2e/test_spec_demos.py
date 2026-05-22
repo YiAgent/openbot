@@ -23,14 +23,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from openbot.application.router import derive_task_id
 from openbot.domain.events import EventKind
-from openbot.domain.workflows import Feature
 from openbot.infrastructure.config_loader import RateLimitConfig
 from openbot.infrastructure.persistence.models import Workflow, WorkflowPhase
 from openbot.infrastructure.queue import worker as queue_worker
-from openbot.infrastructure.queue.enqueue import enqueue
-from openbot.infrastructure.queue.payload import QueuePayload
+from openbot.infrastructure.queue.enqueue import enqueue_task_spec
+from openbot.infrastructure.queue.task_spec import TaskSpec
 from openbot.infrastructure.queue.worker import consume_loop, ensure_consumer_group
 
 if TYPE_CHECKING:
@@ -419,18 +417,18 @@ async def test_demo_09_worker_restart_does_not_drop_message(
 
     await ensure_consumer_group(redis)
 
-    # Build a representative payload — issue.opened triage event.
+    # Build a representative TaskSpec v3 — issue.opened triage event.
+    from openbot.application.router import dispatch_for
+
     event = webhook_harness.make_event(
         kind=EventKind.ISSUE_OPENED,
         delivery_id="d-worker-restart",
         issue_number=21,
     )
-    payload = QueuePayload.from_event(
-        event,
-        feature=Feature.TRIAGE,
-        task_id=derive_task_id(event),
-    )
-    entry_id = await enqueue(redis, payload)
+    dispatch = dispatch_for(event)
+    assert dispatch is not None, "dispatch_for returned None for ISSUE_OPENED"
+    spec = TaskSpec.from_event_and_dispatch(event, dispatch, initial_labels=[])
+    entry_id = await enqueue_task_spec(redis, spec)
 
     # Simulate the "first consumer crashed mid-handler": read the entry
     # under a dead consumer name without XACKing. The entry now sits in

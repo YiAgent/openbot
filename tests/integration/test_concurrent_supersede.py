@@ -26,7 +26,8 @@ from __future__ import annotations
 import asyncio
 
 from openbot.infrastructure.persistence.models import State
-from openbot.infrastructure.queue import STREAM_NAME, deserialize_payload
+from openbot.infrastructure.queue import STREAM_NAME
+from openbot.infrastructure.queue.task_spec import deserialize_task_spec
 from tests.state_machine._payloads import _REPO, issue_body, pr_body, sign
 
 from .conftest import SMHarness
@@ -38,7 +39,7 @@ _ISSUE_RK = f"github:{_REPO}:issue:42"
 async def _stream_run_ids(sm: SMHarness, *, skip: int = 0) -> list[str]:
     """Read run_ids from all current stream entries (skipping the first ``skip``).
 
-    The stream stores ``QueuePayload`` JSON. We deserialize it to get the
+    The stream stores ``TaskSpec`` v3 JSON. We deserialize it to get the
     ``run_id`` field (the state-machine run identifier) rather than relying
     on the HTTP response's ``task_id`` (which is the delivery-derived id —
     a different identifier space).
@@ -46,9 +47,9 @@ async def _stream_run_ids(sm: SMHarness, *, skip: int = 0) -> list[str]:
     entries = await sm.redis.xrange(STREAM_NAME, count=20)
     run_ids = []
     for _, fields in entries[skip:]:
-        p = deserialize_payload(fields["json"])
-        if p and p.run_id:
-            run_ids.append(p.run_id)
+        spec = deserialize_task_spec(fields["json"])
+        if spec and spec.run_id:
+            run_ids.append(spec.run_id)
     return run_ids
 
 

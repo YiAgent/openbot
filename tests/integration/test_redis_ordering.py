@@ -29,7 +29,8 @@ receive side.
 
 from __future__ import annotations
 
-from openbot.infrastructure.queue import STREAM_NAME, deserialize_payload
+from openbot.infrastructure.queue import STREAM_NAME
+from openbot.infrastructure.queue.task_spec import deserialize_task_spec
 from tests.state_machine._payloads import _REPO, issue_body, pr_body, sign
 
 from .conftest import SMHarness
@@ -59,10 +60,10 @@ async def test_pr_opened_db_committed_before_stream_entry(sm: SMHarness) -> None
     _entry_id, fields = entries[0]
 
     # Deserialize the queue payload from the entry.
-    payload = deserialize_payload(fields["json"])
+    payload = deserialize_task_spec(fields["json"])
     assert payload is not None, "Stream entry must contain a valid JSON payload"
     assert payload.resource_key == _PR_RK
-    assert payload.run_id is not None, "v2 payload must carry a non-null run_id"
+    assert payload.run_id is not None, "TaskSpec v3 must carry a non-null run_id"
 
     # The DB row MUST already exist with run_id == payload.run_id.
     # If this fails, the XADD happened before the DB commit.
@@ -73,7 +74,7 @@ async def test_pr_opened_db_committed_before_stream_entry(sm: SMHarness) -> None
         "The stream XADD must happen AFTER session.commit()."
     )
 
-    # The payload's intent must be 'start' (fresh PR).
+    # The spec's intent must be 'start' (fresh PR).
     assert payload.intent == "start"
     # No prior run to supersede.
     assert payload.prev_run_id is None
@@ -97,7 +98,7 @@ async def test_issue_opened_db_committed_before_stream_entry(sm: SMHarness) -> N
     assert len(entries) == 1
     _entry_id, fields = entries[0]
 
-    payload = deserialize_payload(fields["json"])
+    payload = deserialize_task_spec(fields["json"])
     assert payload is not None
     assert payload.resource_key == _ISSUE_RK
     assert payload.run_id is not None
@@ -142,7 +143,7 @@ async def test_supersede_stream_payload_matches_db_run_id(sm: SMHarness) -> None
 
     # The second entry is the superseding one.
     _eid_sync, fields_sync = entries[1]
-    payload_sync = deserialize_payload(fields_sync["json"])
+    payload_sync = deserialize_task_spec(fields_sync["json"])
     assert payload_sync is not None
     assert payload_sync.intent == "supersede"
 
