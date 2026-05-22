@@ -33,14 +33,21 @@ def _adapter() -> Any:
     return adapter
 
 
-def _ctx(adapter: Any, event: UnifiedEvent) -> PreflightContext:
+def _ctx(
+    adapter: Any,
+    event: UnifiedEvent,
+    *,
+    run_id: str | None = None,
+    agent_checkpointer: Any = None,
+) -> PreflightContext:
     return PreflightContext(
         event=event,
-        dispatch=Dispatch(Feature.CHAT, maybe_run_chat, derive_task_id(event)),
+        dispatch=Dispatch(Feature.CHAT, maybe_run_chat, derive_task_id(event), run_id=run_id),
         config=baked_in_defaults(),
         adapter=adapter,
         session_factory=None,
         redis=None,
+        agent_checkpointer=agent_checkpointer,
     )
 
 
@@ -57,7 +64,13 @@ async def test_help_command_keeps_canned_reply() -> None:
 async def test_freeform_chat_uses_deepagents_reply(monkeypatch) -> None:
     adapter = _adapter()
 
-    async def _fake_reply(*, event: UnifiedEvent, user_request: str) -> str:
+    async def _fake_reply(
+        *,
+        event: UnifiedEvent,
+        user_request: str,
+        run_id: str | None = None,
+        checkpointer: Any = None,
+    ) -> str:
         assert user_request == "summarize this thread"
         return "DeepAgents says hello."
 
@@ -77,7 +90,13 @@ async def test_freeform_chat_falls_back_to_error_reply_when_agent_fails(
 ) -> None:
     adapter = _adapter()
 
-    async def _boom(*, event: UnifiedEvent, user_request: str) -> str:
+    async def _boom(
+        *,
+        event: UnifiedEvent,
+        user_request: str,
+        run_id: str | None = None,
+        checkpointer: Any = None,
+    ) -> str:
         raise RuntimeError("missing llm credentials")
 
     import openbot.application.use_cases.chat as mod
@@ -90,3 +109,79 @@ async def test_freeform_chat_falls_back_to_error_reply_when_agent_fails(
     _, message = adapter.reply.await_args.args
     assert "couldn't complete that request right now" in message
     assert any(r.message == "chat_agent_reply_failed" for r in caplog.records)
+
+
+# ───── checkpointer + run_id threading ─────
+
+
+async def test_chat_passes_checkpointer_and_run_id_to_responder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_id and checkpointer from ctx are forwarded to _generate_freeform_reply."""
+    captured: dict[str, object] = {}
+
+    async def _fake(
+        *,
+        event: UnifiedEvent,
+        user_request: str,
+        run_id: str | None = None,
+        checkpointer: Any = None,
+    ) -> str:
+        captured["run_id"] = run_id
+        captured["checkpointer"] = checkpointer
+        return "ok"
+
+    import openbot.application.use_cases.chat as mod
+
+    monkeypatch.setattr(mod, "_generate_freeform_reply", _fake)
+
+    sentinel = object()
+    adapter = _adapter()
+    await maybe_run_chat(
+        _ctx(
+            adapter,
+            _event(comment_body="@openbot explain this"),
+            run_id="run-chat-1",
+            agent_checkpointer=sentinel,
+        )
+    )
+
+    assert captured["run_id"] == "run-chat-1"
+    assert captured["checkpointer"] is sentinel
+
+
+async def test_chat_cancellation_checkpoint_fires_after_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """checkpoint() fires after the LLM but before ctx.adapter.reply."""
+    import openbot.application.use_cases.chat as mod
+    from openbot.application.state.cancellation import RunCancelledError
+
+    calls: list[str] = []
+
+    async def _fake_freeform(
+        *,
+        event: UnifiedEvent,
+        user_request: str,
+        run_id: str | None = None,
+        checkpointer: Any = None,
+    ) -> str:
+        calls.append("llm")
+        return "answer"
+
+    async def _fake_checkpoint(redis: Any, run_id: str) -> None:
+        calls.append("checkpoint")
+        raise RunCancelledError("cancelled")
+
+    monkeypatch.setattr(mod, "_generate_freeform_reply", _fake_freeform)
+    monkeypatch.setattr(mod, "checkpoint", _fake_checkpoint)
+
+    adapter = _adapter()
+    with pytest.raises(RunCancelledError):
+        await maybe_run_chat(
+            _ctx(adapter, _event(comment_body="@openbot explain this"), run_id="run-chat-2")
+        )
+
+    # LLM ran first, then checkpoint raised — reply never called.
+    assert calls == ["llm", "checkpoint"]
+    adapter.reply.assert_not_awaited()
