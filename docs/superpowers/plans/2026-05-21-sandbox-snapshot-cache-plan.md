@@ -20,7 +20,7 @@
 
 | Part | Status | Commits |
 |---|---|---|
-| 1 — Port + key + in-memory cache | 🚧 in progress (1.1 ✅ `28c20b3`; 1.2–1.4 pending) | — |
+| 1 — Port + key + in-memory cache | 🚧 in progress (1.1 ✅ `28c20b3`, 1.2 ✅ `78c14e2`; 1.3–1.4 pending) | — |
 | 2 — Dispatcher wiring + observability | ⏳ pending | — |
 | 3 — Daytona snapshot adapter | ⏳ pending | — |
 | 4 — Rollout, guardrails, E2E | ⏳ pending | — |
@@ -88,25 +88,28 @@ If a name in a later part doesn't match this table, **fix the earliest part and 
 
 ### Task 1.2: `_cache_key` + `CacheCorruptedError`
 
-- [ ] **Write failing test** `tests/application/test_sandbox_cache_key.py` — parametrized table:
+- [x] **Write failing test** `tests/application/test_sandbox_cache_key.py` — 12-test matrix (9 from spec + 3 added at implementation):
 
   | Test | Inputs | Expected |
   |---|---|---|
   | `test_key_is_deterministic` | same `(checkout, installation_id)` twice | same 24-char hex string |
   | `test_key_varies_on_installation_id` | swap installation_id | different key |
-  | `test_key_varies_on_repo_url_case` | `Github.com/X` vs `github.com/x` | **same** key (normalized lowercase) |
+  | `test_key_varies_on_repo_url_case_is_same_key` | `Github.com/X` vs `github.com/x` | **same** key (normalized lowercase) |
   | `test_key_strips_trailing_slash` | URL with `/` vs without | same key |
   | `test_key_varies_on_ref` | swap SHA | different key |
   | `test_key_varies_on_strategy` | SHALLOW vs BLOBLESS | different key |
   | `test_key_is_order_stable_on_sparse_paths` | `("a", "b")` vs `("b", "a")` | same key |
   | `test_key_varies_on_sparse_paths_membership` | `("a",)` vs `("a", "b")` | different key |
   | `test_key_length_is_24_hex_chars` | any valid input | matches `^[0-9a-f]{24}$` |
+  | `test_key_ignores_diff_base` *(added)* | swap diff_base | **same** key — diff_base is review-time metadata, not a tree input |
+  | `test_key_rejects_token_shaped_repo_url` *(added — cross-cutting security gate)* | repo_url contains `x-access-token:` | raises `TypeError` |
+  | `test_cache_corrupted_error_is_exception` *(added)* | `CacheCorruptedError` shape check | `issubclass(..., Exception)` |
 
-- [ ] **Implement** `openbot/application/sandbox_cache_key.py`:
+- [x] **Implement** `openbot/application/sandbox_cache_key.py`:
   - `_cache_key(checkout, *, installation_id) -> str` per spec § "Cache key derivation".
   - `class CacheCorruptedError(Exception): pass`.
   - Uses `hashlib.sha256`, 24-char hex prefix.
-- [ ] Run `make check`. Commit: `feat(application): sandbox cache key derivation`.
+- [x] Run `make check`. Commit: `feat(application): sandbox cache key derivation` — landed as `78c14e2`. (Note: `make check` is currently red on unrelated `test_agent_checkpointer.py` from commit `e0bb06f`; this task's own files pass fmt + lint + tests cleanly.)
 
 ### Task 1.3: `NoOpSandboxCache`
 
