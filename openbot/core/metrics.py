@@ -70,10 +70,20 @@ class _NoOpGauge:
         del amount  # intentionally unused — no-op stub
 
 
+class _NoOpHistogram:
+    """Drop-in stub when prometheus_client is absent."""
+
+    def labels(self, **_: Any) -> _NoOpHistogram:
+        return self
+
+    def observe(self, amount: float) -> None:
+        del amount  # intentionally unused — no-op stub
+
+
 # ── Metric declarations ───────────────────────────────────────────────────────
 
 try:
-    from prometheus_client import Counter, Gauge  # type: ignore[import-untyped]
+    from prometheus_client import Counter, Gauge, Histogram  # type: ignore[import-untyped]
 
     _workflow_total = Counter(
         "openbot_workflow_total",
@@ -110,6 +120,53 @@ try:
         "Classifier exceptions swallowed by the fail-open wrap",
         ["feature"],
     )
+    # Snapshot cache acquire outcomes. ``result`` ∈ {hit, miss, stale,
+    # backend_error}. ``feature`` scopes the counter to one workflow so
+    # dashboards can answer "which feature benefits most from caching".
+    _sandbox_cache_total = Counter(
+        "openbot_sandbox_cache_total",
+        "Sandbox cache acquire outcomes per feature and result",
+        ["feature", "result"],
+    )
+    # Snapshot cache publish outcomes. ``result`` ∈ {created, skipped,
+    # failed}. Emitted after the cold-path clone completes.
+    _sandbox_cache_publish_total = Counter(
+        "openbot_sandbox_cache_publish_total",
+        "Sandbox cache publish outcomes per feature and result",
+        ["feature", "result"],
+    )
+    # End-to-end acquire latency from the dispatcher's perspective —
+    # includes the _refresh_to_ref git I/O on a hit. Labelled by
+    # ``result`` so hit vs miss distributions are separate series.
+    _sandbox_cache_acquire_seconds = Histogram(
+        "openbot_sandbox_cache_acquire_seconds",
+        "Sandbox cache acquire duration in seconds",
+        ["result"],
+        buckets=(0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
+    )
+
+    class _LabelledSentryHistogram:
+        """Prometheus Histogram + Sentry distribution mirror.
+
+        Wraps a Histogram the same way ``_LabelledSentryCounter`` wraps a
+        Counter — ``labels()`` captures kwargs, ``observe()`` writes to
+        both the Prometheus bucket and the Sentry distribution channel.
+        """
+
+        def __init__(self, histogram: Histogram, sentry_name: str) -> None:
+            self._histogram = histogram
+            self._sentry_name = sentry_name
+            self._kwargs: dict[str, str] = {}
+
+        def labels(self, **kwargs: Any) -> _LabelledSentryHistogram:
+            self._kwargs = kwargs
+            return self
+
+        def observe(self, amount: float) -> None:
+            self._histogram.labels(**self._kwargs).observe(amount)
+            from openbot.core.sentry_metrics import metrics
+
+            metrics.distribution(self._sentry_name, amount, tags=self._kwargs)
 
     class WorkflowCounter:
         def labels(self, **kwargs: Any) -> WorkflowCounter:
@@ -176,6 +233,13 @@ try:
     queue_depth = QueueGauge()
     dispatch_sandbox_total = _LabelledSentryCounter(_dispatch_sandbox_total, "dispatch_sandbox")
     classifier_error_total = _LabelledSentryCounter(_classifier_error_total, "classifier_error")
+    sandbox_cache_total = _LabelledSentryCounter(_sandbox_cache_total, "sandbox_cache")
+    sandbox_cache_publish_total = _LabelledSentryCounter(
+        _sandbox_cache_publish_total, "sandbox_cache_publish"
+    )
+    sandbox_cache_acquire_seconds = _LabelledSentryHistogram(
+        _sandbox_cache_acquire_seconds, "sandbox_cache_acquire_seconds"
+    )
 
 except ImportError:
     _logger.warning("prometheus_client_not_installed_metrics_disabled")
@@ -230,11 +294,36 @@ except ImportError:
     dispatch_sandbox_total = SentryOnlyLabelledCounter("dispatch_sandbox")
     classifier_error_total = SentryOnlyLabelledCounter("classifier_error")
 
+    class SentryOnlyLabelledHistogram:
+        """Sentry-only histogram stub when ``prometheus_client`` is absent.
+
+        Same ``labels() → observe()`` protocol as ``_LabelledSentryHistogram``
+        so call sites in the dispatcher never branch on prometheus availability.
+        """
+
+        def __init__(self, sentry_name: str) -> None:
+            self._sentry_name = sentry_name
+            self._kwargs: dict[str, str] = {}
+
+        def labels(self, **kwargs: Any) -> SentryOnlyLabelledHistogram:
+            self._kwargs = kwargs
+            return self
+
+        def observe(self, amount: float) -> None:
+            metrics.distribution(self._sentry_name, amount, tags=self._kwargs)
+
+    sandbox_cache_total = SentryOnlyLabelledCounter("sandbox_cache")
+    sandbox_cache_publish_total = SentryOnlyLabelledCounter("sandbox_cache_publish")
+    sandbox_cache_acquire_seconds = SentryOnlyLabelledHistogram("sandbox_cache_acquire_seconds")
+
 
 __all__ = [
     "classifier_error_total",
     "dispatch_sandbox_total",
     "llm_cost_usd_total",
     "queue_depth",
+    "sandbox_cache_acquire_seconds",
+    "sandbox_cache_publish_total",
+    "sandbox_cache_total",
     "workflow_total",
 ]
