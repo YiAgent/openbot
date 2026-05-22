@@ -62,7 +62,7 @@ async def test_review_responder_builds_agent_with_review_model(monkeypatch) -> N
     monkeypatch.setattr(mod, "create_deep_agent", _fake_create_deep_agent)
 
     adapter = _StubAdapter("diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n")
-    result = await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)
+    result = await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)  # type: ignore[arg-type]
 
     assert isinstance(result, ReviewFindings)
     assert result.summary == "Reviewed: no blocking findings."
@@ -104,7 +104,8 @@ async def test_review_responder_returns_findings_from_structured_response(monkey
     monkeypatch.setattr(mod, "create_deep_agent", lambda **_: _Agent())
 
     result = await mod.DeepAgentsReviewResponder().review_for_event(
-        _event(), adapter=_StubAdapter("d")
+        _event(),
+        adapter=_StubAdapter("d"),  # type: ignore[arg-type]
     )
 
     assert result == ReviewFindings(
@@ -131,7 +132,7 @@ async def test_review_responder_handles_empty_diff(monkeypatch) -> None:
     monkeypatch.setattr(mod, "create_deep_agent", lambda **_: _Agent())
 
     adapter = _StubAdapter("")  # closed / deleted PR
-    result = await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)
+    result = await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)  # type: ignore[arg-type]
 
     assert result.summary == "No diff available."
     prompt = seen["payload"]["messages"][0]["content"]
@@ -154,7 +155,7 @@ async def test_review_responder_truncates_huge_diffs(monkeypatch) -> None:
 
     huge = "x" * 2_000_000  # 2MB
     adapter = _StubAdapter(huge)
-    await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)
+    await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)  # type: ignore[arg-type]
 
     prompt = seen["payload"]["messages"][0]["content"]
     assert len(prompt) < 300_000  # well under any sane LLM context
@@ -175,7 +176,10 @@ async def test_review_responder_raises_on_missing_structured_response(monkeypatc
     monkeypatch.setattr(mod, "create_deep_agent", lambda **_: _Agent())
 
     with pytest.raises(ValueError, match="deepagents_result_missing_structured_response"):
-        await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=_StubAdapter("d"))
+        await mod.DeepAgentsReviewResponder().review_for_event(
+            _event(),
+            adapter=_StubAdapter("d"),  # type: ignore[arg-type]
+        )
 
 
 async def test_review_responder_requires_pr_number(monkeypatch) -> None:
@@ -185,7 +189,8 @@ async def test_review_responder_requires_pr_number(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="deepagents_review_requires_pr_number"):
         await mod.DeepAgentsReviewResponder().review_for_event(
-            _event(pr_number=None), adapter=_StubAdapter("d")
+            _event(pr_number=None),
+            adapter=_StubAdapter("d"),  # type: ignore[arg-type]
         )
 
 
@@ -208,8 +213,8 @@ async def test_review_responder_rebuilds_agent_per_event(monkeypatch) -> None:
     monkeypatch.setattr(mod, "create_deep_agent", _capture)
 
     responder = mod.DeepAgentsReviewResponder()
-    await responder.review_for_event(_event(), adapter=_StubAdapter("a"))
-    await responder.review_for_event(_event(), adapter=_StubAdapter("b"))
+    await responder.review_for_event(_event(), adapter=_StubAdapter("a"))  # type: ignore[arg-type]
+    await responder.review_for_event(_event(), adapter=_StubAdapter("b"))  # type: ignore[arg-type]
 
     # Two distinct builds — tools cannot leak between events.
     assert len(builds) == 2
@@ -231,7 +236,7 @@ async def test_review_responder_passes_recursion_limit(monkeypatch) -> None:
 
     monkeypatch.setattr(mod, "create_deep_agent", lambda **_: _Agent())
 
-    await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=_StubAdapter("d"))
+    await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=_StubAdapter("d"))  # type: ignore[arg-type]
 
     # Freeze the explicit limit so a future bump is intentional.
     assert seen["config"]["recursion_limit"] == 25
@@ -268,7 +273,7 @@ async def test_review_responder_passes_checkpointer_and_thread_id(
     responder = mod.DeepAgentsReviewResponder()
     await responder.review_for_event(
         _event(),
-        adapter=_StubAdapter("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new"),
+        adapter=_StubAdapter("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new"),  # type: ignore[arg-type]
         run_id="run-review-1",
         checkpointer=saver,
     )
@@ -305,7 +310,7 @@ async def test_review_responder_no_checkpointer_no_thread_id(
     responder = mod.DeepAgentsReviewResponder()
     await responder.review_for_event(
         _event(),
-        adapter=_StubAdapter("d"),
+        adapter=_StubAdapter("d"),  # type: ignore[arg-type]
         # run_id and checkpointer intentionally omitted
     )
 
