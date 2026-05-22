@@ -24,7 +24,9 @@ if TYPE_CHECKING:
 # Indirection used by tests to monkeypatch the factory without touching
 # the real asyncpg connection machinery.
 @asynccontextmanager
-async def _AsyncPostgresSaver_from_conn_string(dsn: str) -> AsyncGenerator[object, None]:
+async def _AsyncPostgresSaver_from_conn_string(
+    dsn: str,
+) -> AsyncGenerator[AsyncPostgresSaver, None]:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver as _Real
 
     async with _Real.from_conn_string(dsn) as saver:

@@ -10,7 +10,7 @@ import pytest
 
 async def test_agent_checkpointer_yields_saver(monkeypatch: pytest.MonkeyPatch) -> None:
     """Context manager should yield the saver and call setup()."""
-    from openbot.infrastructure.persistence import agent_checkpointer as mod
+    import openbot.infrastructure.persistence.agent_checkpointer as mod
 
     setup_called: list[bool] = []
 
@@ -19,7 +19,7 @@ async def test_agent_checkpointer_yields_saver(monkeypatch: pytest.MonkeyPatch) 
             setup_called.append(True)
 
     @asynccontextmanager
-    async def _fake_from_conn_string(dsn: str) -> AsyncGenerator[_FakeSaver, None]:
+    async def _fake_from_conn_string(_dsn: str) -> AsyncGenerator[_FakeSaver, None]:
         yield _FakeSaver()
 
     monkeypatch.setattr(mod, "_AsyncPostgresSaver_from_conn_string", _fake_from_conn_string)
