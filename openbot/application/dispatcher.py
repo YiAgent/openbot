@@ -484,7 +484,7 @@ async def execute_handler(
         agent_checkpointer=agent_checkpointer,
     )
     try:
-        # Same provisioning block as ``run_dispatch``. The worker has
+        # Provisioning block: the worker has
         # already rehydrated ``classifier_output`` from the TaskSpec
         # (so we don't re-classify), but the policy gate + clone still
         # apply here — otherwise the worker path would always run with
