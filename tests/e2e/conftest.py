@@ -306,6 +306,9 @@ class WebhookHarness:
     # then takes the "sandbox not configured" early-return). The
     # ``webhook_harness`` fixture sets this to a working factory.
     sandbox_factory_override: Callable[[], AbstractAsyncContextManager[Any]] | None = None
+    # Sandbox cache injected into ``_run_with_sandbox`` for the cache E2E demo.
+    # ``None`` keeps all existing demos unchanged (cache disabled by default).
+    sandbox_cache_override: Any | None = None  # SandboxCachePort | None
 
     def make_event(
         self,
@@ -368,6 +371,7 @@ class WebhookHarness:
             redis=self.redis,
             rate_limiter=RedisRateLimiter(self.redis),
             sandbox_factory=self.sandbox_factory_override,
+            sandbox_cache=self.sandbox_cache_override,
         )
         import contextlib
 
