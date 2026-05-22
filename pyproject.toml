@@ -187,4 +187,5 @@ addopts = ["-q", "--strict-markers", "--strict-config"]
 filterwarnings = [
     "error",                          # warnings are bugs in tests
     "ignore::DeprecationWarning:httpx.*",
+    "ignore::DeprecationWarning:daytona.*",  # Daytona SDK has deprecated server_url field
 ]

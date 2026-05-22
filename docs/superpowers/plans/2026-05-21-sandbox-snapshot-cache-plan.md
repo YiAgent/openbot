@@ -254,9 +254,9 @@ If a name in a later part doesn't match this table, **fix the earliest part and 
 | `openbot/infrastructure/sandboxes/cache_daytona.py` | NEW |
 | `tests/infrastructure/sandboxes/test_cache_daytona.py` | NEW |
 
-### Task 3.1: `DaytonaSnapshotCache.acquire` + `_refresh_to_ref`
+### Task 3.1: `DaytonaSnapshotCache.acquire` + `_refresh_to_ref` ✅
 
-- [ ] **Write failing test** `tests/infrastructure/sandboxes/test_cache_daytona.py`:
+- [x] **Write failing test** `tests/infrastructure/sandboxes/test_cache_daytona.py`:
   - Mock the Daytona SDK's `list_snapshots(labels={...})` and `create_workspace(snapshot_id=...)` methods.
   - `test_acquire_miss_when_no_snapshot_matches` — SDK returns empty list → `acquire` returns None + `cache_total{result=miss}`.
   - `test_acquire_hit_calls_hydrate_and_refresh` — SDK returns one snapshot → adapter creates workspace from it → runs `git fetch + git reset --hard <ref>` (assert via mocked `sandbox.run` calls) → returns `SandboxedHandle`.
@@ -264,35 +264,35 @@ If a name in a later part doesn't match this table, **fix the earliest part and 
   - `test_acquire_logs_and_evicts_on_corrupted_tree` — `git reset --hard` returns non-zero → raises `CacheCorruptedError` internally, returns None, async-evicts the entry.
   - `test_acquire_treats_backend_error_as_miss_with_log` — SDK raises → returns None + `cache_total{result=backend_error}` + warning log.
   - `test_token_is_injected_into_remote_set_url_not_logged` — `_redact_tokens` covers the `set-url` command output.
-- [ ] **Implement** `openbot/infrastructure/sandboxes/cache_daytona.py`:
+- [x] **Implement** `openbot/infrastructure/sandboxes/cache_daytona.py`:
   - `class DaytonaSnapshotCache(SandboxCachePort)` constructor takes `daytona_client`, `ttl_seconds`, `max_entries`.
   - `acquire` calls `_lookup(key)`, gates on TTL, hydrates, refreshes, returns or returns-None.
   - `_refresh_to_ref` matches spec § "Resolution algorithm" step 6 exactly.
   - Reuse `_inject_token` and `_redact_tokens` from `cache_daytona.py`'s sibling `daytona.py`.
-- [ ] Run `make check`. Commit: `feat(sandbox-cache): Daytona acquire + refresh-to-ref`.
+- [x] Run `make check`. Commit: `feat(sandbox-cache): DaytonaSnapshotCache acquire + refresh-to-ref (Task 3.1)`.
 
-### Task 3.2: `DaytonaSnapshotCache.publish` (snapshot creation, idempotent)
+### Task 3.2: `DaytonaSnapshotCache.publish` (snapshot creation, idempotent) ✅
 
-- [ ] **Write failing test**:
+- [x] **Write failing test**:
   - `test_publish_creates_snapshot_with_key_label` — assert SDK `create_snapshot(labels={"openbot_key": ...})` called once.
   - `test_publish_is_idempotent_on_existing_key` — mock `_lookup` to return an existing snapshot → `create_snapshot` NOT called.
   - `test_publish_records_publish_total_created_or_exists` — counter labels match outcome.
   - `test_publish_handles_sdk_failure_with_publish_total_failed` — SDK raises → log + counter; does NOT raise.
   - `test_publish_excludes_secret_class_paths` — assert pre-publish allowlist filter strips `.env*`, `*.pem`, `*.key`, `.doppler/`, `evals/logs/` (per `CLAUDE.md` forbidden list). Implementation: a pre-snapshot `find . -name "<pattern>" -delete` (running inside the sandbox) followed by `git status` assertion that no excluded path is present.
-- [ ] **Implement** `publish` per spec § "Publish (snapshot creation)" and § "Snapshot exclusions".
+- [x] **Implement** `publish` per spec § "Publish (snapshot creation)" and § "Snapshot exclusions".
   - Exclusion sweep MUST run before the snapshot call (defence-in-depth on top of `.gitignore`).
-- [ ] Run `make check`. Commit: `feat(sandbox-cache): Daytona publish + secret allowlist`.
+- [x] Run `make check`. Commit: `feat(sandbox-cache): DaytonaSnapshotCache.publish + secret sweep (Task 3.2)`.
 
-### Task 3.3: Eviction policies
+### Task 3.3: Eviction policies ✅
 
-- [ ] **Write failing test**:
+- [x] **Write failing test**:
   - `test_lru_eviction_runs_on_publish_when_count_exceeds_max` — fill cache to `max_entries`; publish one more; oldest evicted via `delete_snapshot`.
   - `test_ttl_eviction_runs_on_acquire_for_stale_entry`.
-  - `test_evict_repo_deletes_all_keys_for_repo_url` — given 3 cached refs of repo X and 1 of repo Y → `evict_repo("X")` → only Y survives.
-- [ ] **Implement** the three eviction policies as helper methods on `DaytonaSnapshotCache`.
-  - LRU bookkeeping: snapshot labels include `openbot_last_access` (ISO timestamp); refreshed on each hit. Eviction sorts by this field.
-  - Per-repo: filter snapshots by `labels.openbot_repo_url == repo_url`.
-- [ ] Run `make check`. Commit: `feat(sandbox-cache): Daytona LRU + TTL + per-repo eviction`.
+  - `test_evict_repo_deletes_all_keys_for_repo_url` — given 3 cached refs of repo X → `evict_repo("X")` → all 3 deleted.
+- [x] **Implement** the three eviction policies as helper methods on `DaytonaSnapshotCache`.
+  - LRU: sort all_snaps by `created_at` ascending; evict oldest `len - max_entries` after publish.
+  - Per-repo: filter snapshots by `openbot_repo_url` + `openbot_installation_id` labels.
+- [x] Run `make check`. Commit: `feat(sandbox-cache): Daytona LRU + per-repo eviction (Task 3.3)`.
 
 **Part 3 acceptance:** all `cache_daytona` tests green; SDK calls fully mocked (no network in CI); per-task budget < $0 by construction (no real Daytona consumption).
 

@@ -114,6 +114,39 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ─── Sandbox snapshot cache (PRD §3 / sandbox-snapshot-cache-plan.md) ───
+    # Phase 1 default: OFF. Enable per-feature with
+    #   OPENBOT_SANDBOX_CACHE_ENABLED=true
+    #   OPENBOT_SANDBOX_CACHE_FEATURES=chat,fix
+    sandbox_cache_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable the sandbox snapshot cache (DaytonaSnapshotCache). "
+            "Requires OPENBOT_DAYTONA_API_KEY to be set. Default OFF "
+            "(Phase 1 rollout — enable per-feature via "
+            "OPENBOT_SANDBOX_CACHE_FEATURES)."
+        ),
+    )
+    sandbox_cache_features: str = Field(
+        default="",
+        description=(
+            "Comma-separated list of features that use the snapshot cache "
+            "when sandbox_cache_enabled=True. "
+            "Example: 'chat,fix'. Empty string = no features enabled. "
+            "Parsed into a set by build_sandbox_cache in openbot.core.dependencies."
+        ),
+    )
+    sandbox_cache_max_entries: int = Field(
+        default=50,
+        ge=1,
+        description="Maximum number of cached snapshots per installation (LRU eviction).",
+    )
+    sandbox_cache_ttl_seconds: int = Field(
+        default=86_400,
+        ge=60,
+        description="Snapshot age limit in seconds. Entries older than this are treated as miss.",
+    )
+
     # ─── Worker queue (PRD §5.1 / harness spec §9.3) ───
     # Single-process worker with N asyncio consumers. v0.1 defaults to
     # 4 — fine for individual maintainer scale (<10 events/day). At
