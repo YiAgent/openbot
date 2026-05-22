@@ -29,10 +29,12 @@ graceful "sandbox not configured" comment.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 import sys as _sys
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Any
 
 from openbot.application.checkout_resolver import resolve_checkout
 from openbot.application.middleware import (
@@ -52,7 +54,12 @@ from openbot.application.middleware import (
 )
 from openbot.application.router import SandboxPolicy
 from openbot.application.sandbox_handle import SandboxedHandle
-from openbot.core.metrics import dispatch_sandbox_total
+from openbot.core.metrics import (
+    dispatch_sandbox_total,
+    sandbox_cache_acquire_seconds,
+    sandbox_cache_publish_total,
+    sandbox_cache_total,
+)
 from openbot.domain.checkout import CheckoutResolutionError
 from openbot.domain.workflows import Workflow
 from openbot.infrastructure.config_loader import load_for_repo
@@ -70,12 +77,30 @@ if TYPE_CHECKING:
     from openbot.application.ports.config_loader import ConfigLoaderPort
     from openbot.application.ports.rate_limiter import RateLimiterPort
     from openbot.application.ports.sandbox import SandboxPort
+    from openbot.application.ports.sandbox_cache import SandboxCachePort
     from openbot.application.router import Dispatch
     from openbot.dispatcher.classifier import ClassifierOutput
     from openbot.domain.config_schema import EffectiveConfig
     from openbot.domain.events import UnifiedEvent
 
 _logger = logging.getLogger(__name__)
+
+# Module-level set keeps strong references to fire-and-forget tasks so
+# the garbage collector cannot discard them before they complete (RUF006).
+# The ``discard`` done-callback removes each task automatically on exit.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _schedule_background(coro: Any) -> None:
+    """Schedule ``coro`` as a fire-and-forget task with a GC-safe reference.
+
+    The task is added to ``_BACKGROUND_TASKS`` and removes itself when
+    done. Use this instead of bare ``asyncio.create_task`` anywhere in
+    this module.
+    """
+    task: asyncio.Task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def _emit_sandbox_metric(*, feature: str, policy: SandboxPolicy, bypass_source: str) -> None:
@@ -95,6 +120,59 @@ def _emit_sandbox_metric(*, feature: str, policy: SandboxPolicy, bypass_source: 
         getattr(_shim, "dispatch_sandbox_total", None) if _shim is not None else None
     ) or dispatch_sandbox_total
     counter.labels(feature=feature, policy=policy.value, bypass_source=bypass_source).inc()
+
+
+def _get_cache_publish_counter() -> Any:
+    """Return the monkeypatch-aware ``sandbox_cache_publish_total`` symbol.
+
+    Same lookup pattern as ``_emit_sandbox_metric``; lets tests replace
+    the counter at the dispatcher module boundary without touching the
+    metrics registry.
+    """
+    _shim = _sys.modules.get("openbot.application.dispatcher")
+    return (
+        getattr(_shim, "sandbox_cache_publish_total", None) if _shim is not None else None
+    ) or sandbox_cache_publish_total
+
+
+def _get_cache_total_counter() -> Any:
+    """Return the monkeypatch-aware ``sandbox_cache_total`` symbol."""
+    _shim = _sys.modules.get("openbot.application.dispatcher")
+    return (
+        getattr(_shim, "sandbox_cache_total", None) if _shim is not None else None
+    ) or sandbox_cache_total
+
+
+def _get_cache_acquire_seconds() -> Any:
+    """Return the monkeypatch-aware ``sandbox_cache_acquire_seconds`` symbol."""
+    _shim = _sys.modules.get("openbot.application.dispatcher")
+    return (
+        getattr(_shim, "sandbox_cache_acquire_seconds", None) if _shim is not None else None
+    ) or sandbox_cache_acquire_seconds
+
+
+async def _safe_publish(
+    cache: SandboxCachePort,
+    handle: SandboxedHandle,
+    installation_id: int,
+    feature_value: str,
+) -> None:
+    """Publish ``handle`` to the cache; swallows all exceptions.
+
+    Called via ``asyncio.create_task`` on the cold path after the handler
+    returns (or raises). A publish failure must never surface to the
+    webhook layer — it's an optimisation, not a correctness requirement.
+    """
+    try:
+        await cache.publish(handle, installation_id=installation_id)
+        _get_cache_publish_counter().labels(feature=feature_value, result="created").inc()
+    except Exception:
+        _logger.warning(
+            "sandbox_cache_publish_failed",
+            extra={"feature": feature_value, "installation_id": installation_id},
+            exc_info=True,
+        )
+        _get_cache_publish_counter().labels(feature=feature_value, result="failed").inc()
 
 
 async def _run_with_sandbox(ctx: PreflightContext) -> None:
@@ -207,6 +285,55 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
         return
 
     factory = ctx.sandbox_factory
+    cache = ctx.sandbox_cache
+    # Capture once so the None-narrowing flows through both the cache
+    # branch and the cold-path ``finally`` without repeating the check.
+    installation_id: int | None = event.installation_id
+
+    # ── Warm-cache branch ──────────────────────────────────────────────
+    # Try SandboxCachePort.acquire before opening the factory. On a hit
+    # the handler runs immediately with the cached handle and we return
+    # early, skipping the cold clone entirely. On miss/error we fall
+    # through to the existing factory path unchanged.
+    #
+    # Guard ``installation_id is not None``: the SandboxCachePort
+    # protocol requires a concrete int for the key derivation; events
+    # without an installation_id (e.g. public-repo triggers without an
+    # App install) bypass the cache and always run the cold path.
+    if cache is not None and installation_id is not None:
+        _cache_start = time.perf_counter()
+        try:
+            cached = await cache.acquire(checkout, token, installation_id=installation_id)
+        except Exception as _exc:
+            _logger.warning(
+                "sandbox_cache_acquire_failed",
+                extra={"feature": dispatch.feature.value, "err": str(_exc)},
+            )
+            _get_cache_total_counter().labels(
+                feature=dispatch.feature.value, result="backend_error"
+            ).inc()
+            cached = None
+        else:
+            if cached is None:
+                _get_cache_total_counter().labels(
+                    feature=dispatch.feature.value, result="miss"
+                ).inc()
+
+        if cached is not None:
+            _get_cache_total_counter().labels(feature=dispatch.feature.value, result="hit").inc()
+            _get_cache_acquire_seconds().labels(result="hit").observe(
+                time.perf_counter() - _cache_start
+            )
+            _emit_sandbox_metric(
+                feature=dispatch.feature.value,
+                policy=effective_policy,
+                bypass_source="none",
+            )
+            ctx_with_handle = dataclasses.replace(ctx, sandbox_handle=cached)
+            await dispatch.handler(ctx_with_handle)
+            return
+
+    # ── Cold path — open factory and clone ────────────────────────────
     try:
         async with factory() as sandbox:
             try:
@@ -241,11 +368,24 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
                 policy=effective_policy,
                 bypass_source="none",
             )
-            ctx_with_handle = dataclasses.replace(
-                ctx,
-                sandbox_handle=SandboxedHandle(sandbox=sandbox, checkout=checkout, token=token),
-            )
-            await dispatch.handler(ctx_with_handle)
+            cold_handle = SandboxedHandle(sandbox=sandbox, checkout=checkout, token=token)
+            ctx_with_handle = dataclasses.replace(ctx, sandbox_handle=cold_handle)
+            try:
+                await dispatch.handler(ctx_with_handle)
+            finally:
+                # Schedule publish regardless of handler outcome so the
+                # warm pool is populated for the next request. Failure in
+                # the handler is the handler's concern; the cache layer
+                # should not miss a publish opportunity because of it.
+                if cache is not None and installation_id is not None:
+                    _schedule_background(
+                        _safe_publish(
+                            cache,
+                            cold_handle,
+                            installation_id,
+                            dispatch.feature.value,
+                        )
+                    )
     except Exception:
         # Factory itself blew up (connection failure to remote backend,
         # quota error, etc.). Last-ditch: call the handler without a
@@ -322,6 +462,7 @@ async def run_dispatch(
     rate_limiter: RateLimiterPort | None = None,
     config_loader: ConfigLoaderPort | None = None,
     sandbox_factory: (Callable[[], AbstractAsyncContextManager[SandboxPort]] | None) = None,
+    sandbox_cache: SandboxCachePort | None = None,
 ) -> None:
     """Load config → pre-flight → handler.
 
@@ -376,6 +517,11 @@ async def run_dispatch(
         # keeps the fix use case on its graceful "sandbox not configured"
         # branch for deployments that haven't enabled the sandbox.
         sandbox_factory=sandbox_factory,
+        # Part 4 snapshot-cache DI. ``None`` (default) bypasses the cache
+        # branch and always runs the cold clone. The worker wires the
+        # concrete adapter (InMemorySandboxCache / DaytonaSnapshotCache)
+        # via env gate when ``OPENBOT_SANDBOX_CACHE_ENABLED=true``.
+        sandbox_cache=sandbox_cache,
     )
 
     try:
@@ -498,6 +644,7 @@ async def execute_handler(
     audit: AuditLogPort | None = None,
     rate_limiter: RateLimiterPort | None = None,
     sandbox_factory: (Callable[[], AbstractAsyncContextManager[SandboxPort]] | None) = None,
+    sandbox_cache: SandboxCachePort | None = None,
     classifier_output: ClassifierOutput | None = None,
     agent_checkpointer: BaseCheckpointSaver | None = None,
 ) -> None:
@@ -528,6 +675,7 @@ async def execute_handler(
         # path also needs the sandbox factory so worker-side FIX
         # dispatches can run the loop end-to-end.
         sandbox_factory=sandbox_factory,
+        sandbox_cache=sandbox_cache,
         classifier_output=classifier_output,
         agent_checkpointer=agent_checkpointer,
     )
