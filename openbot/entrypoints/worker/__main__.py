@@ -28,7 +28,7 @@ from openbot.core.logging import configure_root_logger
 from openbot.core.settings import Settings, get_settings
 from openbot.infrastructure.adapters.github import GitHubAdapter
 from openbot.infrastructure.adapters.github_auth import GitHubAppAuth
-from openbot.infrastructure.observability import init_langsmith, init_sentry
+from openbot.infrastructure.observability import init_langfuse, init_langsmith, init_sentry
 from openbot.infrastructure.persistence import (
     create_schema,
     make_client,
@@ -79,6 +79,7 @@ async def _main() -> int:
     # for Redis/Postgres, malformed PEM, etc.) on the worker dyno.
     init_sentry(settings, component="worker")
     init_langsmith()
+    init_langfuse()
     try:
         import sentry_sdk as _sentry
 

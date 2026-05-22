@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from openbot.application.state.cancellation import checkpoint
 from openbot.application.use_cases._lifecycle import audit_lifecycle
+from openbot.application.use_cases._tracing import observe as _observe
 from openbot.application.use_cases._tracing import traceable as _traceable
 from openbot.domain.fix import FixOutcome
 from openbot.domain.workflows import Workflow
@@ -164,6 +165,7 @@ async def _generate_fix_outcome(
     )
 
 
+@_observe(name="fix", capture_input=False)
 @_traceable(run_type="chain", name="fix")
 async def maybe_run_fix(ctx: PreflightContext) -> None:
     event = ctx.event

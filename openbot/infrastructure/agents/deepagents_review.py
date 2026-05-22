@@ -36,6 +36,7 @@ from openbot.infrastructure.agents._review_schema import (
 )
 from openbot.infrastructure.agents._review_tools import make_review_tools
 from openbot.infrastructure.llm.model_router import Feature, primary_model_for
+from openbot.infrastructure.observability import get_langfuse_handler
 
 if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
@@ -174,6 +175,12 @@ class DeepAgentsReviewResponder:
         config: RunnableConfig = {"recursion_limit": _RECURSION_LIMIT}
         if run_id and effective_checkpointer:
             config["configurable"] = {"thread_id": run_id}
+        # Inject a fresh Langfuse callback so each review run gets its own
+        # trace with all agent steps + tool calls visible. No-op when
+        # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
+        lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
+        if lf_callbacks:
+            config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
         result = await agent.ainvoke(
             {
                 "messages": [

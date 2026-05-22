@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Literal
 
 from openbot.application.ports.channel_adapter import ChannelAdapterPort
 from openbot.application.use_cases._lifecycle import audit_lifecycle
+from openbot.application.use_cases._tracing import observe as _observe
 from openbot.application.use_cases._tracing import traceable as _traceable
 from openbot.domain.events import UnifiedEvent
 from openbot.domain.review import Finding, ReviewFindings, passes_threshold
@@ -115,6 +116,7 @@ def _build_inline_comments(inline: list[Finding]) -> list[dict[str, object]]:
     ]
 
 
+@_observe(name="review", capture_input=False)
 @_traceable(run_type="chain", name="review")
 async def maybe_run_review(ctx: PreflightContext) -> None:
     """Run the DeepAgent review + submit findings via the PR Review API.

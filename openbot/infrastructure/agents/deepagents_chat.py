@@ -6,6 +6,7 @@ from deepagents import create_deep_agent
 
 from openbot.domain.events import UnifiedEvent
 from openbot.infrastructure.llm.model_router import Feature, primary_model_for
+from openbot.infrastructure.observability import get_langfuse_handler
 
 if TYPE_CHECKING:
     from langchain_core.runnables import RunnableConfig
@@ -118,6 +119,12 @@ class DeepAgentsChatResponder:
         config: RunnableConfig = {}
         if run_id and effective_checkpointer:
             config["configurable"] = {"thread_id": run_id}
+        # Inject a fresh Langfuse callback so each chat run gets its own
+        # trace with all agent steps visible. No-op when
+        # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
+        lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
+        if lf_callbacks:
+            config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
         result = await agent.ainvoke(
             {
                 "messages": [

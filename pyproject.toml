@@ -37,6 +37,7 @@ dependencies = [
     # LLM — multi-vendor LiteLLM (PRD §13 #10)
     "litellm>=1.50",
     "langsmith>=0.8.4",
+    "langfuse>=3.0.0",
     # Eval runner (PRD §8.3) — inspect-ai harness + reference task suites
     "inspect-ai>=0.3.220",
     "inspect-evals[swe_bench]>=0.12.0",
