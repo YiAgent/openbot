@@ -38,6 +38,9 @@ from openbot.infrastructure.agents._review_tools import make_review_tools
 from openbot.infrastructure.llm.model_router import Feature, primary_model_for
 
 if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
 
 # PR diffs can grow large; opus-4-7 has plenty of headroom but pure-noise
@@ -149,17 +152,28 @@ class DeepAgentsReviewResponder:
         event: UnifiedEvent,
         *,
         adapter: ChannelAdapterPort,
+        run_id: str | None = None,
+        checkpointer: BaseCheckpointSaver | None = None,
     ) -> ReviewFindings:
         if event.pr_number is None:
             raise ValueError("deepagents_review_requires_pr_number")
         diff = await adapter.get_pr_diff(event, event.pr_number)
         tools = make_review_tools(adapter=adapter, event=event)
+        # Only activate checkpointing when both pieces are present: a
+        # checkpointer without a run_id has no thread_id to key on and
+        # LangGraph would error. Gate both on the same condition so they
+        # are always in sync.
+        effective_checkpointer = checkpointer if (run_id and checkpointer) else None
         agent = create_deep_agent(
             model=_normalize_model_name(primary_model_for(Feature.REVIEW)),
             tools=tools,
             system_prompt=_SYSTEM_PROMPT,
             response_format=ReviewFindingsSchema,
+            checkpointer=effective_checkpointer,
         )
+        config: RunnableConfig = {"recursion_limit": _RECURSION_LIMIT}
+        if run_id and effective_checkpointer:
+            config["configurable"] = {"thread_id": run_id}
         result = await agent.ainvoke(
             {
                 "messages": [
@@ -169,7 +183,7 @@ class DeepAgentsReviewResponder:
                     }
                 ]
             },
-            config={"recursion_limit": _RECURSION_LIMIT},
+            config=config,
         )
         return _extract_findings(result)
 

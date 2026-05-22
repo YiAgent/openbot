@@ -235,3 +235,79 @@ async def test_review_responder_passes_recursion_limit(monkeypatch) -> None:
 
     # Freeze the explicit limit so a future bump is intentional.
     assert seen["config"]["recursion_limit"] == 25
+
+
+async def test_review_responder_passes_checkpointer_and_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from openbot.infrastructure.agents import deepagents_review as mod
+
+    captured: dict[str, Any] = {}
+
+    class FakeAgent:
+        async def ainvoke(self, payload: Any, *, config: Any = None) -> dict[str, Any]:
+            captured["config"] = config
+            return {"structured_response": _findings_payload(summary="ok")}
+
+    def fake_create_deep_agent(
+        *,
+        model: Any,
+        tools: Any,
+        system_prompt: Any,
+        response_format: Any,
+        checkpointer: Any = None,
+    ) -> FakeAgent:
+        captured["checkpointer"] = checkpointer
+        return FakeAgent()
+
+    monkeypatch.setattr(mod, "create_deep_agent", fake_create_deep_agent)
+
+    saver = MemorySaver()
+    responder = mod.DeepAgentsReviewResponder()
+    await responder.review_for_event(
+        _event(),
+        adapter=_StubAdapter("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new"),
+        run_id="run-review-1",
+        checkpointer=saver,
+    )
+
+    assert captured["checkpointer"] is saver
+    assert captured["config"]["configurable"]["thread_id"] == "run-review-1"
+
+
+async def test_review_responder_no_checkpointer_no_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openbot.infrastructure.agents import deepagents_review as mod
+
+    captured: dict[str, Any] = {}
+
+    class FakeAgent:
+        async def ainvoke(self, payload: Any, *, config: Any = None) -> dict[str, Any]:
+            captured["config"] = config
+            return {"structured_response": _findings_payload(summary="ok")}
+
+    def fake_create_deep_agent(
+        *,
+        model: Any,
+        tools: Any,
+        system_prompt: Any,
+        response_format: Any,
+        checkpointer: Any = None,
+    ) -> FakeAgent:
+        captured["checkpointer"] = checkpointer
+        return FakeAgent()
+
+    monkeypatch.setattr(mod, "create_deep_agent", fake_create_deep_agent)
+
+    responder = mod.DeepAgentsReviewResponder()
+    await responder.review_for_event(
+        _event(),
+        adapter=_StubAdapter("d"),
+        # run_id and checkpointer intentionally omitted
+    )
+
+    assert captured["checkpointer"] is None
+    assert "configurable" not in captured["config"]
