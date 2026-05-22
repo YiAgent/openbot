@@ -110,7 +110,7 @@ svg .arrowhead { fill: none; }
 <body>
 <div id="app">
 <header>
-  <h1>🤖 OpenBot <span class="badge">v0.1 动态流程图</span></h1>
+  <h1>🤖 OpenBot <span class="badge">当前代码状态 · TaskSpec v3</span></h1>
   <div class="toolbar">
     <button class="btn active" id="btn-anim" onclick="toggleAnim()">⏸ 暂停流动</button>
     <button class="btn btn-sim" id="btn-sim" onclick="runSimulate()">▶ 模拟一次请求</button>
@@ -141,10 +141,10 @@ svg .arrowhead { fill: none; }
 </defs>
 
 <!-- ═══ SECTION LABELS ═══ -->
-<text class="section-label" x="16" y="26">阶段 1 — 接收 GitHub 通知</text>
-<text class="section-label" x="16" y="486">阶段 2 — 权限检查与任务分析</text>
-<text class="section-label" x="16" y="770">阶段 3 — 后台执行</text>
-<text class="section-label" x="16" y="1010">阶段 4 — 功能处理</text>
+<text class="section-label" x="16" y="26">阶段 1 — GitHub Webhook 入口</text>
+<text class="section-label" x="16" y="486">阶段 2 — TaskSpec v3 入队</text>
+<text class="section-label" x="16" y="770">阶段 3 — Worker 恢复上下文与 Sandbox Gate</text>
+<text class="section-label" x="16" y="1010">阶段 4 — 工作流处理器</text>
 
 <!-- ═══════════════════════════════════════
      CONNECTION PATHS (drawn first, below nodes)
@@ -153,15 +153,15 @@ svg .arrowhead { fill: none; }
 <path id="p1" class="conn-path" d="M480,100 L480,148" stroke="#1f6feb" stroke-width="2" marker-end="url(#arr-git)"/>
 <!-- 2. FastAPI → ingest -->
 <path id="p2" class="conn-path" d="M480,232 L480,282" stroke="#8957e5" stroke-width="2" marker-end="url(#arr)"/>
-<!-- 3. ingest → Redis A (main) -->
+<!-- 3. ingest → Redis Stream -->
 <path id="p3" class="conn-path" d="M480,378 L480,428" stroke="#3fb950" stroke-width="2" marker-end="url(#arr-orange)"/>
-<!-- 4. Redis A → decide -->
+<!-- 4. Redis Stream → Worker -->
 <path id="p4" class="conn-path" d="M480,495 L480,545" stroke="#f0883e" stroke-width="2" marker-end="url(#arr-green)"/>
-<!-- 5. decide → Redis B (TaskSpec) -->
+<!-- 5. Worker → Sandbox Gate -->
 <path id="p5" class="conn-path" d="M480,643 L480,700" stroke="#3fb950" stroke-width="2" marker-end="url(#arr-orange)"/>
-<!-- 6. Redis B → Worker -->
+<!-- 6. Sandbox Gate → execute_handler -->
 <path id="p6" class="conn-path" d="M480,767 L480,812" stroke="#f0883e" stroke-width="2" marker-end="url(#arr-gold)"/>
-<!-- 7. Worker → exec_handler -->
+<!-- 7. execute_handler → workflow handlers -->
 <path id="p7" class="conn-path" d="M480,905 L480,952" stroke="#e3b341" stroke-width="2" marker-end="url(#arr-green)"/>
 <!-- 8. exec → TRIAGE -->
 <path id="p8" class="conn-path" d="M480,1018 C480,1058 125,1058 125,1078" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-green)"/>
@@ -172,19 +172,19 @@ svg .arrowhead { fill: none; }
 <!-- 11. exec → CHAT -->
 <path id="p11" class="conn-path" d="M480,1018 C480,1058 838,1058 838,1078" stroke="#8957e5" stroke-width="1.5" marker-end="url(#arr)"/>
 
-<!-- BackgroundTask fallback (dashed) -->
+<!-- Current implementation gap (dashed) -->
 <path id="p-fallback" class="conn-path" d="M715,330 C820,330 820,594 726,594"
   stroke="#656d76" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arr)" opacity=".7"/>
-<rect class="conn-label-bg" x="752" y="444" width="76" height="14" rx="3"/>
-<text class="conn-label" x="756" y="454">队列不可用时直接处理</text>
+<rect class="conn-label-bg" x="724" y="444" width="146" height="14" rx="3"/>
+<text class="conn-label" x="728" y="454">当前缺口：未注入 sandbox factory</text>
 
 <!-- Connection labels -->
 <rect class="conn-label-bg" x="418" y="115" width="124" height="13" rx="2"/>
 <text class="conn-label" x="422" y="124" text-anchor="start">GitHub 推送通知 · 签名验证</text>
-<rect class="conn-label-bg" x="447" y="510" width="66" height="13" rx="2"/>
-<text class="conn-label" x="450" y="520" text-anchor="start">写入任务队列</text>
-<rect class="conn-label-bg" x="435" y="713" width="90" height="13" rx="2"/>
-<text class="conn-label" x="438" y="722" text-anchor="start">写入执行任务方案</text>
+<rect class="conn-label-bg" x="438" y="510" width="84" height="13" rx="2"/>
+<text class="conn-label" x="442" y="520" text-anchor="start">Worker 消费 TaskSpec</text>
+<rect class="conn-label-bg" x="424" y="713" width="112" height="13" rx="2"/>
+<text class="conn-label" x="428" y="722" text-anchor="start">按策略 provision 或降级</text>
 
 <!-- ═══════════════════════════════════════
      ANIMATED PARTICLES
@@ -229,8 +229,8 @@ svg .arrowhead { fill: none; }
     <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
       <div class="icon">⚡</div>
       <div class="title">接收 GitHub 推送 · 安全验证</div>
-      <div class="sub">验证消息来源真实 → 识别事件类型 → 交给处理流程</div>
-      <div class="hint">第一时间回应 GitHub，避免重复推送</div>
+      <div class="sub">验证签名 → 解析事件 → 调用 ingest_webhook</div>
+      <div class="hint">入口层保持薄，只负责 HTTP 与鉴权</div>
     </div>
   </foreignObject>
 </g>
@@ -242,63 +242,63 @@ svg .arrowhead { fill: none; }
   <foreignObject class="node-fo" x="240" y="282" width="480" height="96">
     <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
       <div class="icon">🔀</div>
-      <div class="title">事件接收与分发</div>
-      <div class="sub">去重 · 识别功能类型 · 状态管理 · 在 PR 创建进度标记 · 写入队列</div>
-      <div class="hint">点击查看 5 个处理步骤详情</div>
+      <div class="title">事件接收与 TaskSpec 构造</div>
+      <div class="sub">去重 · 路由 · 状态机 · 取消信号 · Check Run · TaskSpec v3</div>
+      <div class="hint">当前代码直接入队 TaskSpec，不再走两段队列</div>
     </div>
   </foreignObject>
 </g>
 
-<!-- 4. Redis Stream A -->
+<!-- 4. Redis Stream -->
 <g class="node-group" id="ng-redis-a" onclick="showDetail('redis')">
   <rect class="node-rect" x="335" y="428" width="290" height="67" rx="10"
     fill="#2d1500" stroke="#f0883e" stroke-width="1.5" style="color:#f0883e"/>
   <foreignObject class="node-fo" x="335" y="428" width="290" height="67">
     <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
       <div class="icon">🔴</div>
-      <div class="title">任务队列 · 等待分析</div>
-      <div class="sub">事件写入持久化队列，后台 Worker 读取并处理</div>
+      <div class="title">Redis Stream · TaskSpec v3</div>
+      <div class="sub">openbot:workflows 持久化任务，Worker 通过消费者组读取</div>
     </div>
   </foreignObject>
 </g>
 
-<!-- 5. decide_and_enqueue -->
-<g class="node-group" id="ng-decide" onclick="showDetail('decide')">
+<!-- 5. Worker rehydrate -->
+<g class="node-group" id="ng-decide" onclick="showDetail('worker')">
   <rect class="node-rect" x="220" y="545" width="520" height="98" rx="10"
     fill="#0d2614" stroke="#3fb950" stroke-width="1.5" style="color:#3fb950"/>
   <foreignObject class="node-fo" x="220" y="545" width="520" height="98">
     <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
-      <div class="icon">🎯</div>
-      <div class="title">权限检查与任务规划</div>
-      <div class="sub">读取仓库配置 → 10 道安全门控 → 快速直接响应 → AI 分析意图 → 生成执行方案</div>
-      <div class="hint">点击查看完整 10 道安全检查</div>
+      <div class="icon">⚙️</div>
+      <div class="title">Worker · 恢复任务上下文</div>
+      <div class="sub">取消快检 → 重建事件 → 重新路由 → 加载配置 → 反序列化 classifier_output</div>
+      <div class="hint">失败会重试，超过上限进入 dead stream</div>
     </div>
   </foreignObject>
 </g>
 
-<!-- 6. Redis Stream B -->
-<g class="node-group" id="ng-redis-b" onclick="showDetail('redis')">
+<!-- 6. Sandbox Gate -->
+<g class="node-group" id="ng-redis-b" onclick="showDetail('sandbox')">
   <rect class="node-rect" x="335" y="700" width="290" height="67" rx="10"
     fill="#2d1500" stroke="#f0883e" stroke-width="1.5" style="color:#f0883e"/>
   <foreignObject class="node-fo" x="335" y="700" width="290" height="67">
     <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
-      <div class="icon">🔴</div>
-      <div class="title">执行队列 · 携带完整任务方案</div>
-      <div class="sub">任务方案写入队列，Worker 读取后直接执行</div>
+      <div class="icon">🧱</div>
+      <div class="title">Sandbox Gate · provision / degrade</div>
+      <div class="sub">静态策略 + classifier 输出合并；缺少 factory 时 handler 无沙箱运行</div>
     </div>
   </foreignObject>
 </g>
 
-<!-- 7. Worker -->
-<g class="node-group" id="ng-worker" onclick="showDetail('worker')">
+<!-- 7. execute_handler context -->
+<g class="node-group" id="ng-worker" onclick="showDetail('context')">
   <rect class="node-rect" x="265" y="812" width="430" height="93" rx="10"
     fill="#272100" stroke="#e3b341" stroke-width="1.5" style="color:#e3b341"/>
   <foreignObject class="node-fo" x="265" y="812" width="430" height="93">
     <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
-      <div class="icon">⚙️</div>
-      <div class="title">后台 Worker · 驱动执行</div>
-      <div class="sub">持续轮询队列，失败自动重试，超限移入死信队列</div>
-      <div class="hint">检查取消信号 → 恢复任务上下文 → 加载配置 → 调用处理器</div>
+      <div class="icon">🚦</div>
+      <div class="title">execute_handler · 组装 PreflightContext</div>
+      <div class="sub">注入 adapter / config / redis / check_run / sandbox_handle / checkpointer</div>
+      <div class="hint">当前路径不再重新跑 middleware chain</div>
     </div>
   </foreignObject>
 </g>
@@ -310,8 +310,8 @@ svg .arrowhead { fill: none; }
   <foreignObject class="node-fo" x="330" y="952" width="300" height="66">
     <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
       <div class="icon">🚀</div>
-      <div class="title">调用工作流处理器</div>
-      <div class="sub">权限已在上一阶段验证，直接将任务交给对应工作流</div>
+      <div class="title">进入工作流处理器</div>
+      <div class="sub">triage / review / fix / chat 由各自 handler 决定业务行为</div>
     </div>
   </foreignObject>
 </g>
@@ -326,9 +326,9 @@ svg .arrowhead { fill: none; }
     <div xmlns="http://www.w3.org/1999/xhtml" class="wf-content">
       <div class="wf-title" style="color:#3fb950">🏷️ 问题分类</div>
       <ul class="wf-steps">
-        <li style="border-color:#3fb950">📌 用户创建或更新 issue 时触发</li>
+        <li style="border-color:#3fb950">📌 Issue opened / edited / reopened / label event</li>
         <li style="border-color:#3fb950">🛡️ 机器人自身操作自动跳过</li>
-        <li style="border-color:#3fb950">💬 评论确认：已收到并将处理</li>
+        <li style="border-color:#3fb950">💬 当前实现：新建 issue 发布 ACK</li>
         <li style="border-color:#3fb950">✅ 记录完整处理日志</li>
         <li style="border-color:#3fb950">🚧 路线图：自动标签 · 优先级判断</li>
       </ul>
@@ -366,11 +366,11 @@ svg .arrowhead { fill: none; }
         <li style="border-color:#f0883e">📌 Issue 被指派给 OpenBot</li>
         <li style="border-color:#f0883e">📋 读取 issue 描述和代码版本</li>
         <li style="border-color:#f0883e">🔑 申请临时访问凭证</li>
-        <li style="border-color:#f0883e">📦 云端开启隔离开发沙箱</li>
-        <li style="border-color:#f0883e">🐙 克隆仓库代码到沙箱</li>
+        <li style="border-color:#f0883e">📦 需要 sandbox_handle 才进入修复循环</li>
+        <li style="border-color:#f0883e">🐙 sandbox 内 clone 仓库并执行命令</li>
         <li style="border-color:#f778ba">🤖 AI 分析问题，尝试修复并测试</li>
         <li style="border-color:#3fb950">✅ 测试通过 → 自动提交 PR</li>
-        <li style="border-color:#f85149">❌ 测试失败 → 评论错误详情</li>
+        <li style="border-color:#f85149">⚠️ 当前 worker 未注入 factory 时会清晰降级</li>
       </ul>
     </div>
   </foreignObject>
@@ -386,9 +386,9 @@ svg .arrowhead { fill: none; }
       <ul class="wf-steps">
         <li style="border-color:#8957e5">📌 评论中 @openbot 开头时触发</li>
         <li style="border-color:#8957e5">🔍 识别用户意图：帮助/取消/提问</li>
-        <li style="border-color:#8957e5">🚫 取消指令 → 终止进行中的任务</li>
+        <li style="border-color:#8957e5">🚫 取消指令 → 通过 cancellation signal 终止任务</li>
         <li style="border-color:#8957e5">❓ 帮助请求 → 直接返回使用说明</li>
-        <li style="border-color:#f778ba">🤖 自由提问 → AI 理解并回答</li>
+        <li style="border-color:#f778ba">🤖 自由提问 → DeepAgentsChatResponder 回答</li>
         <li style="border-color:#8957e5">📭 空消息 → 回复基础使用说明</li>
         <li style="border-color:#3fb950">✅ 回复用户并记录处理日志</li>
       </ul>
@@ -432,7 +432,7 @@ const DETAIL = {
   fastapi: {
     type: 'HTTP 接收层', typeColor: '#8957e5', typeBg: 'rgba(137,87,229,.12)',
     title: '⚡ 接收 GitHub 推送 · 安全验证', file: 'openbot/entrypoints/api/routes/github_webhook.py',
-    desc: '纯粹的接收层，不含业务逻辑。收到推送后立即回应 GitHub 避免超时重试，同时将实际处理交给后续流程异步完成。',
+    desc: '纯粹的 HTTP 接收层。它负责读取请求、验证 GitHub 签名、解析事件，然后调用应用层 ingest_webhook；业务编排不放在 route 里。',
     sections: [{
       label: '处理步骤',
       type: 'steps',
@@ -441,118 +441,124 @@ const DETAIL = {
         { num: '②', text: '验证消息确实来自 GitHub，防止第三方伪造请求', tag: { label: 'HMAC 签名', cls: 't-gh' } },
         { num: '③', text: '识别事件类型（issue / PR / 评论）并统一为内部格式' },
         { num: '④', text: '交给「事件接收与分发」流程处理' },
-        { num: '⑤', text: '（仅降级）队列写入失败时，在当前进程内直接后台执行权限检查——功能不中断，但进程重启会丢失任务' },
-        { num: '⑥', text: '立即告知 GitHub：已收到，正在处理（防止 GitHub 10 秒超时后重复发送）' },
+        { num: '⑤', text: 'ingest 成功后返回 accepted / duplicate / ignored；队列不可用会抛错，让 GitHub 之后重试' },
       ]
     }]
   },
   ingest: {
     type: '事件接收与分发', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
-    title: '🔀 事件接收与分发', file: 'openbot/application/use_cases/ingest_webhook.py',
-    desc: '核心调度逻辑，按顺序完成 5 个步骤。任意步骤可以安全终止，不会影响对 GitHub 已回复的 202 状态。',
+    title: '🔀 事件接收与 TaskSpec 构造', file: 'openbot/application/use_cases/ingest_webhook.py',
+    desc: '当前代码的接收侧核心路径。它去重、路由、做可选状态机转换，随后直接构造 TaskSpec v3 并写入 Redis Stream；旧的两段队列 / decide_and_enqueue 不再是主路径。',
     sections: [{
-      label: '5 个处理步骤',
+      label: '接收侧处理步骤',
       type: 'steps',
       items: [
         { num: '①', text: '去重：同一条 GitHub 通知只处理一次，重复推送直接忽略', tag: { label: '防重', cls: 't-redis' } },
-        { num: '②', text: '识别功能：判断此事件该触发「分类/审查/修复/对话」哪个流程；机器人自身操作自动跳过', tag: { label: '纯逻辑', cls: 't-pure' } },
-        { num: '③', text: '状态管理：为同一仓库同一资源加锁，判断是新建任务、取代旧任务，还是取消', tag: { label: '加锁', cls: 't-lock' } },
+        { num: '②', text: '路由：dispatch_for 判断触发 triage / review / fix / chat；无关事件和 bot 事件直接 ignored', tag: { label: '纯逻辑', cls: 't-pure' } },
+        { num: '③', text: '状态机：有 runs_repo + resource_lock 时，对同一资源做 start / supersede / cancel / ignore 分类', tag: { label: '加锁', cls: 't-lock' } },
         { num: '↳', text: '判断结果：启动新任务 / 取代旧任务并启动新任务 / 仅发取消信号 / 事件已过期则丢弃' },
         { num: '④', text: '在 PR 上创建可见的进度标记（GitHub 上方的 ✓ / ✗ 图标）', tag: { label: 'GitHub', cls: 't-gh' } },
-        { num: '⑤', text: '将任务写入持久化队列；队列不可用时切换为直接后台执行', tag: { label: '队列', cls: 't-redis' } },
+        { num: '⑤', text: 'TaskSpec.from_event_and_dispatch：保存 run / resource / intent / raw event / check_run_id 等字段' },
+        { num: '⑥', text: '写入 Redis Stream；Redis 是必需依赖，失败则让 webhook 返回错误并依赖 GitHub 重试', tag: { label: '队列', cls: 't-redis' } },
       ]
     }]
   },
   redis: {
     type: '持久化任务队列', typeColor: '#f0883e', typeBg: 'rgba(240,136,62,.12)',
-    title: '🔴 持久化任务队列', file: 'openbot/infrastructure/queue/',
-    desc: '用于在各阶段之间传递任务的持久化队列。进程重启后任务不丢失，Worker 自动续跑。支持自动重试和死信兜底。',
+    title: '🔴 Redis Stream · TaskSpec v3', file: 'openbot/infrastructure/queue/',
+    desc: '当前只保留一个持久化执行队列 openbot:workflows。消息体是 TaskSpec v3，Worker 消费后重建事件上下文并执行对应工作流。',
     sections: [{
       label: '队列机制',
       type: 'steps',
       items: [
-        { num: '阶段一', text: '「事件接收」写入：包含事件基本信息，等待「权限检查与任务规划」处理', tag: { label: '先入队', cls: 't-pure' } },
-        { num: '阶段二', text: '「权限检查」写入：携带完整任务方案（意图分类、执行范围、状态机字段），供 Worker 直接执行', tag: { label: '主路径', cls: 't-gh' } },
+        { num: '主队列', text: 'openbot:workflows 保存 TaskSpec v3：delivery、repo、scenario、run_id、event_seq、raw event 等字段', tag: { label: 'TaskSpec', cls: 't-gh' } },
+        { num: '消费', text: 'Worker 通过 Redis Stream 消费者组读取，处理成功后 XACK' },
         { num: '重试', text: 'Worker 处理失败后，60 秒内自动重新认领，最多重试 3 次' },
-        { num: '兜底', text: '连续失败 3 次后移入死信队列，等待人工排查' },
-        { num: '消费', text: 'Worker 通过消费者组模型读取，确认处理后才从队列删除' },
+        { num: '兜底', text: '连续失败超过上限后移入 openbot:workflows:dead，等待人工排查' },
       ]
     }]
   },
-  decide: {
-    type: '权限检查与任务规划', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
-    title: '🎯 权限检查与任务规划', file: 'openbot/dispatcher/decide.py',
-    desc: '在 Worker 后台异步执行。依次完成安全门控、AI 意图分析、任务方案生成，通过后将完整方案写入执行队列。',
+  sandbox: {
+    type: 'Sandbox Gate', typeColor: '#f0883e', typeBg: 'rgba(240,136,62,.12)',
+    title: '🧱 Sandbox Gate · provision / degrade', file: 'openbot/application/dispatcher.py',
+    desc: 'execute_handler 会在调用 workflow 前运行统一 sandbox gate：合并静态路由策略与 classifier 输出，决定是否需要 clone repo。当前 worker 尚未把 sandbox_factory 传入 execute_handler，因此需要 sandbox 的路径会进入 graceful degrade。',
     sections: [
       {
-        label: '处理步骤',
+        label: '策略与执行',
         type: 'steps',
         items: [
-          { num: '①', text: '读取仓库的 .openbot/config.yaml 配置文件', tag: { label: 'GitHub', cls: 't-gh' } },
-          { num: '②', text: '准备执行上下文（包含事件、配置、适配器等，不可变防篡改）' },
-          { num: '③', text: '依次通过 10 道安全与权限检查（见下方），任意一道不通过则停止' },
-          { num: '④', text: '提取 issue / PR 正文内容，供 AI 理解意图', tag: { label: '纯逻辑', cls: 't-pure' } },
-          { num: '⑤', text: '规则匹配：特定关键词可直接响应，无需 AI 分析（节省费用）' },
-          { num: '⑥', text: 'AI 分析事件意图，决定执行哪些处理步骤', tag: { label: 'AI', cls: 't-llm' } },
-          { num: '⑦', text: '（审查流程）计算本次需要审查的代码范围，只看新增改动', tag: { label: '数据库', cls: 't-db' } },
-          { num: '⑧', text: '生成完整任务方案，写入执行队列', tag: { label: '队列', cls: 't-redis' } },
+          { num: '①', text: 'derive_sandbox_policy：静态 SandboxPolicy 与 classifier_output 做 OR merge，NO_SANDBOX 优先' },
+          { num: '②', text: 'NO_SANDBOX：label-only / 取消 / 明确不需要读代码的请求直接调用 handler', tag: { label: '跳过 clone', cls: 't-pure' } },
+          { num: '③', text: '需要 sandbox 但 factory 为 None：记录 degrade 指标，handler 收到 ctx.sandbox_handle is None', tag: { label: '当前缺口', cls: 't-lock' } },
+          { num: '④', text: 'factory 可用时：resolve_checkout → get_installation_token → cache acquire → sandbox.clone' },
+          { num: '⑤', text: 'clone 成功后构造 SandboxedHandle，并在 sandbox 生命周期内调用 handler' },
         ]
       },
       {
-        label: '10 道安全检查（按顺序，首个不通过则停止）',
-        type: 'mw',
+        label: '当前代码缺口',
+        type: 'steps',
         items: [
-          { num: '1', name: '输入清洗', desc: '过滤恶意字符，保护下游安全', action: '可拒绝', cls: 'mw-block' },
-          { num: '2', name: '紧急开关', desc: '管理员可一键关闭所有机器人响应', action: '可拒绝', cls: 'mw-block' },
-          { num: '3', name: '功能开关', desc: '仓库配置中可关闭某个具体功能', action: '可拒绝', cls: 'mw-block' },
-          { num: '4', name: '取消标签检查', desc: 'issue/PR 带有"cancel-openbot"标签则停止', action: '可拒绝', cls: 'mw-block' },
-          { num: '5', name: '取消评论检查', desc: '用户发送停止指令时立即回复并停止', action: '可拒绝', cls: 'mw-block' },
-          { num: '6', name: '外部 PR 安全门', desc: '来自陌生 fork 的 PR 需要额外授权才能执行', action: '可拒绝', cls: 'mw-block' },
-          { num: '7', name: '用户权限检查', desc: '修复和对话功能只对特定角色开放', action: '可拒绝', cls: 'mw-block' },
-          { num: '8', name: '频率限制', desc: '对话功能每用户每天/每小时有次数上限', action: '可拒绝', cls: 'mw-block' },
-          { num: '9', name: '预算检查', desc: 'AI 累计费用超出预算时自动暂停', action: '可拒绝', cls: 'mw-block' },
-          { num: '10', name: '记录开始', desc: '所有检查通过后，写入审计日志表示处理正式开始', action: '审计', cls: 'mw-audit' },
+          { num: '阻塞', text: 'openbot/infrastructure/queue/worker.py 调用 execute_handler 时未传 sandbox_factory / sandbox_cache' },
+          { num: '影响', text: 'fix.py 在 ctx.sandbox_handle is None 时不会跑修复循环，会给用户发 no-sandbox 降级评论' },
+          { num: '已有', text: 'DaytonaSandboxAdapter、SandboxPort、SandboxCachePort 与 dispatcher gate 已存在，缺的是 worker composition root wiring' },
         ]
       }
     ]
   },
   worker: {
     type: '后台 Worker', typeColor: '#e3b341', typeBg: 'rgba(227,179,65,.12)',
-    title: '⚙️ 后台 Worker · 驱动执行', file: 'openbot/infrastructure/queue/worker.py',
-    desc: '持续运行的后台进程，从队列中读取任务并驱动执行。支持自动重试：处理失败后 60 秒内重新认领，最多 3 次，超限后移入死信队列。',
+    title: '⚙️ Worker · 恢复任务上下文', file: 'openbot/infrastructure/queue/worker.py',
+    desc: '持续运行的后台进程，从 Redis Stream 读取 TaskSpec v3，恢复 UnifiedEvent 和 Dispatch，再调用 execute_handler。它负责消费确认、重试、死信和取消生命周期。',
     sections: [{
       label: '每条任务的处理流程',
       type: 'steps',
       items: [
         { num: '①', text: '取消快检：任务执行前先检查是否已被用户取消，已取消则直接跳过' },
-        { num: '②', text: '恢复事件：从存储的任务方案中重建完整的事件信息' },
-        { num: '③', text: '任务路由：确认应该调用哪个工作流处理器（分类/审查/修复/对话）', tag: { label: '纯逻辑', cls: 't-pure' } },
-        { num: '④', text: '加载仓库的最新配置文件', tag: { label: 'GitHub', cls: 't-gh' } },
-        { num: '⑤', text: '调用对应工作流处理器（权限检查已在「任务规划」阶段完成，无需重复）' },
-        { num: '—', text: '成功后：记录本次已审查的代码版本（审查流程），标记任务完成并从队列删除' },
+        { num: '②', text: 'TaskSpec.to_event：从队列 payload 重建 UnifiedEvent' },
+        { num: '③', text: 'dispatch_for：重新计算要调用的工作流；若事件已不再可路由则 XACK 跳过', tag: { label: '纯逻辑', cls: 't-pure' } },
+        { num: '④', text: 'load_for_repo：加载仓库最新 .openbot/config.yaml 配置', tag: { label: 'GitHub', cls: 't-gh' } },
+        { num: '⑤', text: 'parse_classifier_output：把 TaskSpec 中的 dict 还原为 typed classifier output' },
+        { num: '⑥', text: '注册 cancellation slot，调用 execute_handler，结束后 deregister' },
+        { num: '—', text: '成功后：PR review 会记录 reviewed head SHA，随后 XACK 删除队列消息' },
         { num: '—', text: '失败时：最多重试 3 次，仍失败则移入死信队列等待人工处理' },
       ]
     }]
   },
-  exec: {
+  context: {
     type: '工作流调度', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
-    title: '🚀 调用工作流处理器', file: 'openbot/application/dispatcher.py',
-    desc: '直接调用对应的工作流处理器。此时权限检查已在「任务规划」阶段全部完成，无需重复，直接执行业务逻辑。同步更新 PR 进度标记。',
+    title: '🚀 execute_handler · 工作流调度', file: 'openbot/application/dispatcher.py',
+    desc: '当前 TaskSpec v3 worker 路径在这里组装 PreflightContext，然后经过 sandbox gate 调用具体 workflow handler。这个函数还负责 GitHub Check Run 成功 / 失败更新。',
     sections: [{
       label: '执行过程',
       type: 'steps',
       items: [
-        { num: '①', text: '组装调用参数（适配器、事件信息、配置、队列连接等）' },
-        { num: '②', text: '调用对应工作流处理器：问题分类 / 代码审查 / 自动修复 / 对话交互' },
-        { num: '③', text: '成功后：将 PR 上的进度标记更新为 ✓', tag: { label: 'GitHub', cls: 't-gh' } },
-        { num: '④', text: '失败后：将 PR 进度标记更新为 ✗，并记录详细错误日志' },
+        { num: '①', text: '组装 PreflightContext：event、dispatch、config、adapter、redis、check_run_id、classifier_output、checkpointer' },
+        { num: '②', text: '运行 sandbox gate：决定 provision / cache acquire / clone / degrade' },
+        { num: '③', text: '调用对应工作流处理器：问题分类 / 代码审查 / 自动修复 / 对话交互' },
+        { num: '④', text: '成功后：将 PR 上的 Check Run 更新为 success', tag: { label: 'GitHub', cls: 't-gh' } },
+        { num: '⑤', text: '失败后：将 Check Run 更新为 failure，并记录详细错误日志' },
+      ]
+    }]
+  },
+  exec: {
+    type: '工作流入口', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
+    title: '🚀 进入工作流处理器', file: 'openbot/application/use_cases/',
+    desc: 'dispatcher 最终调用四类 workflow handler。每个 handler 只关心业务行为，通过 PreflightContext 读取事件、配置、适配器、check run、sandbox handle 和 agent checkpointer。',
+    sections: [{
+      label: '处理器边界',
+      type: 'steps',
+      items: [
+        { num: 'triage', text: 'maybe_run_triage：当前只在新建 issue 时发布 ACK' },
+        { num: 'review', text: 'maybe_run_review：读取 diff，调用 DeepAgentsReviewResponder，发布 PR Review' },
+        { num: 'fix', text: 'maybe_run_fix：需要 sandbox_handle；缺失时发布 no-sandbox 降级说明' },
+        { num: 'chat', text: 'maybe_run_chat：解析 help / cancel / freeform，调用 DeepAgentsChatResponder' },
       ]
     }]
   },
   triage: {
     type: '工作流：问题分类', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
     title: '🏷️ 问题分类（Triage）', file: 'openbot/application/use_cases/triage.py',
-    desc: 'Issue 事件的第一响应。v0.1 版本在收到新 issue 时发布确认评论。后续版本将增加自动打标签、优先级判断、自动复现等能力。',
+    desc: 'Issue 事件的第一响应。当前实现只在新建 issue 时发布确认评论；编辑、重开和标签事件进入路由但不会做完整自动分类。',
     sections: [{
       label: '处理流程',
       type: 'steps',
@@ -568,53 +574,51 @@ const DETAIL = {
   review: {
     type: '工作流：代码审查', typeColor: '#1f6feb', typeBg: 'rgba(31,111,235,.12)',
     title: '🔬 代码审查（Review）', file: 'openbot/application/use_cases/review.py',
-    desc: 'PR 提交时触发完整的 AI 代码审查。读取本次改动的 diff，输出结构化审查意见，再通过 GitHub 的 PR Review 功能提交。OpenBot 不会阻止合并，只提供意见。',
+    desc: 'PR 提交时触发 AI 代码审查。当前实现会拉取 diff，调用 DeepAgentsReviewResponder，过滤低优意见，并通过 GitHub PR Review API 发布行内或整体意见。',
     sections: [{
       label: '处理流程',
       type: 'steps',
       items: [
         { num: '①', text: '触发：PR 提交、有新推送更新、重开或打标签' },
-        { num: '②', text: 'AI 读取代码变更内容，分析并输出结构化审查意见', tag: { label: 'AI', cls: 't-llm' } },
+        { num: '②', text: '读取 PR diff，并交给 DeepAgentsReviewResponder 生成结构化审查意见', tag: { label: 'AI', cls: 't-llm' } },
         { num: '③', text: '按严重程度过滤审查意见，忽略配置阈值以下的低优问题' },
         { num: '④', text: '将意见分两类：有代码行位置的 → 行内注释；通用性意见 → 统一写在审查总结里' },
         { num: '⑤', text: '智能范围：只审查本次新增的改动，不重复已审查过的旧内容' },
         { num: '⑥', text: '提交审查：没有问题则批准，有问题则仅评论（OpenBot 不阻止合并）', tag: { label: 'GitHub', cls: 't-gh' } },
-        { num: '⑦', text: 'AI 调用失败时：发布错误提示评论，PR 作者可见，不静默失败' },
+        { num: '⑦', text: 'AI 调用失败时：发布 fallback COMMENT review，PR 作者可见，不静默失败' },
       ]
     }]
   },
   fix: {
     type: '工作流：自动修复', typeColor: '#f0883e', typeBg: 'rgba(240,136,62,.12)',
     title: '🔧 自动修复（Fix）', file: 'openbot/application/use_cases/fix.py',
-    desc: 'Issue 被手动指派给 OpenBot 时触发。在云端隔离的开发环境中读取代码、让 AI 分析并尝试修复、运行测试，测试通过后自动开 PR。每个失败路径都会评论说明原因。',
+    desc: 'Issue 被手动指派给 OpenBot 时触发。handler 已经实现 sandbox-backed 修复循环：读 issue、跑 DeepAgentsFixResponder、测试、push 分支并开 PR；但当前 worker 还没有注入 sandbox_factory，因此生产队列路径会先降级为 no-sandbox 回复。',
     sections: [{
       label: '处理流程',
       type: 'steps',
       items: [
         { num: '①', text: '触发：仓库维护者将 issue 指派给 OpenBot' },
         { num: '②', text: '读取 issue 描述内容，以及当前仓库的代码版本信息', tag: { label: 'GitHub', cls: 't-gh' } },
-        { num: '③', text: '申请短期临时访问凭证（有效期短，安全隔离）', tag: { label: 'GitHub', cls: 't-gh' } },
-        { num: '④', text: '在云端 Daytona 平台开启一个全新的隔离开发沙箱' },
-        { num: '⑤', text: '将仓库代码完整克隆到沙箱中' },
-        { num: '⑥', text: 'AI 阅读 issue 和代码，尝试编写修复方案，并在沙箱中运行测试验证', tag: { label: 'AI', cls: 't-llm' } },
-        { num: '✓', text: '测试全部通过：将修复内容提交到新分支，自动开 PR，并在 issue 下评论 PR 链接' },
-        { num: '✗', text: '测试未通过：评论详细的测试失败信息，供人工参考（最多展示 4000 字符）' },
+        { num: '③', text: '如果 ctx.sandbox_handle is None：直接评论 sandbox not configured，不触碰仓库' },
+        { num: '④', text: '如果 sandbox 可用：读取 sandbox checkout，调用 DeepAgentsFixResponder 修复并测试', tag: { label: 'AI', cls: 't-llm' } },
+        { num: '✓', text: '测试全部通过：创建分支、commit_and_push、open PR，并在 issue 下评论 PR 链接' },
+        { num: '✗', text: '测试失败：评论详细失败信息；执行中会检查 cancellation checkpoint' },
       ]
     }]
   },
   chat: {
     type: '工作流：对话交互', typeColor: '#8957e5', typeBg: 'rgba(137,87,229,.12)',
     title: '💬 对话交互（Chat）', file: 'openbot/application/use_cases/chat.py',
-    desc: '评论中以 @openbot 或 @yibots 开头时触发。识别用户意图后分支处理：发送使用说明、终止任务、或让 AI 自由回答问题。',
+    desc: '评论中以 @openbot 或 @yibots 开头时触发。当前实现支持 help、cancel 和自由问答；自由问答走 DeepAgentsChatResponder，但还不是完整 repo-grounded 编程助手。',
     sections: [{
       label: '处理流程',
       type: 'steps',
       items: [
         { num: '①', text: '触发：在 issue 或 PR 的评论中以 @openbot 或 @yibots 开头' },
         { num: '②', text: '解析用户意图：是要帮助说明、取消任务，还是自由提问' },
-        { num: '③', text: '取消指令 → 已在安全检查阶段提前捕获并终止进行中的任务' },
+        { num: '③', text: '取消指令 → 发 cancellation signal，目标任务在 checkpoint 处停止' },
         { num: '④', text: '帮助请求（@openbot help / 帮助 / ?）→ 直接返回使用说明，无需调用 AI' },
-        { num: '⑤', text: '自由提问 → AI 理解问题内容，生成针对性回答', tag: { label: 'AI', cls: 't-llm' } },
+        { num: '⑤', text: '自由提问 → DeepAgentsChatResponder 生成回答；当前还没有完整仓库工具注入', tag: { label: 'AI', cls: 't-llm' } },
         { num: '⑥', text: '空消息（只 @了但没说话）→ 回复基础使用说明' },
         { num: '⑦', text: '将回复发布为评论，并记录完整处理日志' },
       ]
@@ -630,7 +634,13 @@ function showDetail(id) {
   if (!d) return;
 
   document.querySelectorAll('.node-group.active').forEach(n => n.classList.remove('active'));
-  const ng = document.getElementById('ng-' + (id === 'redis' ? 'redis-a' : id));
+  const NODE_FOR_DETAIL = {
+    redis: 'redis-a',
+    worker: 'decide',
+    sandbox: 'redis-b',
+    context: 'worker',
+  };
+  const ng = document.getElementById('ng-' + (NODE_FOR_DETAIL[id] || id));
   if (ng) ng.classList.add('active');
 
   const panel = document.getElementById('detail-panel');
@@ -699,12 +709,12 @@ function toggleAnim() {
 const SIM_SEQUENCE = [
   { id: 'github',  detail: 'github',  label: 'GitHub 检测到仓库事件，主动推送通知' },
   { id: 'fastapi', detail: 'fastapi', label: '验证消息来源真实，识别事件类型' },
-  { id: 'ingest',  detail: 'ingest',  label: '去重 → 识别功能类型 → 状态管理 → 创建 PR 进度标记 → 写入队列' },
-  { id: 'redis-a', detail: 'redis',   label: '任务排队，等待权限检查与分析' },
-  { id: 'decide',  detail: 'decide',  label: '10 道安全检查 → AI 分析意图 → 生成完整任务方案' },
-  { id: 'redis-b', detail: 'redis',   label: '执行任务方案入队，等待 Worker 读取' },
-  { id: 'worker',  detail: 'worker',  label: '后台 Worker 读取任务，检查取消、恢复上下文、加载配置' },
-  { id: 'exec',    detail: 'exec',    label: '调用对应工作流处理器，更新 PR 进度标记' },
+  { id: 'ingest',  detail: 'ingest',  label: '去重 → 路由 → 状态机 → Check Run → 构造 TaskSpec v3' },
+  { id: 'redis-a', detail: 'redis',   label: 'TaskSpec v3 写入 Redis Stream' },
+  { id: 'decide',  detail: 'worker',  label: 'Worker 消费任务，恢复事件、路由和配置' },
+  { id: 'redis-b', detail: 'sandbox', label: 'Sandbox Gate 按策略 provision、跳过或降级' },
+  { id: 'worker',  detail: 'context', label: 'execute_handler 组装 PreflightContext 并调用 handler' },
+  { id: 'exec',    detail: 'exec',    label: '进入对应工作流，更新 Check Run' },
   { id: 'review',  detail: 'review',  label: 'AI 审查代码，过滤意见，提交 PR Review' },
 ];
 
