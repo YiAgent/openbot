@@ -34,6 +34,7 @@ import logging
 import sys as _sys
 from typing import TYPE_CHECKING
 
+from openbot.application.checkout_resolver import resolve_checkout
 from openbot.application.middleware import (
     ActorRoleMiddleware,
     AuditStartMiddleware,
@@ -49,6 +50,10 @@ from openbot.application.middleware import (
     SanitizeInputsMiddleware,
     run_preflight,
 )
+from openbot.application.router import SandboxPolicy
+from openbot.application.sandbox_handle import SandboxedHandle
+from openbot.domain.checkout import CheckoutResolutionError
+from openbot.domain.workflows import Workflow
 from openbot.infrastructure.config_loader import load_for_repo
 
 if TYPE_CHECKING:
@@ -69,6 +74,128 @@ if TYPE_CHECKING:
     from openbot.domain.events import UnifiedEvent
 
 _logger = logging.getLogger(__name__)
+
+
+async def _run_with_sandbox(ctx: PreflightContext) -> None:
+    """OR-merge policy gate → resolve → clone → handler.
+
+    Single source of truth for the unified-sandbox-entry contract:
+
+      1. Compute ``effective_policy = derive_sandbox_policy(...)``.
+      2. If NO_SANDBOX (static OR classifier said skip) OR the deployment
+         has no ``sandbox_factory`` wired, call the handler with
+         ``ctx.sandbox_handle is None``. The handler is responsible for
+         its workflow-specific degrade reply (e.g. fix posts
+         ``_NO_SANDBOX``; chat clarification skips code grounding).
+      3. Otherwise ``resolve_checkout`` (which may raise
+         ``CheckoutResolutionError`` for unmatched (event, workflow)
+         pairs) + ``adapter.get_installation_token`` (which may raise on
+         auth issues). Both failures degrade to "no handle" — better to
+         post a useful comment than retry forever.
+      4. ``async with sandbox_factory() as sandbox`` then ``sandbox.clone``.
+         Clone failure also degrades. Note: we don't keep the sandbox
+         open after a clone failure — that workspace would be unusable.
+      5. Build the ``SandboxedHandle`` triple and call the handler
+         *inside* the ``async with`` block so the sandbox stays alive
+         for the handler's lifetime; ``close`` runs on context exit.
+
+    The handler is called exactly once on every path. Never raises out
+    — callers (``run_dispatch`` / ``execute_handler``) catch their own
+    handler exceptions for check_run plumbing.
+    """
+    dispatch = ctx.dispatch
+    event = ctx.event
+
+    effective_policy = derive_sandbox_policy(
+        static=dispatch.sandbox_policy,
+        classifier_output=ctx.classifier_output,
+        feature=dispatch.feature,
+    )
+    if effective_policy is SandboxPolicy.NO_SANDBOX or ctx.sandbox_factory is None:
+        # NO_SANDBOX path: handler runs immediately with ``sandbox_handle
+        # is None``. ``ctx.classifier_output`` is already in place — the
+        # caller set it before invoking us.
+        await dispatch.handler(ctx)
+        return
+
+    # Tests patch this at the module-attribute level so monkey-patching
+    # ``openbot.application.dispatcher.resolve_checkout`` wins over the
+    # import-time binding (same pattern as ``load_for_repo``).
+    _shim = _sys.modules.get("openbot.application.dispatcher")
+    _resolver = (
+        getattr(_shim, "resolve_checkout", None) if _shim is not None else None
+    ) or resolve_checkout
+    try:
+        # Workflow vs Feature: same string values, different identity
+        # types (audit identity vs LLM-routing identity). The resolver
+        # is audit-side, so we coerce here at the boundary.
+        checkout = await _resolver(event, Workflow(dispatch.feature.value), ctx.adapter)
+        token = await ctx.adapter.get_installation_token(event)
+    except CheckoutResolutionError as exc:
+        _logger.warning(
+            "sandbox_provisioning_skipped_resolution",
+            extra={
+                "delivery_id": event.delivery_id,
+                "repo": event.repo,
+                "feature": dispatch.feature.value,
+                "error": str(exc),
+            },
+        )
+        await dispatch.handler(ctx)
+        return
+    except Exception:
+        _logger.exception(
+            "sandbox_provisioning_skipped_token",
+            extra={
+                "delivery_id": event.delivery_id,
+                "repo": event.repo,
+                "feature": dispatch.feature.value,
+            },
+        )
+        await dispatch.handler(ctx)
+        return
+
+    factory = ctx.sandbox_factory
+    try:
+        async with factory() as sandbox:
+            try:
+                await sandbox.clone(
+                    repo_url=checkout.repo_url,
+                    ref=checkout.ref,
+                    token=token,
+                    strategy=checkout.strategy,
+                )
+            except Exception:
+                _logger.warning(
+                    "sandbox_clone_failed",
+                    extra={
+                        "delivery_id": event.delivery_id,
+                        "repo": event.repo,
+                        "feature": dispatch.feature.value,
+                        "ref": checkout.ref,
+                    },
+                    exc_info=True,
+                )
+                await dispatch.handler(ctx)
+                return
+            ctx_with_handle = dataclasses.replace(
+                ctx,
+                sandbox_handle=SandboxedHandle(sandbox=sandbox, checkout=checkout, token=token),
+            )
+            await dispatch.handler(ctx_with_handle)
+    except Exception:
+        # Factory itself blew up (connection failure to remote backend,
+        # quota error, etc.). Last-ditch: call the handler without a
+        # sandbox so it can at least post a "sandbox unavailable" reply.
+        _logger.exception(
+            "sandbox_factory_failed",
+            extra={
+                "delivery_id": event.delivery_id,
+                "repo": event.repo,
+                "feature": dispatch.feature.value,
+            },
+        )
+        await dispatch.handler(ctx)
 
 
 def build_preflight_chain() -> list:
@@ -245,7 +372,13 @@ async def run_dispatch(
     ctx = dataclasses.replace(ctx, classifier_output=classifier_output)
 
     try:
-        await dispatch.handler(ctx)
+        # Sandbox provisioning lives in ``_run_with_sandbox`` — it
+        # OR-merges the static dispatch policy with the classifier
+        # signal, optionally opens a sandbox + clone, and calls the
+        # handler exactly once. We still wrap in try/except here so the
+        # check_run success/failure plumbing fires symmetrically on
+        # both the sandboxed and the bypass paths.
+        await _run_with_sandbox(ctx)
         # Success path: update check_run if present.
         if check_run_id:
             try:
@@ -331,7 +464,12 @@ async def execute_handler(
         classifier_output=classifier_output,
     )
     try:
-        await dispatch.handler(ctx)
+        # Same provisioning block as ``run_dispatch``. The worker has
+        # already rehydrated ``classifier_output`` from the TaskSpec
+        # (so we don't re-classify), but the policy gate + clone still
+        # apply here — otherwise the worker path would always run with
+        # ``sandbox_handle is None`` and break the unified-entry contract.
+        await _run_with_sandbox(ctx)
         if check_run_id:
             try:
                 await adapter.update_check_run(
@@ -378,11 +516,13 @@ async def execute_handler(
 # all module-level defs leaves the symbol on this module's namespace —
 # which is exactly what test monkeypatches (``setattr(
 # 'openbot.application.dispatcher.classify_for_dispatch', …)``) need.
+from openbot.application.sandbox_policy import derive_sandbox_policy  # noqa: E402
 from openbot.dispatcher.classifier import classify_for_dispatch  # noqa: E402
 
 __all__ = [
     "build_preflight_chain",
     "classify_for_dispatch",
+    "derive_sandbox_policy",
     "execute_handler",
     "run_dispatch",
 ]
