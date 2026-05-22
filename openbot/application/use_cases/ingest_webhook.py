@@ -307,17 +307,14 @@ async def ingest_webhook(
         raise RuntimeError("Redis client is not configured — webhook dispatch requires Redis")
 
     assert queue is not None, "queue port must be set when redis_client is present"
-    entry_id = await queue.enqueue(
+    from openbot.infrastructure.queue.task_spec import TaskSpec
+
+    spec = TaskSpec.from_event_and_dispatch(
         event,
-        feature=dispatch.feature,
-        task_id=dispatch.task_id,
+        dispatch,
         check_run_id=check_run_id,
-        intent=dispatch.intent,
-        run_id=dispatch.run_id,
-        prev_run_id=dispatch.prev_run_id,
-        resource_key=dispatch.resource_key,
-        event_seq=dispatch.event_seq,
     )
+    entry_id = await queue.enqueue_task_spec(spec)
     return IngestResult(
         status="accepted",
         delivery_id=event.delivery_id,
