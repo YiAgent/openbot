@@ -58,10 +58,28 @@ def _make_spec(initial_labels: list[str] | None = None) -> TaskSpec:
 
 
 @pytest.mark.asyncio
-async def test_f01_decide_and_enqueue_produces_task_spec_v3() -> None:
+async def test_f01_decide_and_enqueue_produces_task_spec_v3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """F-01: decide_and_enqueue enqueues TaskSpec v3, not QueuePayload."""
     from openbot.application.router import dispatch_for
     from openbot.dispatcher import decide_and_enqueue
+    from openbot.dispatcher.classifier import TriageClassifierOutput
+
+    # Stub the LLM call so the test runs without ANTHROPIC_API_KEY.
+    # classify_event is the single point where litellm is called; patching
+    # here keeps the full decide_and_enqueue path wired while isolating the
+    # test from external network dependencies.
+    fake_result = TriageClassifierOutput(
+        type="bug",
+        severity_guess="medium",
+        has_reproduction_info=False,
+        looks_like_spam=False,
+    )
+    monkeypatch.setattr(
+        "openbot.dispatcher.classifier.classify_event",
+        AsyncMock(return_value=fake_result),
+    )
 
     event = make_event()
     dispatch = dispatch_for(event)
@@ -84,7 +102,7 @@ async def test_f01_decide_and_enqueue_produces_task_spec_v3() -> None:
     assert len(queue.task_specs) == 1, f"Expected 1 task_spec, got {len(queue.task_specs)}"
     spec = queue.task_specs[0]
     assert spec.spec_version == 3
-    # The classifier runs inside decide_and_enqueue, so classifier_skipped is False
+    # The classifier ran (stubbed above), so classifier_skipped must be False.
     assert spec.classifier_skipped is False
 
     # The old enqueue() path (QueuePayload) should NOT have been called

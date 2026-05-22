@@ -189,6 +189,14 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
     — ``execute_handler`` catches its own handler exceptions for
     check_run plumbing.
     """
+    # Local import to break the circular dependency:
+    # sandbox_policy → dispatcher.classifier → dispatcher.__init__ → decide →
+    # application.dispatcher → sandbox_policy.
+    # Moving the import here means the module-level late binding (lines below)
+    # is no longer needed; it is removed from __all__ and the bottom of this
+    # file to keep the re-export surface honest.
+    from openbot.application.sandbox_policy import derive_sandbox_policy
+
     dispatch = ctx.dispatch
     event = ctx.event
 
@@ -536,12 +544,14 @@ async def execute_handler(
 # all module-level defs leaves the symbol on this module's namespace —
 # which is exactly what test monkeypatches (``setattr(
 # 'openbot.application.dispatcher.classify_for_dispatch', …)``) need.
-from openbot.application.sandbox_policy import derive_sandbox_policy  # noqa: E402
+# NOTE: ``derive_sandbox_policy`` was moved to a local import inside
+# ``execute_handler`` to break the circular import cycle:
+#   sandbox_policy → dispatcher.classifier → dispatcher.__init__ →
+#   decide → application.dispatcher → sandbox_policy
 from openbot.dispatcher.classifier import classify_for_dispatch  # noqa: E402
 
 __all__ = [
     "build_preflight_chain",
     "classify_for_dispatch",
-    "derive_sandbox_policy",
     "execute_handler",
 ]
