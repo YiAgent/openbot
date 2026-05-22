@@ -29,6 +29,7 @@ graceful "sandbox not configured" comment.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import sys as _sys
 from typing import TYPE_CHECKING
@@ -63,6 +64,7 @@ if TYPE_CHECKING:
     from openbot.application.ports.rate_limiter import RateLimiterPort
     from openbot.application.ports.sandbox import SandboxPort
     from openbot.application.router import Dispatch
+    from openbot.dispatcher.classifier import ClassifierOutput
     from openbot.domain.config_schema import EffectiveConfig
     from openbot.domain.events import UnifiedEvent
 
@@ -229,6 +231,19 @@ async def run_dispatch(
                 _logger.exception("check_run_update_failed_on_blocked")
         return
 
+    # Classifier hook (single source of truth — see ``classify_for_dispatch``).
+    # Runs *after* preflight passes so a BLOCKED chain never burns an LLM call.
+    # Monkeypatch-friendly indirection mirrors the ``load_for_repo`` /
+    # ``run_preflight`` pattern above: tests swap the module attribute.
+    _dispatch_shim3 = _sys.modules.get("openbot.application.dispatcher")
+    _classify_fn = (
+        getattr(_dispatch_shim3, "classify_for_dispatch", None)
+        if _dispatch_shim3 is not None
+        else None
+    ) or classify_for_dispatch
+    classifier_output = await _classify_fn(event=event, feature=dispatch.feature, redis=redis)
+    ctx = dataclasses.replace(ctx, classifier_output=classifier_output)
+
     try:
         await dispatch.handler(ctx)
         # Success path: update check_run if present.
@@ -284,11 +299,20 @@ async def execute_handler(
     audit: AuditLogPort | None = None,
     rate_limiter: RateLimiterPort | None = None,
     sandbox_factory: (Callable[[], AbstractAsyncContextManager[SandboxPort]] | None) = None,
+    classifier_output: ClassifierOutput | None = None,
 ) -> None:
     """Execute workflow handler directly — no preflight.
 
     Used by the worker when processing a TaskSpec v3: the webhook async
     segment already ran the full preflight chain. Never raises out.
+
+    ``classifier_output`` is supplied by the worker (after
+    ``parse_classifier_output``-rehydrating the dict from ``TaskSpec``),
+    or by the in-process fallback in ``decide_and_enqueue`` after it
+    calls ``classify_for_dispatch`` once. Callers that haven't been
+    upgraded yet pass ``None`` and the handler sees ``None`` on
+    ``ctx.classifier_output`` — the policy gate degrades to the static
+    ``SandboxPolicy``.
     """
     ctx = PreflightContext(
         event=event,
@@ -304,6 +328,7 @@ async def execute_handler(
         # path also needs the sandbox factory so worker-side FIX
         # dispatches can run the loop end-to-end.
         sandbox_factory=sandbox_factory,
+        classifier_output=classifier_output,
     )
     try:
         await dispatch.handler(ctx)
@@ -346,4 +371,18 @@ async def execute_handler(
                 _logger.exception("check_run_update_failed_on_handler_crash")
 
 
-__all__ = ["build_preflight_chain", "execute_handler", "run_dispatch"]
+# Late binding: ``openbot.dispatcher.classifier`` indirectly re-imports
+# this module (via ``openbot.dispatcher.__init__`` → ``decide.py``), so a
+# top-of-file ``from openbot.dispatcher.classifier import …`` would race
+# with ``build_preflight_chain`` not yet being defined. Importing after
+# all module-level defs leaves the symbol on this module's namespace —
+# which is exactly what test monkeypatches (``setattr(
+# 'openbot.application.dispatcher.classify_for_dispatch', …)``) need.
+from openbot.dispatcher.classifier import classify_for_dispatch  # noqa: E402
+
+__all__ = [
+    "build_preflight_chain",
+    "classify_for_dispatch",
+    "execute_handler",
+    "run_dispatch",
+]

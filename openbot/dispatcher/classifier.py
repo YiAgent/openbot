@@ -14,10 +14,13 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
+from openbot.dispatcher.context import extract_event_context
 from openbot.domain.workflows import Feature
 
 if TYPE_CHECKING:
     import redis.asyncio as redis_async
+
+    from openbot.domain.events import UnifiedEvent
 
 _logger = logging.getLogger(__name__)
 _CACHE_TTL: Final[int] = 3600  # seconds
@@ -121,7 +124,20 @@ def _build_prompt(feature: Feature, body: str) -> str:
     )
 
 
-def _parse_output(feature: Feature, data: dict[str, Any]) -> ClassifierOutput:
+def parse_classifier_output(feature: Feature, data: dict[str, Any]) -> ClassifierOutput:
+    """Reverse-deserialize a classifier output dict into the typed dataclass.
+
+    Public symmetric inverse of ``dataclasses.asdict`` over a
+    ``ClassifierOutput``. The worker uses it to rehydrate the
+    ``TaskSpec.classifier_output`` payload (a plain dict, since
+    ``TaskSpec`` is serialised across the Redis Stream boundary) back
+    into the typed union the policy gate consumes via ``isinstance``.
+
+    The function is intentionally permissive: unknown enum-like
+    values fall back to safe defaults (``"other"``, ``"medium"``,
+    ``"m"``, ``"unclear"``) rather than raising — this is the same
+    forgiveness the LLM path uses on a malformed model response.
+    """
     if feature is Feature.TRIAGE:
         triage_type = data.get("type")
         severity = data.get("severity_guess")
@@ -176,7 +192,7 @@ async def classify_event(
         cached = await _get_cached(redis, key)
         if cached is not None:
             try:
-                return _parse_output(feature, cached)
+                return parse_classifier_output(feature, cached)
             except Exception:
                 # Corrupt cache entry; delete so a fresh result repopulates it.
                 _logger.warning("classifier_cache_corrupt", extra={"key": key}, exc_info=True)
@@ -196,7 +212,7 @@ async def classify_event(
         )
         content: str = response.choices[0].message.content or ""
         data: dict[str, Any] = json.loads(content.strip())
-        result = _parse_output(feature, data)
+        result = parse_classifier_output(feature, data)
         if redis is not None:
             await _set_cached(redis, key, data)
         return result
@@ -238,3 +254,45 @@ def stages_from_classifier(
         return ["plan", "read", "patch", "test", "self_fix"]
 
     return []
+
+
+async def classify_for_dispatch(
+    *,
+    event: UnifiedEvent,
+    feature: Feature,
+    redis: redis_async.Redis | None,
+) -> ClassifierOutput | None:
+    """Single-source classifier hook shared by all dispatcher entry points.
+
+    All three sibling entry points (``decide_and_enqueue``, ``run_dispatch``,
+    ``execute_handler``) used to either inline the classify call or skip it
+    entirely; that drift meant the worker path occasionally bypassed
+    classification and the static-only ``SandboxPolicy`` was over-eager.
+    Centralising the four responsibilities here keeps them lock-step:
+
+      1. **Feature gate** — FIX has no lightweight classifier in v0.1; skip
+         the LLM round-trip rather than spending a token budget for a None.
+      2. **Body extraction** — ``extract_event_context`` is the pure path
+         from ``UnifiedEvent.raw`` to the comment/body string the classifier
+         actually looks at. Centralised so the three call sites can't drift.
+      3. **Fail-open** — any exception (litellm crash, Redis timeout,
+         malformed JSON) returns None. ``derive_sandbox_policy`` treats None
+         as "respect the static SandboxPolicy", so the workflow still runs.
+      4. **Logging** — emits ``classifier_exception_in_dispatch`` once at
+         WARN level so ops can spot a regressing classifier without paging.
+    """
+    if feature is Feature.FIX:
+        return None
+    try:
+        ev_ctx = extract_event_context(event)
+        return await classify_event(
+            feature=feature,
+            body=ev_ctx.classification_body,
+            redis=redis,
+        )
+    except Exception:
+        _logger.exception(
+            "classifier_exception_in_dispatch",
+            extra={"delivery_id": event.delivery_id, "repo": event.repo},
+        )
+        return None
