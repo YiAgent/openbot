@@ -37,6 +37,8 @@ from openbot.infrastructure.agents._fix_tools import make_fix_tools
 from openbot.infrastructure.llm.model_router import Feature, primary_model_for
 
 if TYPE_CHECKING:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
 
 # Same value used by the review responder. LangGraph counts every node
@@ -156,6 +158,8 @@ class DeepAgentsFixResponder:
         adapter: ChannelAdapterPort,
         sandbox: SandboxPort,
         issue: dict[str, Any],
+        run_id: str | None = None,
+        checkpointer: BaseCheckpointSaver | None = None,
     ) -> FixOutcome:
         """Run the fix loop and return a domain outcome.
 
@@ -178,7 +182,11 @@ class DeepAgentsFixResponder:
             tools=tools,
             system_prompt=_SYSTEM_PROMPT,
             response_format=FixOutcomeSchema,
+            checkpointer=checkpointer,
         )
+        config: dict = {"recursion_limit": _RECURSION_LIMIT}
+        if run_id and checkpointer:
+            config["configurable"] = {"thread_id": run_id}
         result = await agent.ainvoke(
             {
                 "messages": [
@@ -193,7 +201,7 @@ class DeepAgentsFixResponder:
                     }
                 ]
             },
-            config={"recursion_limit": _RECURSION_LIMIT},
+            config=config,
         )
         return _extract_outcome(result)
 

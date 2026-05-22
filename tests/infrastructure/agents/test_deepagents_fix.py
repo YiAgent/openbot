@@ -73,7 +73,12 @@ async def test_returns_fix_outcome_when_agent_succeeds(monkeypatch: pytest.Monke
             return _fake_agent_result()
 
     def fake_create_deep_agent(
-        *, model: Any, tools: Any, system_prompt: Any, response_format: Any
+        *,
+        model: Any,
+        tools: Any,
+        system_prompt: Any,
+        response_format: Any,
+        checkpointer: Any = None,
     ) -> FakeAgent:
         captured["model"] = model
         captured["tool_names"] = [t.name for t in tools]
@@ -237,6 +242,92 @@ async def test_raises_when_issue_number_missing(monkeypatch: pytest.MonkeyPatch)
             sandbox=_StubSandbox(),  # type: ignore[arg-type]
             issue={"title": "t", "body": "b", "base_sha": "abc1234"},
         )
+
+
+async def test_fix_responder_passes_checkpointer_and_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """checkpointer is forwarded to create_deep_agent; run_id becomes
+    thread_id in config["configurable"] when both are provided.
+    """
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from openbot.infrastructure.agents import deepagents_fix as mod
+
+    captured: dict[str, Any] = {}
+
+    class FakeAgent:
+        async def ainvoke(self, payload: Any, config: Any) -> dict[str, Any]:
+            captured["config"] = config
+            return _fake_agent_result()
+
+    def fake_create_deep_agent(
+        *,
+        model: Any,
+        tools: Any,
+        system_prompt: Any,
+        response_format: Any,
+        checkpointer: Any,
+    ) -> FakeAgent:
+        captured["checkpointer"] = checkpointer
+        return FakeAgent()
+
+    monkeypatch.setattr(mod, "create_deep_agent", fake_create_deep_agent)
+
+    saver = MemorySaver()
+    responder = mod.DeepAgentsFixResponder()
+    await responder.fix_for_event(
+        _event(),
+        adapter=_StubAdapter(),  # type: ignore[arg-type]
+        sandbox=_StubSandbox(),  # type: ignore[arg-type]
+        issue={"title": "t", "body": "b", "base_sha": "abc1234"},
+        run_id="run-abc",
+        checkpointer=saver,
+    )
+
+    assert captured["checkpointer"] is saver
+    assert captured["config"]["configurable"]["thread_id"] == "run-abc"
+
+
+async def test_fix_responder_no_checkpointer_no_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When run_id / checkpointer are omitted, checkpointer=None is passed
+    to create_deep_agent and no 'configurable' key is added to config.
+    """
+    from openbot.infrastructure.agents import deepagents_fix as mod
+
+    captured: dict[str, Any] = {}
+
+    class FakeAgent:
+        async def ainvoke(self, payload: Any, config: Any) -> dict[str, Any]:
+            captured["config"] = config
+            return _fake_agent_result()
+
+    def fake_create_deep_agent(
+        *,
+        model: Any,
+        tools: Any,
+        system_prompt: Any,
+        response_format: Any,
+        checkpointer: Any,
+    ) -> FakeAgent:
+        captured["checkpointer"] = checkpointer
+        return FakeAgent()
+
+    monkeypatch.setattr(mod, "create_deep_agent", fake_create_deep_agent)
+
+    responder = mod.DeepAgentsFixResponder()
+    await responder.fix_for_event(
+        _event(),
+        adapter=_StubAdapter(),  # type: ignore[arg-type]
+        sandbox=_StubSandbox(),  # type: ignore[arg-type]
+        issue={"title": "t", "body": "b", "base_sha": "abc1234"},
+        # no run_id, no checkpointer
+    )
+
+    assert captured["checkpointer"] is None
+    assert "configurable" not in captured["config"]
 
 
 async def test_responder_rebuilds_agent_per_event(monkeypatch: pytest.MonkeyPatch) -> None:
