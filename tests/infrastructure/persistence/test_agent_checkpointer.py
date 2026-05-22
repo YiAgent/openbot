@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import pytest
@@ -19,7 +19,7 @@ async def test_agent_checkpointer_yields_saver(monkeypatch: pytest.MonkeyPatch) 
             setup_called.append(True)
 
     @asynccontextmanager
-    async def _fake_from_conn_string(dsn: str) -> AsyncIterator[_FakeSaver]:
+    async def _fake_from_conn_string(dsn: str) -> AsyncGenerator[_FakeSaver, None]:
         yield _FakeSaver()
 
     monkeypatch.setattr(mod, "_AsyncPostgresSaver_from_conn_string", _fake_from_conn_string)

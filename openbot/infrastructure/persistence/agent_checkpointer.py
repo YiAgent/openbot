@@ -13,7 +13,7 @@ checkpointing entirely (same graceful-degrade pattern as
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -34,7 +34,7 @@ async def _AsyncPostgresSaver_from_conn_string(dsn: str) -> AsyncGenerator[objec
 @asynccontextmanager
 async def agent_checkpointer(
     dsn: str | None,
-) -> AsyncIterator[AsyncPostgresSaver | None]:
+) -> AsyncGenerator[AsyncPostgresSaver | None, None]:
     """Yield a ready-to-use ``AsyncPostgresSaver``, or ``None`` if no DSN.
 
     ``setup()`` is called once — it is idempotent and creates the four
