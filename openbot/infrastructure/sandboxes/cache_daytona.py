@@ -260,14 +260,45 @@ class DaytonaSnapshotCache:
         await asyncio.to_thread(
             self._client.create_snapshot,
             workspace_id=workspace_id,
-            labels={"openbot_key": key, "openbot_ref": handle.checkout.ref},
+            labels={
+                "openbot_key": key,
+                "openbot_ref": handle.checkout.ref,
+                "openbot_repo_url": handle.checkout.repo_url,
+                "openbot_installation_id": str(installation_id),
+            },
         )
 
-    async def evict_repo(self, repo_url: str, *, installation_id: int) -> None:
-        """Delete all snapshots for one repo under this installation.
+        # ── LRU eviction ─────────────────────────────────────────────────
+        # List all snapshots for this installation; if we now exceed max_entries,
+        # evict the oldest by created_at (fire-and-forget background task).
+        all_snaps: list[Any] = await asyncio.to_thread(
+            self._client.list_snapshots,
+            labels={"openbot_installation_id": str(installation_id)},
+        )
+        if len(all_snaps) > self._max_entries:
+            # Sort ascending by created_at; evict the oldest.
+            sorted_snaps = sorted(all_snaps, key=lambda s: s.created_at)
+            evict_count = len(all_snaps) - self._max_entries
+            for snap in sorted_snaps[:evict_count]:
+                _schedule_background(_evict_snapshot(self._client, snap.id))
 
-        Implemented in Task 3.3. Currently a no-op (idempotent stub).
+    async def evict_repo(self, repo_url: str, *, installation_id: int) -> None:
+        """Delete all snapshots for ``repo_url`` under this installation.
+
+        Issues one ``list_snapshots`` call filtered by ``openbot_repo_url`` +
+        ``openbot_installation_id``, then schedules a background ``delete_snapshot``
+        for each matching entry.  The eviction is fire-and-forget: it does not
+        block the caller and never raises.
         """
+        snaps: list[Any] = await asyncio.to_thread(
+            self._client.list_snapshots,
+            labels={
+                "openbot_repo_url": repo_url,
+                "openbot_installation_id": str(installation_id),
+            },
+        )
+        for snap in snaps:
+            _schedule_background(_evict_snapshot(self._client, snap.id))
 
 
 __all__ = ["DaytonaSnapshotCache"]

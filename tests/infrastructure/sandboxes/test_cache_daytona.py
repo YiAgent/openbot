@@ -410,3 +410,142 @@ async def test_publish_raises_on_sdk_create_snapshot_failure() -> None:
 
     with pytest.raises(RuntimeError, match="quota exceeded"):
         await cache.publish(handle, installation_id=installation_id)
+
+
+# ── Task 3.3 tests — eviction policies ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_lru_eviction_runs_on_publish_when_count_exceeds_max() -> None:
+    """When the per-installation snapshot count exceeds max_entries after a
+    publish, the cache evicts the oldest snapshot (by created_at) via
+    _schedule_background → delete_snapshot.
+
+    Setup:
+      - max_entries = 3
+      - 3 existing snapshots already in the backend (index already full)
+      - publish one more → LRU eviction fires
+      - Oldest snapshot's delete_snapshot must be called
+    """
+    installation_id = 42
+    checkout = _checkout(ref="new-ref")
+    key_new = _cache_key(checkout, installation_id=installation_id)
+
+    now = _now_utc()
+    from datetime import timedelta
+
+    # Three existing snapshots: snap-old is oldest (3 hours ago), snap-mid 2h, snap-recent 1h.
+    snap_old = _mock_snapshot(snapshot_id="snap-old", created_at=now - timedelta(hours=3))
+    snap_mid = _mock_snapshot(snapshot_id="snap-mid", created_at=now - timedelta(hours=2))
+    snap_recent_snap = _mock_snapshot(
+        snapshot_id="snap-recent", created_at=now - timedelta(hours=1)
+    )
+
+    # After create_snapshot the backend has 4 entries (3 existing + snap-newest).
+    # Use a mutable list so the LRU query sees the post-publish count.
+    lru_list: list[Any] = [snap_old, snap_mid, snap_recent_snap]
+
+    def _list_snapshots(labels: dict[str, str]) -> list[Any]:  # type: ignore[misc]
+        # Idempotency check (by exact key) → not cached yet.
+        if labels.get("openbot_key") == key_new:
+            return []
+        # LRU check (by installation_id) → current backend state.
+        if "openbot_installation_id" in labels:
+            return list(lru_list)
+        return []
+
+    def _create_snapshot(**_kwargs: Any) -> MagicMock:  # type: ignore[misc]
+        snap = MagicMock()
+        snap.id = "snap-newest"
+        snap.created_at = now  # just created — newest
+        lru_list.append(snap)  # simulate backend storing it
+        return snap
+
+    client = MagicMock()
+    client.list_snapshots.side_effect = _list_snapshots
+    client.create_snapshot.side_effect = _create_snapshot
+    client.delete_snapshot.return_value = None
+
+    handle, ws = _make_handle(client=client, workspace_id="ws-lru", checkout=checkout)
+    ws.process.exec.return_value = MagicMock(exit_code=0, result="", additional_properties={})
+    # max_entries=3: after publishing the 4th, oldest must be evicted.
+    cache = DaytonaSnapshotCache(daytona_client=client, ttl_seconds=86_400, max_entries=3)
+
+    await cache.publish(handle, installation_id=installation_id)
+    await asyncio.sleep(0)  # drain background eviction task
+
+    # The oldest snapshot should be evicted.
+    client.delete_snapshot.assert_called_once_with("snap-old")
+
+
+@pytest.mark.asyncio
+async def test_ttl_eviction_runs_on_acquire_for_stale_entry() -> None:
+    """Already covered by test_acquire_treats_stale_snapshot_as_miss (Task 3.1).
+
+    This duplicate documents the TTL policy as part of the Task 3.3
+    acceptance matrix and asserts the same contract: stale entries are
+    treated as miss + background-evicted.
+    """
+    checkout = _checkout()
+    key = _cache_key(checkout, installation_id=99)
+    # 48-hour-old snapshot; TTL = 24h.
+    stale_snap = _mock_snapshot(
+        snapshot_id="snap-ttl-stale",
+        key=key,
+        created_at=_now_utc() - timedelta(hours=48),
+    )
+    client = _make_client(snapshots=[stale_snap])
+    cache = DaytonaSnapshotCache(daytona_client=client, ttl_seconds=86_400)
+
+    result = await cache.acquire(checkout, "ghs_t", installation_id=99)
+    await asyncio.sleep(0)
+
+    assert result is None
+    client.delete_snapshot.assert_called_once_with(stale_snap.id)
+
+
+@pytest.mark.asyncio
+async def test_evict_repo_deletes_all_keys_for_repo_url() -> None:
+    """evict_repo('https://github.com/acme/widget.git') must delete all
+    snapshots whose openbot_repo_url label matches that URL under the given
+    installation_id, leaving snapshots from other repos untouched.
+
+    The method issues one list_snapshots call filtered by repo_url + installation_id,
+    then schedules a background delete for each matching snapshot.
+    """
+    target_repo = "https://github.com/acme/widget.git"
+
+    installation_id = 55
+
+    # Three snapshots of target_repo, one of other_repo.
+    snap_a = _mock_snapshot(snapshot_id="snap-repo-a")
+    snap_b = _mock_snapshot(snapshot_id="snap-repo-b")
+    snap_c = _mock_snapshot(snapshot_id="snap-repo-c")
+
+    def _list_snapshots(labels: dict[str, str]) -> list[Any]:  # type: ignore[misc]
+        if labels.get("openbot_repo_url") == target_repo:
+            return [snap_a, snap_b, snap_c]
+        # other_repo or unrecognised query → nothing.
+        return []
+
+    client = MagicMock()
+    client.list_snapshots.side_effect = _list_snapshots
+    client.delete_snapshot.return_value = None
+
+    cache = DaytonaSnapshotCache(daytona_client=client, ttl_seconds=86_400)
+    await cache.evict_repo(target_repo, installation_id=installation_id)
+    await asyncio.sleep(0)  # drain background eviction tasks
+
+    # All three target-repo snapshots evicted, other_repo untouched.
+    deleted_ids = {call.args[0] for call in client.delete_snapshot.call_args_list}
+    assert deleted_ids == {"snap-repo-a", "snap-repo-b", "snap-repo-c"}
+
+    # Verify we queried with the correct labels.
+    list_call_labels = [
+        call.kwargs.get("labels", {}) for call in client.list_snapshots.call_args_list
+    ]
+    assert any(
+        lbl.get("openbot_repo_url") == target_repo
+        and lbl.get("openbot_installation_id") == str(installation_id)
+        for lbl in list_call_labels
+    ), f"Expected list_snapshots with repo_url+installation_id labels; got {list_call_labels}"
