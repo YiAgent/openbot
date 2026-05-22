@@ -25,7 +25,7 @@
 | 2.2 — OR-merge policy + provisioning | ✅ landed | `db93427` |
 | 2.3 — Bypass observability counters | ✅ landed | `1be5dbc` |
 | 3 — `fix.py` migration | ✅ landed | `3a0ab50` |
-| 4 — Snapshot cache | 📝 spec drafted (`f1a142d`); plan pending | [`specs/2026-05-21-sandbox-snapshot-cache-design.md`](../specs/2026-05-21-sandbox-snapshot-cache-design.md) |
+| 4 — Snapshot cache | 📝 spec (`f1a142d`) + plan (`22749dd`) drafted; impl pending | [spec](../specs/2026-05-21-sandbox-snapshot-cache-design.md) / [plan](./2026-05-21-sandbox-snapshot-cache-plan.md) |
 | 5 — Triage repro responder | ⏳ pending | — |
 | 6 — Review grounded responder | ⏳ pending | — |
 | 7 — Chat code-grounding responder | ⏳ pending | — |
