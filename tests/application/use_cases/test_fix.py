@@ -118,6 +118,8 @@ def _ctx(
     event: UnifiedEvent | None = None,
     adapter: Any,
     sandbox_handle: SandboxedHandle | None,
+    run_id: str | None = None,
+    agent_checkpointer: Any = None,
 ) -> Any:
     from openbot.application.middleware import PreflightContext
     from openbot.application.router import Dispatch, derive_task_id
@@ -128,12 +130,13 @@ def _ctx(
     real_event = event or _event()
     return PreflightContext(
         event=real_event,
-        dispatch=Dispatch(Feature.FIX, maybe_run_fix, derive_task_id(real_event)),
+        dispatch=Dispatch(Feature.FIX, maybe_run_fix, derive_task_id(real_event), run_id=run_id),
         config=baked_in_defaults(),
         adapter=adapter,
         session_factory=None,
         redis=None,
         sandbox_handle=sandbox_handle,
+        agent_checkpointer=agent_checkpointer,
     )
 
 
@@ -192,7 +195,7 @@ async def test_fix_uses_sandbox_handle_from_context(monkeypatch):
     sandbox = FakeSandboxLifecycle()
     adapter = _adapter()
 
-    async def fake_generate(*, sandbox, event, adapter, issue):
+    async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
         return FixOutcome(attempt=_attempt(tests_passed=True))
 
     monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
@@ -243,7 +246,7 @@ async def test_audit_lifecycle_records_pr_url_on_success(monkeypatch):
 
     monkeypatch.setattr(fix_module, "audit_lifecycle", fake_audit_lifecycle)
 
-    async def fake_generate(*, sandbox, event, adapter, issue):
+    async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
         return FixOutcome(attempt=_attempt(tests_passed=True))
 
     monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
@@ -263,7 +266,7 @@ async def test_comments_with_truncated_output_when_tests_failed(monkeypatch):
     adapter = _adapter()
     huge = "X" * 50_000
 
-    async def fake_generate(*, sandbox, event, adapter, issue):
+    async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
         return FixOutcome(
             attempt=_attempt(tests_passed=False, test_output=huge),
         )
@@ -316,7 +319,7 @@ async def test_failure_in_stage_yields_tailored_comment(
         adapter_overrides["get_issue"] = AsyncMock(side_effect=RuntimeError("404"))
     elif stage == "agent":
 
-        async def fake_generate(*, sandbox, event, adapter, issue):
+        async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
             raise RuntimeError("agent imploded")
 
         monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
@@ -338,7 +341,7 @@ async def test_failure_in_stage_yields_tailored_comment(
 
     if stage != "agent":
 
-        async def fake_generate(*, sandbox, event, adapter, issue):
+        async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
             return FixOutcome(attempt=_attempt(tests_passed=True))
 
         monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
@@ -351,3 +354,59 @@ async def test_failure_in_stage_yields_tailored_comment(
         adapter.open_pull_request.assert_not_called()
 
     assert expected_phrase in adapter.reply.call_args.args[1].lower()
+
+
+# ---------- Checkpointer + cancellation ----------
+
+
+@pytest.mark.asyncio
+async def test_fix_passes_checkpointer_and_run_id_to_responder(monkeypatch) -> None:
+    """maybe_run_fix must forward ctx.agent_checkpointer + ctx.dispatch.run_id
+    to _generate_fix_outcome."""
+    from langgraph.checkpoint.memory import MemorySaver
+
+    captured: dict[str, Any] = {}
+
+    async def fake_generate(
+        *, sandbox, event, adapter, issue, run_id=None, checkpointer=None
+    ) -> FixOutcome:
+        captured["run_id"] = run_id
+        captured["checkpointer"] = checkpointer
+        return FixOutcome(attempt=_attempt(tests_passed=True))
+
+    monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
+
+    saver = MemorySaver()
+    ctx = _ctx(
+        adapter=_adapter(),
+        sandbox_handle=_handle(),
+        run_id="run-fix-1",
+        agent_checkpointer=saver,
+    )
+    await fix_module.maybe_run_fix(ctx)
+
+    assert captured["run_id"] == "run-fix-1"
+    assert captured["checkpointer"] is saver
+
+
+@pytest.mark.asyncio
+async def test_fix_cancellation_checkpoint_fires_before_agent(monkeypatch) -> None:
+    """If cancellation is signalled before the agent call, RunCancelledError propagates.
+
+    RunCancelledError inherits from asyncio.CancelledError → BaseException, so
+    audit_lifecycle's ``except Exception`` guard does NOT intercept it.
+    """
+    from openbot.application.state.cancellation import RunCancelledError
+
+    async def _always_cancelled(redis: Any, run_id: str) -> None:
+        raise RunCancelledError()
+
+    monkeypatch.setattr(fix_module, "checkpoint", _always_cancelled)
+
+    ctx = _ctx(
+        adapter=_adapter(),
+        sandbox_handle=_handle(),
+        run_id="run-cancel-test",
+    )
+    with pytest.raises(RunCancelledError):
+        await fix_module.maybe_run_fix(ctx)

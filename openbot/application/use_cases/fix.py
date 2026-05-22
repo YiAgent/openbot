@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from openbot.application.state.cancellation import checkpoint
 from openbot.application.use_cases._lifecycle import audit_lifecycle
 from openbot.application.use_cases._tracing import traceable as _traceable
 from openbot.domain.fix import FixOutcome
@@ -34,6 +35,8 @@ from openbot.domain.workflows import Workflow
 from openbot.infrastructure.agents import DeepAgentsFixResponder
 
 if TYPE_CHECKING:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
     from openbot.application.middleware.preflight import PreflightContext
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
     from openbot.application.ports.sandbox import SandboxPort
@@ -140,6 +143,8 @@ async def _generate_fix_outcome(
     event: UnifiedEvent,
     adapter: ChannelAdapterPort,
     issue: dict[str, Any],
+    run_id: str | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ) -> FixOutcome:
     """Module-level seam — E2E tests monkeypatch this to skip DeepAgents.
 
@@ -154,6 +159,8 @@ async def _generate_fix_outcome(
         adapter=adapter,
         sandbox=sandbox,
         issue=issue,
+        run_id=run_id,
+        checkpointer=checkpointer,
     )
 
 
@@ -169,6 +176,8 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
 
     adapter = ctx.adapter
     issue_number = event.issue_number
+    run_id = ctx.dispatch.run_id
+    checkpointer = ctx.agent_checkpointer
 
     # Unified-entry contract: the dispatcher either pre-provisions a
     # SandboxedHandle (sandbox + checkout + token, already cloned) or
@@ -199,6 +208,13 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
             audit.outcome = "get_issue_failed"
             return
 
+        # ① Cancellation checkpoint after slow I/O — raises RunCancelledError
+        # (BaseException, not Exception) if the user cancelled the run.
+        # RunCancelledError propagates through audit_lifecycle's except-Exception
+        # guard unchanged, reaching the worker where the task is cleaned up.
+        if run_id:
+            await checkpoint(ctx.redis, run_id)
+
         default_branch = str(issue.get("default_branch", "main"))
 
         try:
@@ -207,12 +223,18 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
                 event=event,
                 adapter=adapter,
                 issue=issue,
+                run_id=run_id,
+                checkpointer=checkpointer,
             )
         except Exception:
             _logger.exception("fix_agent_failed", extra=_log_extra(event))
             await _safe_reply(adapter, event, _AGENT_FAIL)
             audit.outcome = "agent_failed"
             return
+
+        # ② Checkpoint after the (potentially long) agent loop.
+        if run_id:
+            await checkpoint(ctx.redis, run_id)
 
         if not outcome.attempt.tests_passed:
             await _safe_reply(
@@ -237,6 +259,10 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
             audit.outcome = "create_branch_failed"
             return
 
+        # ③ Checkpoint after branch creation.
+        if run_id:
+            await checkpoint(ctx.redis, run_id)
+
         try:
             await sandbox.commit_and_push(
                 branch_ref=branch,
@@ -248,6 +274,10 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
             await _safe_reply(adapter, event, _PUSH_FAIL)
             audit.outcome = "push_failed"
             return
+
+        # ④ Checkpoint after push.
+        if run_id:
+            await checkpoint(ctx.redis, run_id)
 
         try:
             pr = await adapter.open_pull_request(
@@ -266,6 +296,16 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
             await _safe_reply(adapter, event, _OPEN_PR_FAIL)
             audit.outcome = "open_pr_failed"
             return
+
+        # ⑤ Cleanup: agent completed successfully, checkpoint data no longer needed.
+        if run_id and checkpointer is not None:
+            try:
+                await checkpointer.adelete_thread(run_id)
+            except Exception:
+                _logger.warning(
+                    "fix_checkpoint_delete_failed",
+                    extra={"run_id": run_id, **_log_extra(event)},
+                )
 
         pr_url = str(pr.get("html_url", ""))
         await _safe_reply(
