@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     import redis.asyncio as redis_async
+    from langgraph.checkpoint.base import BaseCheckpointSaver
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from openbot.application.ports.audit_log import AuditLogPort
@@ -144,6 +145,13 @@ class PreflightContext:
     # out, or raised — the policy-gate code treats None as "respect
     # the static SandboxPolicy" (see ``derive_sandbox_policy``).
     classifier_output: ClassifierOutput | None = None
+    # LangGraph agent checkpointer — one ``AsyncPostgresSaver`` per Worker
+    # process, shared across consumers. ``None`` in dev / tests / callers
+    # that haven't been upgraded. Handlers access via ``ctx.agent_checkpointer``
+    # and pass it (plus ``ctx.dispatch.run_id``) to the responder. Graceful-
+    # degrade: ``None`` means "no persistence" — same pattern as
+    # ``ctx.sandbox_factory is None``.
+    agent_checkpointer: BaseCheckpointSaver | None = None
     # Reserved for slice B+: middlewares may stash cached lookups
     # (actor role, cancel set membership) keyed by their middleware name.
     # Frozen at construction; slice A leaves it empty.

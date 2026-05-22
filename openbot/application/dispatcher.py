@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     import redis.asyncio as redis_async
+    from langgraph.checkpoint.base import BaseCheckpointSaver
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from openbot.application.ports.audit_log import AuditLogPort
@@ -498,6 +499,7 @@ async def execute_handler(
     rate_limiter: RateLimiterPort | None = None,
     sandbox_factory: (Callable[[], AbstractAsyncContextManager[SandboxPort]] | None) = None,
     classifier_output: ClassifierOutput | None = None,
+    agent_checkpointer: BaseCheckpointSaver | None = None,
 ) -> None:
     """Execute workflow handler directly — no preflight.
 
@@ -527,6 +529,7 @@ async def execute_handler(
         # dispatches can run the loop end-to-end.
         sandbox_factory=sandbox_factory,
         classifier_output=classifier_output,
+        agent_checkpointer=agent_checkpointer,
     )
     try:
         # Same provisioning block as ``run_dispatch``. The worker has
