@@ -20,7 +20,7 @@
 
 | Part | Status | Commits |
 |---|---|---|
-| 1 — Port + key + in-memory cache | 🚧 in progress (1.1 ✅ `28c20b3`, 1.2 ✅ `78c14e2`, 1.3 ✅ `4201223`; 1.4 pending) | — |
+| 1 — Port + key + in-memory cache | ✅ complete (1.1 `28c20b3`, 1.2 `78c14e2`, 1.3 `4201223`, 1.4 `19fab6a`) | 28c20b3…19fab6a |
 | 2 — Dispatcher wiring + observability | ⏳ pending | — |
 | 3 — Daytona snapshot adapter | ⏳ pending | — |
 | 4 — Rollout, guardrails, E2E | ⏳ pending | — |
@@ -124,24 +124,24 @@ If a name in a later part doesn't match this table, **fix the earliest part and 
   - Also exported from `openbot/infrastructure/sandboxes/__init__.py` alongside `DaytonaSandboxAdapter` / `FakeSandboxAdapter` so wiring imports stay tidy.
 - [x] Run targeted tests + lint + import contract; commit as `feat(sandbox-cache): NoOpSandboxCache default backend`.
 
-### Task 1.4: `InMemorySandboxCache` (LRU + TTL warm pool)
+### Task 1.4: `InMemorySandboxCache` (LRU + TTL warm pool) ✅ (commit `19fab6a`)
 
-- [ ] **Write failing test** `tests/infrastructure/sandboxes/test_cache_fake.py`:
-  - `test_first_acquire_is_miss` — empty cache, acquire returns `None`.
-  - `test_publish_then_acquire_hits` — publish a handle; subsequent acquire with same checkout returns a handle whose `checkout` equals the original.
-  - `test_acquire_runs_refresh_to_ref` — hydrated handle's sandbox saw `git fetch + git reset --hard <ref>` (assert via FakeSandboxAdapter command log).
-  - `test_publish_is_idempotent` — publish twice; only one entry; second publish doesn't raise.
-  - `test_lru_evicts_oldest_when_max_exceeded` — set `max_entries=2`; publish A, B, C; assert A is evicted, B and C remain.
-  - `test_ttl_evicts_stale_entries` — set `ttl_seconds=0.01`; publish; `await asyncio.sleep(0.05)`; acquire returns None (and `cache_total{result=stale}` counter fired — see Part 2).
-  - `test_evict_repo_clears_all_keys_for_repo_url` — publish A (repo1), B (repo1), C (repo2); `evict_repo(repo1)`; only C survives.
-  - `test_concurrent_publish_is_safe` — `asyncio.gather` 10 publishes of the same key; exactly one cache entry.
-- [ ] **Implement** `openbot/infrastructure/sandboxes/cache_fake.py`:
-  - `class InMemorySandboxCache` storing `dict[str, _Entry]` with `_Entry(sandbox: SandboxPort, checkout: CheckoutSpec, created_at: float, last_access: float)`.
-  - LRU is a stable insertion-order dict + access-bumps on hit (use `OrderedDict.move_to_end` or rebuild dict).
-  - `_refresh_to_ref` calls `sandbox.run(["git", "remote", "set-url", "origin", _inject_token(url, token)])` then fetch+reset.
-  - Concurrency: `asyncio.Lock` around index mutations.
-  - Constructor: `InMemorySandboxCache(sandbox_factory, *, max_entries=50, ttl_seconds=86_400)`.
-- [ ] Run `make check`. Commit: `feat(sandbox-cache): InMemorySandboxCache with LRU + TTL`.
+- [x] **Write failing test** `tests/infrastructure/sandboxes/test_cache_fake.py` — 9 tests:
+  - `test_first_acquire_is_miss`, `test_publish_then_acquire_hits`, `test_acquire_runs_refresh_to_ref`
+    (asserts set-url+fetch+reset command sequence via `_ScriptedSandbox` stub)
+  - `test_acquire_evicts_and_misses_on_refresh_failure` *(added — corrupted-snapshot eviction)*
+  - `test_publish_is_idempotent`, `test_lru_evicts_oldest_when_max_exceeded`, `test_ttl_evicts_stale_entries`
+    (TTL=0 instead of sleep — deterministic), `test_evict_repo_clears_keys_for_one_repo_only`,
+    `test_concurrent_publish_is_safe`
+- [x] **Implement** `openbot/infrastructure/sandboxes/cache_fake.py`:
+  - `OrderedDict[str, _Entry]` index; `move_to_end` for O(1) LRU bump; `popitem(last=False)` for eviction.
+  - `asyncio.Lock` wraps only index mutations; git I/O runs outside to avoid serialising acquires.
+  - `_refresh_to_ref`: set-url → fetch → reset; non-zero exit raises `CacheCorruptedError`.
+  - TTL check uses `>=` so `ttl_seconds=0` makes entries immediately stale without `asyncio.sleep`.
+  - `_inject_token` handles both HTTPS (inject credential) and `file://` (pass through unchanged) so
+    test stubs using local origins work without errors.
+  - `size()` test-visible helper; not part of `SandboxCachePort`.
+- [x] Pre-commit hooks passed (ruff import sort applied, all green). Commit `19fab6a`.
 
 **Part 1 acceptance:** all four new modules have ≥ 95% line coverage; `make check` green; dispatcher unchanged; no production behavior change.
 
