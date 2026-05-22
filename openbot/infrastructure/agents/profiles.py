@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 from enum import StrEnum
 
-DomainResult = TypeVar("DomainResult")
+DomainResult = TypeVar("DomainResult", covariant=True)
 
 
 @dataclass(frozen=True, slots=True)
