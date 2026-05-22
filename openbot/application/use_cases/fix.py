@@ -1,13 +1,21 @@
 """Issue → PR fix workflow — PRD §4.3 end-to-end pipeline.
 
-Flow:
-  1. Fetch the issue body and base commit from GitHub.
-  2. Open a sandbox via ``ctx.sandbox_factory()``.
-  3. Clone the repo with an installation-scoped token.
-  4. Run ``DeepAgentsFixResponder`` to produce a ``FixOutcome``.
-  5. Tests passed → push branch, open PR, comment with PR URL.
+Flow (Part-3 post-migration shape):
+  1. Fetch the issue body from GitHub (default branch / base SHA come
+     from the same payload).
+  2. Consume the pre-provisioned ``ctx.sandbox_handle`` —
+     ``dispatcher._run_with_sandbox`` already opened the sandbox,
+     fetched the installation token, resolved the ``CheckoutSpec``,
+     and cloned at ``checkout.ref``. The handler **never** clones.
+  3. Run ``DeepAgentsFixResponder`` to produce a ``FixOutcome``.
+  4. Tests passed → push branch, open PR, comment with PR URL.
      Tests failed → comment with the truncated test output.
      Any step raised → comment with the corresponding error template.
+
+If ``ctx.sandbox_handle is None`` the handler posts the ``_NO_SANDBOX``
+degrade reply and returns — the dispatcher already logged the cause
+(factory missing / clone failed / resolution failed) under
+``openbot_dispatch_sandbox_total{bypass_source="degrade"}``.
 
 The whole pipeline runs inside ``audit_lifecycle`` so the workflow
 phase transitions get logged uniformly with review/triage. No path
@@ -47,10 +55,12 @@ _ISSUE_READ_FAIL = (
     ":warning: OpenBot could not read this issue from GitHub. The fix loop "
     "was skipped. The error has been logged."
 )
-_CLONE_FAIL = (
-    ":warning: OpenBot opened a sandbox but could not clone the repository. "
-    "The fix loop was skipped. The error has been logged."
-)
+# Part 3: ``_CLONE_FAIL`` was deleted with the internal clone block.
+# The dispatcher now owns clone + token errors — both surface to the
+# user as ``_NO_SANDBOX`` (the dispatcher leaves ``sandbox_handle =
+# None`` on its degrade path) and are tagged on the
+# ``dispatch_sandbox_total{bypass_source="degrade"}`` counter so ops
+# can still split the causes in dashboards.
 _AGENT_FAIL = (
     ":warning: OpenBot's fix agent failed before producing a result. "
     "The error has been logged; please re-assign the issue to retry."
@@ -160,9 +170,25 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
     adapter = ctx.adapter
     issue_number = event.issue_number
 
-    if ctx.sandbox_factory is None:
+    # Unified-entry contract: the dispatcher either pre-provisions a
+    # SandboxedHandle (sandbox + checkout + token, already cloned) or
+    # sets ``sandbox_handle = None`` on the degrade path. The cause of
+    # the degrade (factory missing / resolver / clone / token) is
+    # already counted by ``openbot_dispatch_sandbox_total`` — we just
+    # post the user-visible reply here.
+    if ctx.sandbox_handle is None:
         await _safe_reply(adapter, event, _NO_SANDBOX)
         return
+
+    handle = ctx.sandbox_handle
+    sandbox = handle.sandbox
+    token = handle.token
+    # ``checkout.ref`` is the concrete SHA the dispatcher cloned at, so
+    # the branch name lines up with the workspace HEAD even if the
+    # adapter's issue payload disagrees (defence-in-depth — the
+    # resolver and the adapter both look at the same ``base_sha`` in
+    # v0.1, but coupling on the handle makes the dependency explicit).
+    base_sha = handle.checkout.ref
 
     async with audit_lifecycle(ctx, workflow=Workflow.FIX) as audit:
         try:
@@ -173,112 +199,87 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
             audit.outcome = "get_issue_failed"
             return
 
-        clone_url = str(issue.get("clone_url", ""))
-        base_sha = str(issue.get("base_sha", ""))
         default_branch = str(issue.get("default_branch", "main"))
 
-        # The token is a bearer secret. We pass it through to the
-        # ``SandboxPort`` as a separate argument rather than baking it
-        # into the clone URL — the adapter owns the interpolation and
-        # the HTTPS-only invariant (see ``DaytonaSandboxAdapter._inject_token``).
         try:
-            token = await adapter.get_installation_token(event)
+            outcome = await _generate_fix_outcome(
+                sandbox=sandbox,
+                event=event,
+                adapter=adapter,
+                issue=issue,
+            )
         except Exception:
-            _logger.exception("fix_token_failed", extra=_log_extra(event))
-            await _safe_reply(adapter, event, _CLONE_FAIL)
-            audit.outcome = "token_failed"
+            _logger.exception("fix_agent_failed", extra=_log_extra(event))
+            await _safe_reply(adapter, event, _AGENT_FAIL)
+            audit.outcome = "agent_failed"
             return
 
-        factory = ctx.sandbox_factory
-        assert factory is not None  # narrowed by the early return above.
-        async with factory() as sandbox:
-            try:
-                await sandbox.clone(repo_url=clone_url, ref=base_sha, token=token)
-            except Exception:
-                _logger.exception("fix_clone_failed", extra=_log_extra(event))
-                await _safe_reply(adapter, event, _CLONE_FAIL)
-                audit.outcome = "clone_failed"
-                return
-
-            try:
-                outcome = await _generate_fix_outcome(
-                    sandbox=sandbox,
-                    event=event,
-                    adapter=adapter,
-                    issue=issue,
-                )
-            except Exception:
-                _logger.exception("fix_agent_failed", extra=_log_extra(event))
-                await _safe_reply(adapter, event, _AGENT_FAIL)
-                audit.outcome = "agent_failed"
-                return
-
-            if not outcome.attempt.tests_passed:
-                await _safe_reply(
-                    adapter,
-                    event,
-                    _TESTS_FAILED_HEADER.format(
-                        summary=outcome.attempt.summary,
-                        cmd=outcome.attempt.test_command,
-                        output=_truncate(outcome.attempt.test_output),
-                    ),
-                )
-                audit.outcome = "tests_failed"
-                return
-
-            branch = _branch_name(issue_number=issue_number, base_sha=base_sha)
-
-            try:
-                await adapter.create_branch(event, branch, base_sha)
-            except Exception:
-                _logger.exception("fix_create_branch_failed", extra=_log_extra(event))
-                await _safe_reply(adapter, event, _BRANCH_CONFLICT)
-                audit.outcome = "create_branch_failed"
-                return
-
-            try:
-                await sandbox.commit_and_push(
-                    branch_ref=branch,
-                    message=f"openbot: fix #{issue_number}",
-                    token=token,
-                )
-            except Exception:
-                _logger.exception("fix_push_failed", extra=_log_extra(event))
-                await _safe_reply(adapter, event, _PUSH_FAIL)
-                audit.outcome = "push_failed"
-                return
-
-            try:
-                pr = await adapter.open_pull_request(
-                    event,
-                    title=_pr_title(str(issue.get("title", "")), issue_number),
-                    body=_pr_body(
-                        attempt_summary=outcome.attempt.summary,
-                        issue_number=issue_number,
-                        test_command=outcome.attempt.test_command,
-                    ),
-                    head=branch,
-                    base=default_branch,
-                )
-            except Exception:
-                _logger.exception("fix_open_pr_failed", extra=_log_extra(event))
-                await _safe_reply(adapter, event, _OPEN_PR_FAIL)
-                audit.outcome = "open_pr_failed"
-                return
-
-            pr_url = str(pr.get("html_url", ""))
+        if not outcome.attempt.tests_passed:
             await _safe_reply(
                 adapter,
                 event,
-                _PR_OPENED.format(
-                    issue=issue_number,
-                    url=pr_url,
+                _TESTS_FAILED_HEADER.format(
                     summary=outcome.attempt.summary,
-                    files=_files_changed_str(outcome.attempt.files_changed),
                     cmd=outcome.attempt.test_command,
+                    output=_truncate(outcome.attempt.test_output),
                 ),
             )
-            audit.outcome = f"pr_opened:{pr_url}"
+            audit.outcome = "tests_failed"
+            return
+
+        branch = _branch_name(issue_number=issue_number, base_sha=base_sha)
+
+        try:
+            await adapter.create_branch(event, branch, base_sha)
+        except Exception:
+            _logger.exception("fix_create_branch_failed", extra=_log_extra(event))
+            await _safe_reply(adapter, event, _BRANCH_CONFLICT)
+            audit.outcome = "create_branch_failed"
+            return
+
+        try:
+            await sandbox.commit_and_push(
+                branch_ref=branch,
+                message=f"openbot: fix #{issue_number}",
+                token=token,
+            )
+        except Exception:
+            _logger.exception("fix_push_failed", extra=_log_extra(event))
+            await _safe_reply(adapter, event, _PUSH_FAIL)
+            audit.outcome = "push_failed"
+            return
+
+        try:
+            pr = await adapter.open_pull_request(
+                event,
+                title=_pr_title(str(issue.get("title", "")), issue_number),
+                body=_pr_body(
+                    attempt_summary=outcome.attempt.summary,
+                    issue_number=issue_number,
+                    test_command=outcome.attempt.test_command,
+                ),
+                head=branch,
+                base=default_branch,
+            )
+        except Exception:
+            _logger.exception("fix_open_pr_failed", extra=_log_extra(event))
+            await _safe_reply(adapter, event, _OPEN_PR_FAIL)
+            audit.outcome = "open_pr_failed"
+            return
+
+        pr_url = str(pr.get("html_url", ""))
+        await _safe_reply(
+            adapter,
+            event,
+            _PR_OPENED.format(
+                issue=issue_number,
+                url=pr_url,
+                summary=outcome.attempt.summary,
+                files=_files_changed_str(outcome.attempt.files_changed),
+                cmd=outcome.attempt.test_command,
+            ),
+        )
+        audit.outcome = f"pr_opened:{pr_url}"
 
 
 async def _safe_reply(adapter: ChannelAdapterPort, event: UnifiedEvent, message: str) -> None:

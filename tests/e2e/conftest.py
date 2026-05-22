@@ -217,6 +217,29 @@ class RecordingGitHubAdapter(GitHubAdapter):
         """Return the same fake token ``_installation_token`` uses."""
         return "fake-installation-token"
 
+    async def get_default_branch_sha(self, event: UnifiedEvent) -> str:
+        """Resolver hook for issue-context FIX/TRIAGE dispatches.
+
+        Returns the same ``base_sha`` the ``fake_issue`` fixture carries
+        so the use case's downstream branch-name + create-branch
+        assertions remain stable.
+        """
+        return str(self.fake_issue.get("base_sha", "abc1234567"))
+
+    async def get_pull_request(self, event: UnifiedEvent, pr_number: int) -> dict[str, Any]:
+        """Resolver hook for PR-context REVIEW dispatches.
+
+        Returns the minimum shape ``checkout_resolver`` reads:
+        ``head.sha`` (where the diff stops) and ``base.sha`` (the
+        diff origin). Real GitHub payloads carry far more, but the
+        resolver only touches these two fields.
+        """
+        base_sha = str(self.fake_issue.get("base_sha", "abc1234567"))
+        return {
+            "head": {"sha": base_sha},
+            "base": {"sha": base_sha},
+        }
+
     async def _installation_token(self, event: UnifiedEvent) -> Any:
         """Bypass App auth — return a minimal object whose ``.token`` is read."""
 
@@ -295,7 +318,14 @@ class WebhookHarness:
         comment_body: str | None = None,
         raw: dict[str, Any] | None = None,
     ) -> UnifiedEvent:
-        """Synthesize a ``UnifiedEvent`` mirroring what GitHubAdapter would parse."""
+        """Synthesize a ``UnifiedEvent`` mirroring what GitHubAdapter would parse.
+
+        ``clone_url`` is populated from the same URL the ``fake_issue``
+        fixture carries — the unified-entry checkout resolver demands a
+        non-None ``clone_url`` on every dispatchable event, mirroring
+        the GitHubAdapter's invariant that ``repository.clone_url`` is
+        always present on real webhook payloads.
+        """
         return UnifiedEvent(
             channel="github",
             delivery_id=delivery_id,
@@ -308,6 +338,7 @@ class WebhookHarness:
             comment_body=comment_body,
             installation_id=self.installation_id,
             raw=raw or {},
+            clone_url=str(self.adapter.fake_issue.get("clone_url")),
         )
 
     async def dispatch(self, event: UnifiedEvent) -> None:
