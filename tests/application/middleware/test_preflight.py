@@ -301,3 +301,38 @@ def test_preflight_context_replace_attaches_classifier_output() -> None:
     upgraded = dataclasses.replace(base, classifier_output=output)
     assert upgraded.classifier_output is output
     assert base.classifier_output is None
+
+
+# ───── snapshot cache port: Task 2.1 ─────────────────────────────────────────
+
+
+def test_preflight_context_sandbox_cache_default_is_none() -> None:
+    """Default-constructed context has no cache backend wired.
+
+    The dispatcher checks ``ctx.sandbox_cache is None`` to decide whether
+    to attempt a warm-cache acquire. ``None`` means "no cache configured
+    — always run the cold path". The NoOpSandboxCache is only used when
+    wiring explicitly configures it; default wiring leaves this None
+    so existing tests continue to exercise the cold path exclusively.
+    """
+    ctx = _ctx()
+    assert ctx.sandbox_cache is None
+
+
+def test_preflight_context_replace_sandbox_cache_preserves_other_fields() -> None:
+    """``dataclasses.replace`` with a cache adapter must not disturb
+    unrelated fields — frozen-dataclass immutability discipline.
+
+    This mirrors the ``sandbox_handle`` / ``classifier_output`` tests: the
+    DI layer swaps in the concrete adapter via ``replace``; everything
+    else must be unchanged.
+    """
+    from openbot.infrastructure.sandboxes.cache_noop import NoOpSandboxCache
+
+    base = _ctx()
+    upgraded = dataclasses.replace(base, sandbox_cache=NoOpSandboxCache())
+
+    assert upgraded.sandbox_cache is not None
+    assert base.sandbox_cache is None  # original untouched
+    assert upgraded.event is base.event
+    assert upgraded.dispatch is base.dispatch

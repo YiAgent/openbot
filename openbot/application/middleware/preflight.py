@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
     from openbot.application.ports.rate_limiter import RateLimiterPort
     from openbot.application.ports.sandbox import SandboxPort
+    from openbot.application.ports.sandbox_cache import SandboxCachePort
     from openbot.application.router import Dispatch
     from openbot.application.sandbox_handle import SandboxedHandle
     from openbot.dispatcher.classifier import ClassifierOutput
@@ -145,6 +146,14 @@ class PreflightContext:
     # out, or raised — the policy-gate code treats None as "respect
     # the static SandboxPolicy" (see ``derive_sandbox_policy``).
     classifier_output: ClassifierOutput | None = None
+    # Snapshot cache port — optional warm-sandbox cache between dispatcher
+    # and factory (Part 4 of unified-sandbox-entry). ``None`` means no cache
+    # backend is configured; the dispatcher always runs the cold path. When
+    # set, ``_run_with_sandbox`` attempts ``acquire`` first and schedules an
+    # async ``publish`` after a successful cold-path clone.
+    # Wired via DI: ``NoOpSandboxCache`` (dev/default), ``InMemorySandboxCache``
+    # (tests), or ``DaytonaSnapshotCache`` (production with snapshot API).
+    sandbox_cache: SandboxCachePort | None = None
     # LangGraph agent checkpointer — one ``AsyncPostgresSaver`` per Worker
     # process, shared across consumers. ``None`` in dev / tests / callers
     # that haven't been upgraded. Handlers access via ``ctx.agent_checkpointer``
