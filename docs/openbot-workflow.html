@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenBot — 完整业务流程</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --bg-card-2: #1c2128;
+    --border: #30363d;
+    --border-bright: #444c56;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --text-dim: #656d76;
+    --color-github: #1f6feb;
+    --color-github-bg: #0d2145;
+    --color-http: #8957e5;
+    --color-http-bg: #1a0f2e;
+    --color-usecase: #3fb950;
+    --color-usecase-bg: #0d2614;
+    --color-middleware: #d29922;
+    --color-middleware-bg: #2d1f00;
+    --color-infra: #f0883e;
+    --color-infra-bg: #2d1500;
+    --color-domain: #39c5cf;
+    --color-domain-bg: #0d2227;
+    --color-agent: #f778ba;
+    --color-agent-bg: #2d0e1f;
+    --color-worker: #e3b341;
+    --color-worker-bg: #272100;
+    --color-triage: #3fb950;
+    --color-review: #1f6feb;
+    --color-fix: #f0883e;
+    --color-chat: #8957e5;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+  .page-header {
+    background: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 28px 48px 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .page-header h1 {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .page-header h1 .badge {
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--color-github-bg);
+    color: var(--color-github);
+    border: 1px solid var(--color-github);
+    border-radius: 12px;
+    padding: 2px 10px;
+  }
+  .page-header p { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 14px 48px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-card);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .main { padding: 36px 48px; max-width: 1600px; margin: 0 auto; }
+  .phase-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .phase-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .node {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    background: var(--bg-card);
+    transition: border-color 0.15s, box-shadow 0.15s;
+    cursor: default;
+  }
+  .node:hover { border-color: var(--border-bright); box-shadow: 0 0 0 1px var(--border-bright); transform: translateY(-1px); }
+  .node-title { font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .node-icon { font-size: 14px; line-height: 1; }
+  .node-desc { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+  .step-list { list-style: none; margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .step-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: rgba(0,0,0,0.2);
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  .step-list li .step-num { flex-shrink: 0; font-weight: 600; font-size: 10px; color: var(--text-dim); min-width: 16px; }
+  .step-list li .step-tag {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 8px;
+    flex-shrink: 0;
+    align-self: center;
+  }
+  .tag-redis { background: rgba(240,136,62,0.15); color: var(--color-infra); }
+  .tag-db { background: rgba(57,197,207,0.12); color: var(--color-domain); }
+  .tag-gh { background: rgba(31,111,235,0.15); color: var(--color-github); }
+  .tag-llm { background: rgba(247,120,186,0.15); color: var(--color-agent); }
+  .tag-pure { background: rgba(139,148,158,0.1); color: var(--text-dim); }
+  .tag-lock { background: rgba(227,179,65,0.12); color: var(--color-worker); }
+  .tag-ok { background: rgba(63,185,80,0.12); color: var(--color-usecase); }
+  .node-github { border-color: var(--color-github); background: var(--color-github-bg); }
+  .node-github .node-title { color: var(--color-github); }
+  .node-http { border-color: var(--color-http); background: var(--color-http-bg); }
+  .node-http .node-title { color: var(--color-http); }
+  .node-usecase { border-color: var(--color-usecase); background: var(--color-usecase-bg); }
+  .node-usecase .node-title { color: var(--color-usecase); }
+  .node-middleware { border-color: var(--color-middleware); background: var(--color-middleware-bg); }
+  .node-middleware .node-title { color: var(--color-middleware); }
+  .node-infra { border-color: var(--color-infra); background: var(--color-infra-bg); }
+  .node-infra .node-title { color: var(--color-infra); }
+  .node-domain { border-color: var(--color-domain); background: var(--color-domain-bg); }
+  .node-domain .node-title { color: var(--color-domain); }
+  .node-agent { border-color: var(--color-agent); background: var(--color-agent-bg); }
+  .node-agent .node-title { color: var(--color-agent); }
+  .node-worker { border-color: var(--color-worker); background: var(--color-worker-bg); }
+  .node-worker .node-title { color: var(--color-worker); }
+  .connector { display: flex; flex-direction: column; align-items: center; margin: 4px 0; }
+  .connector .c-line { width: 2px; min-height: 18px; background: var(--border-bright); }
+  .connector .c-label {
+    font-size: 9px;
+    color: var(--text-dim);
+    background: var(--bg);
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin: 2px 0;
+    white-space: nowrap;
+  }
+  .connector .c-tip {
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid var(--border-bright);
+  }
+  .mw-stack { display: flex; flex-direction: column; gap: 3px; margin-top: 8px; }
+  .mw-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: 5px;
+    border: 1px solid rgba(210,153,34,0.2);
+    background: rgba(210,153,34,0.06);
+    font-size: 11px;
+    color: var(--text);
+  }
+  .mw-num { font-size: 9px; font-weight: 700; color: var(--color-middleware); min-width: 14px; text-align: right; }
+  .mw-name { font-weight: 500; flex: 1; }
+  .mw-desc { font-size: 10px; color: var(--text-dim); }
+  .mw-action { font-size: 9px; font-weight: 600; padding: 1px 5px; border-radius: 8px; }
+  .mw-action-block { background: rgba(218,54,51,0.15); color: #f85149; }
+  .mw-action-audit { background: rgba(57,197,207,0.1); color: var(--color-domain); }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; align-items: start; }
+  .pipeline { display: flex; flex-direction: column; align-items: center; }
+  .pipeline > * { width: 100%; }
+  .section { margin-bottom: 28px; }
+  .workflow-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .workflow-card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg-card); }
+  .workflow-header { padding: 12px 16px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+  .wf-icon { font-size: 16px; }
+  .wf-title { font-size: 13px; font-weight: 600; }
+  .wf-trigger { font-size: 10px; color: var(--text-dim); margin-left: auto; }
+  .workflow-body { padding: 12px 16px; }
+  .workflow-steps { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .workflow-steps li {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--bg-card-2);
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  .workflow-steps li .ws-icon { font-size: 12px; flex-shrink: 0; }
+  .workflow-steps li .ws-text { flex: 1; }
+  .workflow-steps li.ws-success { border-color: rgba(63,185,80,0.3); background: rgba(63,185,80,0.05); }
+  .workflow-steps li.ws-fail { border-color: rgba(248,81,73,0.3); background: rgba(248,81,73,0.05); }
+  .workflow-steps li.ws-agent { border-color: rgba(247,120,186,0.25); background: rgba(247,120,186,0.05); }
+  .workflow-steps li.ws-sandbox { border-color: rgba(240,136,62,0.25); background: rgba(240,136,62,0.05); }
+  .workflow-card.wf-triage .workflow-header { background: rgba(63,185,80,0.06); border-color: rgba(63,185,80,0.3); }
+  .workflow-card.wf-triage .wf-title { color: var(--color-triage); }
+  .workflow-card.wf-review .workflow-header { background: rgba(31,111,235,0.06); border-color: rgba(31,111,235,0.3); }
+  .workflow-card.wf-review .wf-title { color: var(--color-review); }
+  .workflow-card.wf-fix .workflow-header { background: rgba(240,136,62,0.06); border-color: rgba(240,136,62,0.3); }
+  .workflow-card.wf-fix .wf-title { color: var(--color-fix); }
+  .workflow-card.wf-chat .workflow-header { background: rgba(137,87,229,0.06); border-color: rgba(137,87,229,0.3); }
+  .workflow-card.wf-chat .wf-title { color: var(--color-chat); }
+  .intent-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; margin-top: 8px; }
+  .intent-item { padding: 5px 8px; border-radius: 5px; font-size: 10px; border: 1px solid; display: flex; flex-direction: column; gap: 1px; }
+  .intent-item .intent-name { font-weight: 700; font-size: 10px; }
+  .intent-item .intent-desc { color: var(--text-dim); font-size: 9px; }
+  .intent-start { border-color: rgba(63,185,80,0.4); background: rgba(63,185,80,0.06); color: var(--color-usecase); }
+  .intent-supersede { border-color: rgba(210,153,34,0.4); background: rgba(210,153,34,0.06); color: var(--color-middleware); }
+  .intent-cancel { border-color: rgba(248,81,73,0.4); background: rgba(248,81,73,0.06); color: #f85149; }
+  .intent-ignore { border-color: var(--border); background: rgba(139,148,158,0.08); color: var(--text-dim); }
+  .worker-stages { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+  .ws-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: 5px;
+    border: 1px solid rgba(227,179,65,0.2);
+    background: rgba(227,179,65,0.04);
+    font-size: 11px;
+  }
+  .ws-badge { font-size: 9px; font-weight: 700; background: rgba(227,179,65,0.15); color: var(--color-worker); padding: 1px 6px; border-radius: 8px; flex-shrink: 0; }
+  .ws-name { font-weight: 500; color: var(--text); }
+  .ws-detail { font-size: 10px; color: var(--text-dim); flex: 1; }
+  .retry-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(210,153,34,0.3);
+    background: rgba(210,153,34,0.05);
+    font-size: 11px;
+    color: var(--color-middleware);
+    margin-top: 8px;
+  }
+  .retry-box .retry-icon { font-size: 14px; }
+  .retry-box .retry-text { flex: 1; color: var(--text-muted); }
+  .retry-box .retry-count { font-weight: 700; font-size: 12px; }
+  .dlq-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(248,81,73,0.3);
+    background: rgba(248,81,73,0.05);
+    font-size: 11px;
+    color: #f85149;
+    margin-top: 6px;
+  }
+  .error-paths { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+  .error-path { font-size: 9px; padding: 2px 7px; border-radius: 8px; border: 1px solid rgba(248,81,73,0.3); background: rgba(248,81,73,0.07); color: #f85149; }
+  .note { font-size: 10px; color: var(--text-dim); padding: 5px 10px; border-left: 2px solid var(--border-bright); background: rgba(255,255,255,0.02); border-radius: 0 4px 4px 0; margin-top: 6px; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>🤖 OpenBot <span class="badge">v0.1 · GitHub Only</span></h1>
+  <p>完整业务流程 — Webhook 接收 · 分发调度 · 预检中间件链 · Worker 消费者 · 四大工作流处理器</p>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--color-github)"></div> 外部 / GitHub API</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--color-http)"></div> HTTP 层（FastAPI）</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--color-usecase)"></div> 用例 / 业务逻辑</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--color-middleware)"></div> 预检中间件</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--color-infra)"></div> 基础设施 / 队列</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--color-domain)"></div> 领域 / 状态机</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--color-agent)"></div> AI Agent（DeepAgents）</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--color-worker)"></div> Worker 消费者</div>
+</div>
+
+<div class="main">
+
+  <!-- PHASE 1 -->
+  <div class="section">
+    <div class="phase-label">Phase 1 — Webhook 接收与入队（FastAPI 同步，立即返回 202）</div>
+    <div class="two-col">
+      <div class="pipeline">
+        <div class="node node-github">
+          <div class="node-title"><span class="node-icon">🐙</span> GitHub 仓库事件</div>
+          <div class="node-desc">事件触发对应功能的 Webhook</div>
+          <ul class="step-list">
+            <li><span class="step-num">—</span> issue.opened / edited / reopened / labeled → <span class="step-tag tag-pure">TRIAGE</span></li>
+            <li><span class="step-num">—</span> pull_request.opened / synchronize / reopened → <span class="step-tag tag-pure">REVIEW</span></li>
+            <li><span class="step-num">—</span> issue.assigned（assignee.type == "Bot"）→ <span class="step-tag tag-pure">FIX</span></li>
+            <li><span class="step-num">—</span> issue_comment / pr_review_comment（@openbot 开头）→ <span class="step-tag tag-pure">CHAT</span></li>
+          </ul>
+        </div>
+        <div class="connector">
+          <div class="c-line"></div>
+          <div class="c-label">POST /webhook/github · HMAC-SHA256 签名</div>
+          <div class="c-tip"></div>
+        </div>
+        <div class="node node-http">
+          <div class="node-title"><span class="node-icon">⚡</span> FastAPI Route · github_webhook.py</div>
+          <div class="node-desc">HTTP 胶水层——只做解析，所有业务逻辑在用例中</div>
+          <ul class="step-list">
+            <li><span class="step-num">①</span> 读取原始 body bytes（HMAC 计算需要原始字节）</li>
+            <li><span class="step-num">②</span> verify_signature 常数时间 HMAC 校验 <span class="step-tag tag-gh">HMAC</span></li>
+            <li><span class="step-num">③</span> parse_event → <strong>UnifiedEvent</strong>（领域对象）</li>
+            <li><span class="step-num">④</span> 调用 ingest_webhook 用例</li>
+            <li><span class="step-num">⑤</span> 若 BackgroundTask 回退路径，schedule decide_and_enqueue</li>
+            <li><span class="step-num">⑥</span> 返回 202（防 GitHub 超时重试）</li>
+          </ul>
+        </div>
+        <div class="connector">
+          <div class="c-line"></div>
+          <div class="c-tip"></div>
+        </div>
+        <div class="node node-usecase">
+          <div class="node-title"><span class="node-icon">🔀</span> ingest_webhook（use_cases/ingest_webhook.py）</div>
+          <div class="node-desc">主编排逻辑 — 5 个顺序步骤</div>
+          <ul class="step-list">
+            <li><span class="step-num">S1</span> <strong>Dedup 去重</strong>：Redis SET NX delivery_id，重复 → 丢弃 <span class="step-tag tag-redis">Redis</span></li>
+            <li><span class="step-num">S2</span> <strong>dispatch_for()</strong>：EventKind → Feature；bot 事件过滤（防回声环）<span class="step-tag tag-pure">纯函数</span></li>
+            <li><span class="step-num">S3</span> <strong>状态机分类</strong>：runs_repo.transition() 在资源锁下 CAS 写 task_runs <span class="step-tag tag-lock">资源锁</span><span class="step-tag tag-db">Postgres</span></li>
+            <li><span class="step-num">S4</span> <strong>创建 GitHub Check Run</strong>（PR 事件立即可见状态）<span class="step-tag tag-gh">GitHub API</span></li>
+            <li><span class="step-num">S5</span> <strong>入队</strong>：XADD v2 QueuePayload；失败 → BackgroundTask 回退 <span class="step-tag tag-redis">Redis Stream</span></li>
+          </ul>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="node node-domain">
+          <div class="node-title"><span class="node-icon">📦</span> UnifiedEvent — 领域核心对象</div>
+          <div class="node-desc">所有 ChannelAdapter 规范化为统一结构，防止 raw payload 直接进 LLM</div>
+          <ul class="step-list">
+            <li><span class="step-num">—</span> channel · delivery_id · kind (EventKind)</li>
+            <li><span class="step-num">—</span> repo · actor · actor_type · installation_id</li>
+            <li><span class="step-num">—</span> issue_number · pr_number · comment_body</li>
+            <li><span class="step-num">—</span> event_seq（单调时间戳，用于 late-webhook 检测）</li>
+            <li><span class="step-num">—</span> resource_key = github:{repo}:issue:{n} | pr:{n}</li>
+            <li><span class="step-num">—</span> raw（原始 payload，只传给需要详情的工具）</li>
+          </ul>
+        </div>
+        <div class="node node-domain">
+          <div class="node-title"><span class="node-icon">⚙️</span> 状态机 · runs_repo.transition() Intent</div>
+          <div class="node-desc">在 resource_lock 下 CAS 写 task_runs，防止竞态双 START</div>
+          <div class="intent-grid">
+            <div class="intent-item intent-start">
+              <span class="intent-name">START</span>
+              <span class="intent-desc">首次处理此资源，开始新 run</span>
+            </div>
+            <div class="intent-item intent-supersede">
+              <span class="intent-name">SUPERSEDE</span>
+              <span class="intent-desc">新 push 覆盖旧 review，取消前 run_id</span>
+            </div>
+            <div class="intent-item intent-cancel">
+              <span class="intent-name">CANCEL</span>
+              <span class="intent-desc">issue/PR 关闭，发信号给前一 run</span>
+            </div>
+            <div class="intent-item intent-ignore">
+              <span class="intent-name">IGNORE</span>
+              <span class="intent-desc">event_seq 落后（晚到 webhook），直接 202</span>
+            </div>
+          </div>
+          <div class="note">取消信号：receive side + worker side 双重发送，防队列延迟漏信号</div>
+        </div>
+        <div class="node node-infra">
+          <div class="node-title"><span class="node-icon">📬</span> S5 入队路径分叉</div>
+          <ul class="step-list">
+            <li><span class="step-num">✓</span> <strong>Redis 可用</strong>：XADD v2 QueuePayload → entry_id → 202 <span class="step-tag tag-redis">Redis</span></li>
+            <li><span class="step-num">↓</span> <strong>Redis 不可用</strong>：background_dispatch → route.add_task() → decide_and_enqueue <span class="step-tag tag-pure">BG Task</span></li>
+          </ul>
+          <div class="note">两条路径最终都执行相同的 preflight chain + handler 逻辑</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PHASE 2 -->
+  <div class="section">
+    <div class="phase-label">Phase 2 — Webhook 异步段（decide_and_enqueue · BackgroundTask 或 Worker 读 v1/v2）</div>
+    <div class="two-col">
+      <div class="pipeline">
+        <div class="node node-usecase">
+          <div class="node-title"><span class="node-icon">🎯</span> decide_and_enqueue（dispatcher/decide.py）</div>
+          <div class="node-desc">运行完整 preflight 链 + LLM 分类器 + 构建 TaskSpec v3</div>
+          <ul class="step-list">
+            <li><span class="step-num">①</span> 加载 EffectiveConfig（读取 .openbot/config.yaml）<span class="step-tag tag-gh">GitHub API</span></li>
+            <li><span class="step-num">②</span> 构建 PreflightContext（不可变快照，冻结 dataclass）</li>
+            <li><span class="step-num">③</span> <strong>运行 10 个 Preflight 中间件链</strong> → 见右侧详情</li>
+            <li><span class="step-num">④</span> extract_event_context（纯函数，提取分类用 body）</li>
+            <li><span class="step-num">⑤</span> Direct Actions 检查（规则短路：reply + label，跳过 LLM 和入队）</li>
+            <li><span class="step-num">⑥</span> <strong>LLM 分类器</strong>（非 FIX）— 产出 classifier_result + stages_to_run <span class="step-tag tag-llm">LLM</span></li>
+            <li><span class="step-num">⑦</span> DiffScope（REVIEW）— fetch last_reviewed_sha，判断增量/全量/force_push <span class="step-tag tag-db">Postgres</span></li>
+            <li><span class="step-num">⑧</span> 构建 TaskSpec v3 → XADD 到 Redis Stream <span class="step-tag tag-redis">Redis</span></li>
+          </ul>
+        </div>
+        <div class="connector">
+          <div class="c-line"></div>
+          <div class="c-label">XADD TaskSpec v3 → openbot:workflows Stream</div>
+          <div class="c-tip"></div>
+        </div>
+        <div class="node node-infra">
+          <div class="node-title"><span class="node-icon">🔴</span> Redis Stream · openbot:workflows</div>
+          <div class="node-desc">持久化队列 — 进程重启 Worker 可续跑</div>
+          <ul class="step-list">
+            <li><span class="step-num">—</span> v2 QueuePayload（ingest_webhook 写入，legacy 路径）</li>
+            <li><span class="step-num">—</span> v3 TaskSpec（decide_and_enqueue 写入，当前主路径）</li>
+            <li><span class="step-num">—</span> Consumer Group：openbot-workers，XACK 确认消费</li>
+            <li><span class="step-num">—</span> DLQ：openbot:workflows:dead（超 3 次移入）</li>
+          </ul>
+        </div>
+      </div>
+      <div>
+        <div class="node node-middleware" style="width:100%">
+          <div class="node-title"><span class="node-icon">🛡️</span> Preflight 中间件链（10 个，顺序执行，首个 BLOCKED 即短路）</div>
+          <div class="node-desc">最廉价在前，硬门控居中，审计日志在最后</div>
+          <div class="mw-stack">
+            <div class="mw-item">
+              <span class="mw-num">1</span>
+              <span class="mw-name">SanitizeInputsMiddleware</span>
+              <span class="mw-desc">字节级入口清洗，下游中间件见到净化后的事件</span>
+              <span class="mw-action mw-action-block">BLOCK</span>
+            </div>
+            <div class="mw-item">
+              <span class="mw-num">2</span>
+              <span class="mw-name">KillSwitchMiddleware</span>
+              <span class="mw-desc">环境变量管理员开关，静默所有下游</span>
+              <span class="mw-action mw-action-block">BLOCK</span>
+            </div>
+            <div class="mw-item">
+              <span class="mw-num">3</span>
+              <span class="mw-name">FeatureToggleMiddleware</span>
+              <span class="mw-desc">.openbot/config.yaml features.{x}=false 用户可控开关</span>
+              <span class="mw-action mw-action-block">BLOCK</span>
+            </div>
+            <div class="mw-item">
+              <span class="mw-num">4</span>
+              <span class="mw-name">CancelLabelMiddleware</span>
+              <span class="mw-desc">检查 cancel-openbot 标签（1 次 GitHub API，结果缓存 ctx.cache）</span>
+              <span class="mw-action mw-action-block">BLOCK</span>
+            </div>
+            <div class="mw-item">
+              <span class="mw-num">5</span>
+              <span class="mw-name">CancelCommentMiddleware</span>
+              <span class="mw-desc">正则匹配 stop/cancel/停 等，§9.4 always-reply，无去重 TTL</span>
+              <span class="mw-action mw-action-block">BLOCK</span>
+            </div>
+            <div class="mw-item">
+              <span class="mw-num">6</span>
+              <span class="mw-name">ForkPRGateMiddleware</span>
+              <span class="mw-desc">PRD §4.8 安全硬门控，外部 fork PR 不运行工作流</span>
+              <span class="mw-action mw-action-block">BLOCK</span>
+            </div>
+            <div class="mw-item">
+              <span class="mw-num">7</span>
+              <span class="mw-name">ActorRoleMiddleware</span>
+              <span class="mw-desc">FIX/CHAT 的 per-feature 角色允许名单</span>
+              <span class="mw-action mw-action-block">BLOCK</span>
+            </div>
+            <div class="mw-item">
+              <span class="mw-num">8</span>
+              <span class="mw-name">RateLimitMiddleware</span>
+              <span class="mw-desc">Chat 功能每天/每小时 Redis 计数器，announce_once 去重回复</span>
+              <span class="mw-action mw-action-block">BLOCK</span>
+            </div>
+            <div class="mw-item">
+              <span class="mw-num">9</span>
+              <span class="mw-name">BudgetMiddleware</span>
+              <span class="mw-desc">Postgres cost_meter 表累计消费检查</span>
+              <span class="mw-action mw-action-block">BLOCK</span>
+            </div>
+            <div class="mw-item" style="border-color:rgba(57,197,207,0.3);background:rgba(57,197,207,0.05)">
+              <span class="mw-num" style="color:var(--color-domain)">10</span>
+              <span class="mw-name" style="color:var(--color-domain)">AuditStartMiddleware</span>
+              <span class="mw-desc">预检通过后写 STARTED 审计行 — import error 也有通过记录</span>
+              <span class="mw-action mw-action-audit">AUDIT</span>
+            </div>
+          </div>
+          <div class="note">BLOCKED 路径：write audit_log → announce_once(Redis NX去重) → 可选 GitHub 评论回复</div>
+        </div>
+        <div class="node node-infra" style="width:100%;margin-top:12px">
+          <div class="node-title"><span class="node-icon">⚡</span> Direct Actions — 规则引擎短路</div>
+          <div class="node-desc">分类器调用前的轻量规则，命中则直接 reply + label，不入队</div>
+          <ul class="step-list">
+            <li><span class="step-num">—</span> RULES_BY_FEATURE[feature](event_ctx) → DirectAction?</li>
+            <li><span class="step-num">—</span> 命中：并发执行 reply() + add_label() → 返回，跳过 LLM 和 XADD</li>
+            <li><span class="step-num">—</span> 场景示例：机器人专属标签的 issue 立即确认回复</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PHASE 3 -->
+  <div class="section">
+    <div class="phase-label">Phase 3 — Worker 消费者循环（consume_loop · infrastructure/queue/worker.py）</div>
+    <div class="two-col">
+      <div class="pipeline">
+        <div class="node node-worker">
+          <div class="node-title"><span class="node-icon">⚙️</span> consume_loop · 单进程异步消费</div>
+          <div class="node-desc">两阶段循环：先 reclaim 孤立条目，再读取新条目</div>
+          <ul class="step-list">
+            <li><span class="step-num">①</span> <strong>XAUTOCLAIM</strong>：领取空闲 &gt;60s 的 PEL 条目（dead consumer 恢复）<span class="step-tag tag-redis">Redis</span></li>
+            <li><span class="step-num">②</span> <strong>XREADGROUP</strong>：读取新条目（block 5s，8 条/批）<span class="step-tag tag-redis">Redis</span></li>
+            <li><span class="step-num">③</span> 更新 queue_depth Prometheus gauge（XLEN O(1)）</li>
+            <li><span class="step-num">④</span> 对每个 entry 调用 _process_entry</li>
+          </ul>
+        </div>
+        <div class="connector">
+          <div class="c-line"></div>
+          <div class="c-tip"></div>
+        </div>
+        <div class="node node-worker">
+          <div class="node-title"><span class="node-icon">🔍</span> _process_entry · 版本路由</div>
+          <div class="node-desc">peek spec_version，路由到对应执行路径</div>
+          <ul class="step-list">
+            <li><span class="step-num">v3</span> TaskSpec v3 → _execute_task_spec → W1~W5 → execute_handler（无 preflight）<span class="step-tag tag-ok">当前主路径</span></li>
+            <li><span class="step-num">v1/2</span> QueuePayload → run_dispatch（含完整 preflight 链）<span class="step-tag tag-pure">兼容路径</span></li>
+          </ul>
+        </div>
+        <div class="connector">
+          <div class="c-line"></div>
+          <div class="c-label">v3 主路径</div>
+          <div class="c-tip"></div>
+        </div>
+        <div class="node node-worker">
+          <div class="node-title"><span class="node-icon">🚀</span> _execute_task_spec · W1–W5 阶段</div>
+          <div class="worker-stages">
+            <div class="ws-item">
+              <span class="ws-badge">W1</span>
+              <span class="ws-name">Cancel 快检</span>
+              <span class="ws-detail">initial_labels 含 cancel-openbot → XACK + 直接返回，不调 handler</span>
+            </div>
+            <div class="ws-item">
+              <span class="ws-badge">W2</span>
+              <span class="ws-name">重建 UnifiedEvent</span>
+              <span class="ws-detail">spec.to_event() — 从序列化字段还原领域对象</span>
+            </div>
+            <div class="ws-item">
+              <span class="ws-badge">W3</span>
+              <span class="ws-name">重推 Dispatch</span>
+              <span class="ws-detail">dispatch_for(event) 纯函数；upgrade_dispatch 注入状态机字段</span>
+            </div>
+            <div class="ws-item">
+              <span class="ws-badge">W4</span>
+              <span class="ws-name">加载 EffectiveConfig</span>
+              <span class="ws-detail">load_for_repo(adapter, event) — 读取 .openbot/config.yaml</span>
+            </div>
+            <div class="ws-item">
+              <span class="ws-badge">W5</span>
+              <span class="ws-name">execute_handler</span>
+              <span class="ws-detail">无 preflight（已在 decide_and_enqueue 中执行）→ dispatch.handler(ctx)</span>
+            </div>
+          </div>
+        </div>
+        <div class="connector">
+          <div class="c-line"></div>
+          <div class="c-tip"></div>
+        </div>
+        <div class="node" style="border-color:rgba(63,185,80,0.4);background:rgba(63,185,80,0.04);">
+          <div class="node-title" style="color:var(--color-usecase)"><span class="node-icon">✅</span> 完成处理</div>
+          <ul class="step-list">
+            <li><span class="step-num">—</span> REVIEW 场景：store_reviewed_sha 到 DB（供后续增量检测）<span class="step-tag tag-db">Postgres</span></li>
+            <li><span class="step-num">—</span> XACK 确认消费 → 移出 PEL</li>
+            <li><span class="step-num">—</span> cancellation_deregister(active_run_id)</li>
+          </ul>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="node node-worker">
+          <div class="node-title"><span class="node-icon">🔄</span> 重试策略（PEL-based，最多 3 次）</div>
+          <div class="node-desc">失败不 XACK，留在 PEL 等待 XAUTOCLAIM 重新领取</div>
+          <div class="retry-box">
+            <span class="retry-icon">🔄</span>
+            <span class="retry-text">Redis 原子计数器 openbot:workflows:retries:{entry_id}（7天 TTL）</span>
+            <span class="retry-count">≤ 3 次</span>
+          </div>
+          <ul class="step-list" style="margin-top:8px">
+            <li><span class="step-num">—</span> 第 1~2 次：不 XACK，等 XAUTOCLAIM 60s 后重新领取</li>
+            <li><span class="step-num">—</span> 第 3 次：XADD 到 DLQ + XACK 移出主 Stream</li>
+          </ul>
+          <div class="dlq-box">
+            <span>⚰️</span>
+            <span>DLQ：openbot:workflows:dead — 附原始 JSON 供 ops 排查</span>
+          </div>
+        </div>
+        <div class="node node-domain">
+          <div class="node-title"><span class="node-icon">🚦</span> 跨 Dyno 取消机制</div>
+          <div class="node-desc">新 push 到来时，保证旧 review 任务能及时停止</div>
+          <ul class="step-list">
+            <li><span class="step-num">—</span> Receive side：SUPERSEDE/CANCEL 立即 signal 旧 run_id <span class="step-tag tag-redis">Redis</span></li>
+            <li><span class="step-num">—</span> Worker side：dequeue 时再次 signal（belt + suspenders）</li>
+            <li><span class="step-num">—</span> 当前 run 注册到 cancellation_register(run_id)，被 signal 后 cancel()</li>
+            <li><span class="step-num">—</span> CANCEL intent：只 signal 旧 run，自身 XACK 后不调 handler</li>
+          </ul>
+        </div>
+        <div class="node node-infra">
+          <div class="node-title"><span class="node-icon">📊</span> TaskSpec v3 关键字段</div>
+          <ul class="step-list">
+            <li><span class="step-num">—</span> spec_version=3 · scenario · task_id · delivery_id</li>
+            <li><span class="step-num">—</span> repo · actor · kind · raw（原始 payload）</li>
+            <li><span class="step-num">—</span> intent · run_id · prev_run_id · event_seq · resource_key</li>
+            <li><span class="step-num">—</span> check_run_id · initial_labels · classifier_output</li>
+            <li><span class="step-num">—</span> stages_to_run · is_incremental · is_force_push</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PHASE 4 -->
+  <div class="section">
+    <div class="phase-label">Phase 4 — 工作流处理器（execute_handler → dispatch.handler(ctx)）</div>
+    <div class="workflow-grid">
+
+      <div class="workflow-card wf-triage">
+        <div class="workflow-header">
+          <span class="wf-icon">🏷️</span>
+          <span class="wf-title">TRIAGE</span>
+          <span class="wf-trigger">maybe_run_triage</span>
+        </div>
+        <div class="workflow-body">
+          <ul class="workflow-steps">
+            <li><span class="ws-icon">🎯</span><span class="ws-text"><strong>触发</strong>：issue.opened / edited / reopened / labeled / unlabeled</span></li>
+            <li><span class="ws-icon">🛡️</span><span class="ws-text">防卫：非 ISSUE_OPENED 跳过；bot actor 跳过</span></li>
+            <li><span class="ws-icon">💬</span><span class="ws-text">adapter.reply 在 Issue 下发布 ACK 评论（@actor 可见）</span></li>
+            <li class="ws-success"><span class="ws-icon">✅</span><span class="ws-text">audit_lifecycle(TRIAGE) STARTED → COMPLETED，outcome = comment_id</span></li>
+          </ul>
+          <div class="note" style="margin-top:8px">🚧 路线图：自动打标签 · 优先级判断 · Sandbox Issue 复现</div>
+        </div>
+      </div>
+
+      <div class="workflow-card wf-review">
+        <div class="workflow-header">
+          <span class="wf-icon">🔬</span>
+          <span class="wf-title">REVIEW</span>
+          <span class="wf-trigger">maybe_run_review</span>
+        </div>
+        <div class="workflow-body">
+          <ul class="workflow-steps">
+            <li><span class="ws-icon">🎯</span><span class="ws-text"><strong>触发</strong>：PR opened / synchronize / reopened / labeled</span></li>
+            <li class="ws-agent"><span class="ws-icon">🤖</span><span class="ws-text"><strong>DeepAgentsReviewResponder</strong>：get_pr_diff → LLM 结构化分析 → ReviewFindings</span></li>
+            <li><span class="ws-icon">🔽</span><span class="ws-text">filter_findings 按 config.severity_threshold 过滤</span></li>
+            <li><span class="ws-icon">📐</span><span class="ws-text">分区：inline（有 line）→ 行内注释；repo-wide → review body</span></li>
+            <li><span class="ws-icon">🔧</span><span class="ws-text">DiffScope：增量 / 全量 / force_push 不同处理策略</span></li>
+            <li class="ws-success"><span class="ws-icon">📋</span><span class="ws-text">create_pr_review：无 finding → APPROVE；有 → COMMENT（永不 REQUEST_CHANGES）</span></li>
+            <li class="ws-fail"><span class="ws-icon">⚠️</span><span class="ws-text">Agent 失败 → 发布错误模板 COMMENT，PR 作者可见</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="workflow-card wf-fix">
+        <div class="workflow-header">
+          <span class="wf-icon">🔧</span>
+          <span class="wf-title">FIX</span>
+          <span class="wf-trigger">maybe_run_fix</span>
+        </div>
+        <div class="workflow-body">
+          <ul class="workflow-steps">
+            <li><span class="ws-icon">🎯</span><span class="ws-text"><strong>触发</strong>：issue.assigned（assignee.type == "Bot"）</span></li>
+            <li><span class="ws-icon">📋</span><span class="ws-text">get_issue：获取 body、clone_url、base_sha、default_branch</span></li>
+            <li><span class="ws-icon">🔑</span><span class="ws-text">get_installation_token：获取临时 GitHub 安装令牌</span></li>
+            <li class="ws-sandbox"><span class="ws-icon">📦</span><span class="ws-text"><strong>打开 Sandbox</strong>：ctx.sandbox_factory() → DaytonaSandboxAdapter</span></li>
+            <li class="ws-sandbox"><span class="ws-icon">🐙</span><span class="ws-text">sandbox.clone：token 注入 HTTPS URL，克隆到 Daytona 云端</span></li>
+            <li class="ws-agent"><span class="ws-icon">🤖</span><span class="ws-text"><strong>DeepAgentsFixResponder</strong>：Agent 在 sandbox 内执行修复 → FixOutcome</span></li>
+            <li class="ws-success"><span class="ws-icon">✅</span><span class="ws-text">tests_passed：create_branch → commit_and_push → open_pull_request → 评论 PR URL</span></li>
+            <li class="ws-fail"><span class="ws-icon">❌</span><span class="ws-text">tests_failed：评论截断的测试输出（≤4000 chars）</span></li>
+          </ul>
+          <div class="error-paths">
+            <span class="error-path">sandbox 未配置</span>
+            <span class="error-path">get_issue 失败</span>
+            <span class="error-path">clone 失败</span>
+            <span class="error-path">agent 失败</span>
+            <span class="error-path">push 失败</span>
+            <span class="error-path">open_pr 失败</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="workflow-card wf-chat">
+        <div class="workflow-header">
+          <span class="wf-icon">💬</span>
+          <span class="wf-title">CHAT</span>
+          <span class="wf-trigger">maybe_run_chat</span>
+        </div>
+        <div class="workflow-body">
+          <ul class="workflow-steps">
+            <li><span class="ws-icon">🎯</span><span class="ws-text"><strong>触发</strong>：@openbot / @yibots 开头的 Issue/PR 评论</span></li>
+            <li><span class="ws-icon">🔍</span><span class="ws-text">parse_chat_command 解析意图</span></li>
+            <li><span class="ws-icon">🚫</span><span class="ws-text">is_cancel：由 CancelCommentMiddleware 提前拦截，此处防御性 no-op</span></li>
+            <li><span class="ws-icon">❓</span><span class="ws-text">is_help（help / ? / 帮助）：返回固定帮助模板，不调 LLM</span></li>
+            <li class="ws-agent"><span class="ws-icon">🤖</span><span class="ws-text"><strong>freeform</strong>：DeepAgentsChatResponder.reply_for_event() — LLM 自由回复</span></li>
+            <li><span class="ws-icon">📭</span><span class="ws-text">空 body：返回 ACK 模板（v0.1 alpha 占位）</span></li>
+            <li class="ws-success"><span class="ws-icon">✅</span><span class="ws-text">adapter.reply → audit outcome = intent + comment_id</span></li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- CROSSCUTTING -->
+  <div class="section">
+    <div class="phase-label">横切关注点 — 审计生命周期 &amp; 可观测性</div>
+    <div class="three-col">
+      <div class="node node-domain">
+        <div class="node-title"><span class="node-icon">📝</span> audit_lifecycle · 工作流审计</div>
+        <div class="node-desc">所有工作流处理器共用的 async context manager</div>
+        <ul class="step-list">
+          <li><span class="step-num">①</span> 进入：写 STARTED 行（phase, delivery_id, repo, actor, workflow）</li>
+          <li><span class="step-num">②</span> 正常退出：写 COMPLETED + outcome 字段</li>
+          <li><span class="step-num">③</span> 异常退出：写 FAILED + exception 类型</li>
+        </ul>
+        <div class="note">backend：优先 AuditLogPort → fallback session_factory → 无 DB 时 no-op</div>
+      </div>
+      <div class="node node-domain">
+        <div class="node-title"><span class="node-icon">🔍</span> GitHub Check Run 生命周期</div>
+        <div class="node-desc">PR 事件全程可见处理状态</div>
+        <ul class="step-list">
+          <li><span class="step-num">①</span> ingest_webhook：create_check_run "Starting Analysis..."（同步）</li>
+          <li><span class="step-num">②</span> preflight BLOCKED → update_check_run(skipped)</li>
+          <li><span class="step-num">③</span> handler 成功 → update_check_run(success)</li>
+          <li><span class="step-num">④</span> handler 失败 → update_check_run(failure)</li>
+          <li><span class="step-num">⑤</span> 配置加载失败 → update_check_run "Config Load Failed"</li>
+        </ul>
+      </div>
+      <div class="node node-infra">
+        <div class="node-title"><span class="node-icon">📈</span> 可观测性栈</div>
+        <div class="node-desc">LangSmith 追踪 + Prometheus 指标 + Sentry 错误追踪</div>
+        <ul class="step-list">
+          <li><span class="step-num">—</span> @traceable(run_type="chain") 装饰所有工作流 handler<span class="step-tag tag-llm">LangSmith</span></li>
+          <li><span class="step-num">—</span> queue_depth Prometheus gauge（每次消费后 XLEN 更新）</li>
+          <li><span class="step-num">—</span> Sentry tag per-dispatch scope：delivery_id · feature · repo</li>
+          <li><span class="step-num">—</span> 结构化日志：JSON 格式，extra dict 含完整上下文</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- COMPACT FLOW -->
+  <div class="section">
+    <div class="phase-label">精简全链路流程图</div>
+    <div class="node" style="background:var(--bg-card-2);font-family:'SF Mono','Fira Code',Consolas,monospace;font-size:11px;line-height:1.9;padding:20px 24px;">
+      <pre style="color:var(--text-muted);overflow-x:auto;white-space:pre;">
+<span style="color:var(--color-github)">GitHub</span> ──POST /webhook/github──▶ <span style="color:var(--color-http)">FastAPI Route</span>
+                                      │ verify_signature + parse_event → <span style="color:var(--color-domain)">UnifiedEvent</span>
+                                      ▼
+                              <span style="color:var(--color-usecase)">ingest_webhook</span> (use case)
+                              ├─ S1: Dedup (Redis SET NX delivery_id)
+                              ├─ S2: dispatch_for() → Feature  (pure fn, bot filter)
+                              ├─ S3: runs_repo.transition() [资源锁] → Intent
+                              │       ├─ START / SUPERSEDE → 继续 + 取消信号
+                              │       ├─ CANCEL → signal prev_run + XACK → 202
+                              │       └─ IGNORE → 202 (晚到 webhook)
+                              ├─ S4: create_check_run (PR only, sync)
+                              └─ S5: XADD v2 → <span style="color:var(--color-infra)">Redis Stream</span>
+                                       │         └─ Redis 不可用 → BackgroundTask
+                                       ▼
+                              <span style="color:var(--color-usecase)">decide_and_enqueue</span> (dispatcher)
+                              ├─ load EffectiveConfig (.openbot/config.yaml)
+                              ├─ Preflight Chain (10 middlewares, 首个 BLOCKED 短路)
+                              │   └─ BLOCKED → audit_log + announce_once reply → return
+                              ├─ extract_event_context (pure)
+                              ├─ Direct Actions → reply + label, skip LLM (short-circuit)
+                              ├─ classify_event (LLM, non-FIX) → stages_to_run
+                              ├─ compute_diff_scope (REVIEW) → is_incremental / force_push
+                              └─ XADD <span style="color:var(--color-infra)">TaskSpec v3</span> → <span style="color:var(--color-infra)">Redis Stream</span>
+                                       │
+                                       ▼
+                              <span style="color:var(--color-worker)">consume_loop</span> (worker)
+                              ├─ XAUTOCLAIM (reclaim idle PEL &gt; 60s)
+                              ├─ XREADGROUP count=8 block=5s
+                              └─ _execute_task_spec (v3) / run_dispatch (v1/v2)
+                                  ├─ W1: cancel quick-check (initial_labels)
+                                  ├─ W2: spec.to_event() → UnifiedEvent
+                                  ├─ W3: dispatch_for() + upgrade_dispatch
+                                  ├─ W4: load_for_repo (EffectiveConfig)
+                                  ├─ W5: execute_handler (no preflight for v3)
+                                  └─ XACK / retry ≤3 / DLQ
+                                           │
+                 ┌───────────────┬──────────┴──────────┬───────────────┐
+                 ▼               ▼                      ▼               ▼
+           <span style="color:var(--color-triage)">TRIAGE</span>           <span style="color:var(--color-review)">REVIEW</span>                 <span style="color:var(--color-fix)">FIX</span>            <span style="color:var(--color-chat)">CHAT</span>
+           ACK 评论         DeepAgents LLM          Sandbox Agent    命令解析
+                            过滤 Findings            Daytona 克隆      help / freeform
+                            PR Review API 提交       push + open PR   LLM 回复
+      </pre>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -21,7 +21,7 @@
 | Part | Status | Commits |
 |---|---|---|
 | 1 — Port + key + in-memory cache | ✅ complete (1.1 `28c20b3`, 1.2 `78c14e2`, 1.3 `4201223`, 1.4 `19fab6a`) | 28c20b3…19fab6a |
-| 2 — Dispatcher wiring + observability | ⏳ pending | — |
+| 2 — Dispatcher wiring + observability | ✅ complete (2.1 `62b9686`, 2.2 `77b3e1d`, 2.3 `f9845d4`) | 62b9686…f9845d4 |
 | 3 — Daytona snapshot adapter | ⏳ pending | — |
 | 4 — Rollout, guardrails, E2E | ⏳ pending | — |
 
