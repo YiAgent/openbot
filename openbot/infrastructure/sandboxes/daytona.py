@@ -176,6 +176,11 @@ class DaytonaSandboxAdapter(SandboxPort):
         sandbox = client.create()
         return cls(_client=client, _sandbox=sandbox)
 
+    @property
+    def workspace_id(self) -> str:
+        """The Daytona workspace UUID (needed by DaytonaSnapshotCache.publish)."""
+        return str(self._sandbox.id)
+
     async def close(self) -> None:
         """Best-effort sandbox teardown — never raises."""
         sb_id = getattr(self._sandbox, "id", "unknown")

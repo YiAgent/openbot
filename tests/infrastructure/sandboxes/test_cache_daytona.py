@@ -1,4 +1,5 @@
-"""DaytonaSnapshotCache — unit tests for Tasks 3.1 (acquire + refresh).
+"""DaytonaSnapshotCache — unit tests for Tasks 3.1 (acquire + refresh)
+and 3.2 (publish + secret sweep).
 
 All Daytona SDK calls are mocked; no network or real Daytona workspace is
 created. asyncio.to_thread runs the mock callables in a thread pool, which
@@ -11,6 +12,8 @@ SDK contract assumed by the adapter (top-level client methods):
     workspace: .id: str, .process.exec(cmd, timeout) -> result
     result: .exit_code: int, .result: str
   client.delete_snapshot(snapshot_id: str) -> None
+  client.create_snapshot(workspace_id: str, labels: dict) -> SnapshotMeta
+    (Task 3.2) — snapshots a live workspace; returns SnapshotMeta with .id
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from openbot.application.sandbox_cache_key import _cache_key
+from openbot.application.sandbox_handle import SandboxedHandle
 from openbot.domain.checkout import CheckoutSpec, CloneStrategy
 from openbot.infrastructure.sandboxes.cache_daytona import DaytonaSnapshotCache
 
@@ -74,13 +78,41 @@ def _make_client(
     *,
     snapshots: list[Any] | None = None,
     workspace: MagicMock | None = None,
+    created_snapshot_id: str = "snap-new-001",
 ) -> MagicMock:
     """Build a mock Daytona client with scripted responses."""
     client = MagicMock()
     client.list_snapshots.return_value = snapshots or []
     client.create_workspace_from_snapshot.return_value = workspace or _mock_workspace()
     client.delete_snapshot.return_value = None
+    # Task 3.2: create_snapshot returns a new SnapshotMeta with an id.
+    new_snap = MagicMock()
+    new_snap.id = created_snapshot_id
+    client.create_snapshot.return_value = new_snap
     return client
+
+
+def _make_handle(
+    *,
+    client: MagicMock,
+    workspace_id: str = "ws-pub-001",
+    checkout: CheckoutSpec | None = None,
+    token: str = "ghs_t",
+) -> tuple[SandboxedHandle, MagicMock]:
+    """Build a SandboxedHandle backed by a real DaytonaSandboxAdapter wrapping
+    a mock SDK workspace.  Returns (handle, mock_workspace) so tests can
+    inspect sandbox.run calls.
+
+    The returned sandbox supports run() via workspace.process.exec, which
+    DaytonaSandboxAdapter._run_command wraps.
+    """
+    from openbot.infrastructure.sandboxes.daytona import DaytonaSandboxAdapter
+
+    ws = _mock_workspace(workspace_id=workspace_id)
+    adapter = DaytonaSandboxAdapter(_client=client, _sandbox=ws)
+    spec = checkout or _checkout()
+    handle = SandboxedHandle(sandbox=adapter, checkout=spec, token=token)
+    return handle, ws
 
 
 # ── Task 3.1 tests ────────────────────────────────────────────────────────────
@@ -246,3 +278,135 @@ async def test_token_injected_via_x_access_token_scheme() -> None:
     assert "x-access-token:" in str(set_url_call), (
         "token should be injected via x-access-token scheme, not as raw token"
     )
+
+
+# ── Task 3.2 tests — publish (snapshot creation, idempotent) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_publish_creates_snapshot_with_key_and_ref_labels() -> None:
+    """publish on a cache miss calls client.create_snapshot once with the
+    correct workspace_id and labels {"openbot_key": ..., "openbot_ref": ...}.
+
+    No prior snapshot exists (list_snapshots returns []).
+    """
+    checkout = _checkout()
+    installation_id = 77
+    key = _cache_key(checkout, installation_id=installation_id)
+
+    client = _make_client(snapshots=[])
+    handle, _ws = _make_handle(client=client, workspace_id="ws-pub-first", checkout=checkout)
+    cache = DaytonaSnapshotCache(daytona_client=client, ttl_seconds=86_400)
+
+    await cache.publish(handle, installation_id=installation_id)
+
+    client.create_snapshot.assert_called_once()
+    call_kwargs = client.create_snapshot.call_args
+    # workspace_id must match the underlying Daytona workspace
+    assert call_kwargs.kwargs.get("workspace_id") == "ws-pub-first" or (
+        len(call_kwargs.args) > 0 and call_kwargs.args[0] == "ws-pub-first"
+    ), f"create_snapshot called with wrong workspace_id: {call_kwargs}"
+    # Labels must carry the cache key and the ref for LRU debugging.
+    labels = call_kwargs.kwargs.get("labels", {})
+    assert labels.get("openbot_key") == key
+    assert labels.get("openbot_ref") == checkout.ref
+
+
+@pytest.mark.asyncio
+async def test_publish_is_idempotent_when_snapshot_already_exists() -> None:
+    """If list_snapshots already returns a snapshot for this key, publish
+    must return without calling create_snapshot — another worker won the race
+    (or we're being re-called after a crash). create_snapshot must NOT be
+    called (no double-snapshot).
+    """
+    checkout = _checkout()
+    installation_id = 77
+    key = _cache_key(checkout, installation_id=installation_id)
+    existing_snap = _mock_snapshot(snapshot_id="snap-existing", key=key)
+
+    client = _make_client(snapshots=[existing_snap])
+    handle, _ws = _make_handle(client=client, checkout=checkout)
+    cache = DaytonaSnapshotCache(daytona_client=client, ttl_seconds=86_400)
+
+    await cache.publish(handle, installation_id=installation_id)
+
+    client.create_snapshot.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_publish_sweeps_excluded_paths_before_snapshot() -> None:
+    """Before calling create_snapshot the publish method must sweep secret-
+    bearing paths out of the workspace via sandbox.run(["find", ...]).
+
+    Per the spec and CLAUDE.md forbidden list:
+      .env* files, evals/logs/, .langgraph/, .inspect/, .doppler/
+
+    We assert that at least one sandbox.run command contains "find" and
+    references at least one of the excluded pattern names.  The sweep must
+    occur BEFORE create_snapshot is called.
+    """
+    checkout = _checkout()
+    installation_id = 77
+
+    client = _make_client(snapshots=[])
+    handle, ws = _make_handle(client=client, workspace_id="ws-sweep", checkout=checkout)
+    cache = DaytonaSnapshotCache(daytona_client=client, ttl_seconds=86_400)
+
+    # Track call order: sandbox.run calls vs create_snapshot
+    call_log: list[str] = []
+
+    def _tracking_exec(cmd: Any, timeout: Any) -> MagicMock:  # type: ignore[misc]
+        call_log.append(f"exec:{cmd}")
+        return MagicMock(exit_code=0, result="", additional_properties={})
+
+    ws.process.exec.side_effect = _tracking_exec
+
+    def _tracking_create(**_kwargs: Any) -> MagicMock:  # type: ignore[misc]
+        call_log.append("create_snapshot")
+        snap = MagicMock()
+        snap.id = "snap-swept"
+        return snap
+
+    client.create_snapshot.side_effect = _tracking_create
+
+    await cache.publish(handle, installation_id=installation_id)
+
+    # At least one find/delete sweep must precede create_snapshot.
+    exec_entries = [e for e in call_log if e.startswith("exec:")]
+    sweep_entries = [e for e in exec_entries if "find" in e]
+    assert sweep_entries, (
+        "Expected at least one sandbox.run('find ...') sweep before snapshotting; "
+        f"exec calls were: {exec_entries}"
+    )
+
+    # Sweep must reference at least one forbidden pattern.
+    combined = " ".join(sweep_entries)
+    assert any(
+        pat in combined for pat in [".env", "evals", ".langgraph", ".inspect", ".doppler"]
+    ), f"None of the expected forbidden patterns appeared in sweep commands: {combined}"
+
+    # Sweep must happen BEFORE the snapshot is created.
+    if "create_snapshot" in call_log:
+        first_sweep_idx = next(i for i, e in enumerate(call_log) if "find" in e)
+        create_idx = call_log.index("create_snapshot")
+        assert first_sweep_idx < create_idx, "Secret sweep must precede create_snapshot"
+
+
+@pytest.mark.asyncio
+async def test_publish_raises_on_sdk_create_snapshot_failure() -> None:
+    """If client.create_snapshot raises, publish propagates the exception so
+    the dispatcher's _safe_publish wrapper can record the 'failed' counter.
+
+    Silently swallowing the exception here would cause the dispatcher to
+    record 'created' on failure — incorrect.
+    """
+    checkout = _checkout()
+    installation_id = 77
+
+    client = _make_client(snapshots=[])
+    client.create_snapshot.side_effect = RuntimeError("daytona snapshot quota exceeded")
+    handle, _ws = _make_handle(client=client, checkout=checkout)
+    cache = DaytonaSnapshotCache(daytona_client=client, ttl_seconds=86_400)
+
+    with pytest.raises(RuntimeError, match="quota exceeded"):
+        await cache.publish(handle, installation_id=installation_id)

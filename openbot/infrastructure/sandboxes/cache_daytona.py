@@ -35,6 +35,13 @@ from typing import TYPE_CHECKING, Any
 from openbot.application.sandbox_cache_key import CacheCorruptedError, _cache_key
 from openbot.infrastructure.sandboxes.daytona import DaytonaSandboxAdapter, _inject_token
 
+# Paths swept out of the workspace before snapshotting (defence-in-depth on top
+# of .gitignore).  Matches the forbidden list in CLAUDE.md and the spec §
+# "Snapshot exclusions".
+_SWEEP_FILE_PATTERNS: tuple[str, ...] = (".env*", "*.pem", "*.key")
+_SWEEP_DIR_NAMES: tuple[str, ...] = (".langgraph", ".inspect", ".doppler")
+_SWEEP_DIR_PATHS: tuple[str, ...] = ("evals/logs",)
+
 if TYPE_CHECKING:
     from openbot.application.sandbox_handle import SandboxedHandle
     from openbot.domain.checkout import CheckoutSpec
@@ -68,6 +75,41 @@ async def _evict_snapshot(client: Any, snapshot_id: str) -> None:
             "daytona_snapshot_evict_failed",
             extra={"snapshot_id": snapshot_id},
             exc_info=True,
+        )
+
+
+async def _sweep_secrets(sandbox: Any) -> None:
+    """Remove credential-bearing paths from the workspace before snapshotting.
+
+    Runs ``find . -name <pattern> -delete`` for file patterns and
+    ``find . -type d -name <dir> -exec rm -rf {} +`` for directory names.
+    Errors are ignored per-pattern (best-effort defence-in-depth).
+
+    Called by ``DaytonaSnapshotCache.publish`` before the snapshot API call.
+    The ``sandbox`` parameter accepts any object with an async ``run`` method
+    matching ``SandboxPort.run``.
+    """
+    for pattern in _SWEEP_FILE_PATTERNS:
+        await sandbox.run(command=["find", ".", "-name", pattern, "-delete"])
+    for name in _SWEEP_DIR_NAMES:
+        await sandbox.run(
+            command=["find", ".", "-type", "d", "-name", name, "-exec", "rm", "-rf", "{}", "+"]
+        )
+    for path in _SWEEP_DIR_PATHS:
+        await sandbox.run(
+            command=[
+                "find",
+                ".",
+                "-type",
+                "d",
+                "-path",
+                f"./{path}",
+                "-exec",
+                "rm",
+                "-rf",
+                "{}",
+                "+",
+            ]
         )
 
 
@@ -185,10 +227,41 @@ class DaytonaSnapshotCache:
         *,
         installation_id: int,
     ) -> None:
-        """Create a snapshot from this handle's workspace.
+        """Create a Daytona snapshot from this handle's workspace.
 
-        Implemented in Task 3.2. Currently a no-op (idempotent stub).
+        Idempotent: if a snapshot already exists for the derived key,
+        returns immediately without creating a duplicate.
+
+        Secret sweep runs before the snapshot call to strip any
+        credential-bearing paths (defence-in-depth on top of .gitignore).
+
+        SDK exceptions propagate — the dispatcher's ``_safe_publish``
+        wrapper records the ``failed`` counter and suppresses them there.
         """
+        key = _cache_key(handle.checkout, installation_id=installation_id)
+
+        # ── Idempotency check ────────────────────────────────────────────
+        existing: list[Any] = await asyncio.to_thread(
+            self._client.list_snapshots, labels={"openbot_key": key}
+        )
+        if existing:
+            return
+
+        # ── Secret sweep ─────────────────────────────────────────────────
+        await _sweep_secrets(handle.sandbox)
+
+        # ── Snapshot creation ─────────────────────────────────────────────
+        if not isinstance(handle.sandbox, DaytonaSandboxAdapter):
+            raise TypeError(
+                "DaytonaSnapshotCache.publish requires a DaytonaSandboxAdapter; "
+                f"got {type(handle.sandbox).__name__!r}"
+            )
+        workspace_id = handle.sandbox.workspace_id
+        await asyncio.to_thread(
+            self._client.create_snapshot,
+            workspace_id=workspace_id,
+            labels={"openbot_key": key, "openbot_ref": handle.checkout.ref},
+        )
 
     async def evict_repo(self, repo_url: str, *, installation_id: int) -> None:
         """Delete all snapshots for one repo under this installation.
