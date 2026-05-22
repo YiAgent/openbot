@@ -89,7 +89,7 @@ async def test_redis_enqueue_failure_graceful(
 
     from openbot.entrypoints.api.app import app as _app
 
-    monkeypatch.setattr(_app.state.queue, "enqueue", _raise_on_enqueue)
+    monkeypatch.setattr(_app.state.queue, "enqueue_task_spec", _raise_on_enqueue)
 
     body = issue_body("opened", number=42)
     with pytest.raises(RuntimeError, match="test-enqueue-failure"):
