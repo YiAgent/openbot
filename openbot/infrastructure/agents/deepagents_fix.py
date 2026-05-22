@@ -178,15 +178,20 @@ class DeepAgentsFixResponder:
         if event.issue_number is None:
             raise ValueError("deepagents_fix_requires_issue_number")
         tools = make_fix_tools(sandbox=sandbox, event=event)
+        # Only activate checkpointing when both pieces are present: a
+        # checkpointer without a run_id has no thread_id to key on and
+        # LangGraph would error. Gate both on the same condition so they
+        # are always in sync.
+        effective_checkpointer = checkpointer if (run_id and checkpointer) else None
         agent = create_deep_agent(
             model=_normalize_model_name(primary_model_for(Feature.FIX)),
             tools=tools,
             system_prompt=_SYSTEM_PROMPT,
             response_format=FixOutcomeSchema,
-            checkpointer=checkpointer,
+            checkpointer=effective_checkpointer,
         )
         config: RunnableConfig = {"recursion_limit": _RECURSION_LIMIT}
-        if run_id and checkpointer:
+        if run_id and effective_checkpointer:
             config["configurable"] = {"thread_id": run_id}
         result = await agent.ainvoke(
             {
