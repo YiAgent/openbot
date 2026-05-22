@@ -29,8 +29,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openbot.application.dispatcher import run_dispatch
-from openbot.application.middleware import MiddlewareDecision, PreflightContext
+from openbot.application.dispatcher import execute_handler
+from openbot.application.middleware import PreflightContext
 from openbot.application.router import Dispatch
 from openbot.application.sandbox_handle import SandboxedHandle
 from openbot.domain.checkout import CheckoutSpec, CloneStrategy
@@ -53,17 +53,6 @@ def _event(**extra: Any) -> UnifiedEvent:
     }
     base.update(extra)
     return UnifiedEvent(**base)
-
-
-def _proceed_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "openbot.application.dispatcher.load_for_repo",
-        AsyncMock(return_value=AsyncMock()),
-    )
-    monkeypatch.setattr(
-        "openbot.application.dispatcher.run_preflight",
-        AsyncMock(return_value=MiddlewareDecision.proceed()),
-    )
 
 
 def _mock_checkout(monkeypatch: pytest.MonkeyPatch) -> CheckoutSpec:
@@ -126,12 +115,7 @@ async def test_no_cache_wired_runs_cold_path_only(
     No cache metrics should fire; the factory is called and the handler
     receives a populated ``SandboxedHandle`` as before.
     """
-    _proceed_preflight(monkeypatch)
     _mock_checkout(monkeypatch)
-    monkeypatch.setattr(
-        "openbot.application.dispatcher.classify_for_dispatch",
-        AsyncMock(return_value=None),
-    )
     cache_total = _record_counter(monkeypatch, "sandbox_cache_total")
     cache_publish_total = _record_counter(monkeypatch, "sandbox_cache_publish_total")
 
@@ -144,10 +128,11 @@ async def test_no_cache_wired_runs_cold_path_only(
     async def handler(ctx: PreflightContext) -> None:
         seen["handle"] = ctx.sandbox_handle
 
-    await run_dispatch(
+    await execute_handler(
         adapter=adapter,
         event=_event(),
         dispatch=_fix_dispatch(handler),
+        config=AsyncMock(),
         session_factory=None,
         redis=None,
         sandbox_factory=_factory_from_sandbox(sandbox),
@@ -175,12 +160,7 @@ async def test_cache_miss_falls_through_to_factory_and_publishes(
       - ``cache.publish`` is awaited exactly once with the correct installation_id.
       - ``cache_publish_total{feature=fix, result=created}`` incremented.
     """
-    _proceed_preflight(monkeypatch)
     _mock_checkout(monkeypatch)
-    monkeypatch.setattr(
-        "openbot.application.dispatcher.classify_for_dispatch",
-        AsyncMock(return_value=None),
-    )
     cache_total = _record_counter(monkeypatch, "sandbox_cache_total")
     cache_publish_total = _record_counter(monkeypatch, "sandbox_cache_publish_total")
     _record_counter(monkeypatch, "sandbox_cache_acquire_seconds")
@@ -195,10 +175,11 @@ async def test_cache_miss_falls_through_to_factory_and_publishes(
     async def handler(ctx: PreflightContext) -> None:
         seen["handle"] = ctx.sandbox_handle
 
-    await run_dispatch(
+    await execute_handler(
         adapter=adapter,
         event=_event(),
         dispatch=_fix_dispatch(handler),
+        config=AsyncMock(),
         session_factory=None,
         redis=None,
         sandbox_factory=_factory_from_sandbox(sandbox),
@@ -235,12 +216,7 @@ async def test_cache_hit_bypasses_factory_and_calls_handler(
       - ``cache.publish`` is NOT called (we own the handle, no publish needed).
       - Handler's ``ctx.sandbox_handle`` is exactly the object ``acquire`` returned.
     """
-    _proceed_preflight(monkeypatch)
     _mock_checkout(monkeypatch)
-    monkeypatch.setattr(
-        "openbot.application.dispatcher.classify_for_dispatch",
-        AsyncMock(return_value=None),
-    )
     cache_total = _record_counter(monkeypatch, "sandbox_cache_total")
     cache_acquire_seconds = _record_counter(monkeypatch, "sandbox_cache_acquire_seconds")
     cache_publish_total = _record_counter(monkeypatch, "sandbox_cache_publish_total")
@@ -273,10 +249,11 @@ async def test_cache_hit_bypasses_factory_and_calls_handler(
     async def handler(ctx: PreflightContext) -> None:
         seen["handle"] = ctx.sandbox_handle
 
-    await run_dispatch(
+    await execute_handler(
         adapter=adapter,
         event=_event(),
         dispatch=_fix_dispatch(handler),
+        config=AsyncMock(),
         session_factory=None,
         redis=None,
         sandbox_factory=_factory_that_must_not_run,
@@ -306,12 +283,7 @@ async def test_cache_backend_error_falls_through_to_factory(
 
     The exception must not propagate out of ``run_dispatch``.
     """
-    _proceed_preflight(monkeypatch)
     _mock_checkout(monkeypatch)
-    monkeypatch.setattr(
-        "openbot.application.dispatcher.classify_for_dispatch",
-        AsyncMock(return_value=None),
-    )
     cache_total = _record_counter(monkeypatch, "sandbox_cache_total")
     _record_counter(monkeypatch, "sandbox_cache_publish_total")
     _record_counter(monkeypatch, "sandbox_cache_acquire_seconds")
@@ -326,10 +298,11 @@ async def test_cache_backend_error_falls_through_to_factory(
     async def handler(ctx: PreflightContext) -> None:
         seen["handle"] = ctx.sandbox_handle
 
-    await run_dispatch(
+    await execute_handler(
         adapter=adapter,
         event=_event(),
         dispatch=_fix_dispatch(handler),
+        config=AsyncMock(),
         session_factory=None,
         redis=None,
         sandbox_factory=_factory_from_sandbox(sandbox),
@@ -355,12 +328,7 @@ async def test_publish_fires_in_finally_even_when_handler_raises(
 
     ``run_dispatch`` itself must not re-raise the handler exception.
     """
-    _proceed_preflight(monkeypatch)
     _mock_checkout(monkeypatch)
-    monkeypatch.setattr(
-        "openbot.application.dispatcher.classify_for_dispatch",
-        AsyncMock(return_value=None),
-    )
     _record_counter(monkeypatch, "sandbox_cache_total")
     _record_counter(monkeypatch, "sandbox_cache_publish_total")
     _record_counter(monkeypatch, "sandbox_cache_acquire_seconds")
@@ -370,13 +338,14 @@ async def test_publish_fires_in_finally_even_when_handler_raises(
     adapter = AsyncMock()
     adapter.get_installation_token = AsyncMock(return_value="ghs_t")
 
-    async def exploding_handler(ctx: PreflightContext) -> None:
+    async def exploding_handler(_ctx: PreflightContext) -> None:
         raise RuntimeError("handler bug")
 
-    await run_dispatch(
+    await execute_handler(
         adapter=adapter,
         event=_event(),
         dispatch=_fix_dispatch(exploding_handler),
+        config=AsyncMock(),
         session_factory=None,
         redis=None,
         sandbox_factory=_factory_from_sandbox(sandbox),
