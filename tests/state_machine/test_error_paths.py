@@ -78,37 +78,29 @@ async def test_missing_installation_id(sm: SMHarness) -> None:
     assert await sm.queue_len() == 0
 
 
-# ── I-32: Redis enqueue failure → 202 graceful fallback ───────────────────
+# ── I-32: Redis enqueue failure → 500 ────────────────────────────────────────
 
 
 async def test_redis_enqueue_failure_graceful(
     sm: SMHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """I-32: enqueue raises → webapp logs + falls through to BackgroundTask → still 202."""
+    """I-32: enqueue raises → RuntimeError propagates, GitHub retries."""
 
     async def _raise_on_enqueue(*_a: Any, **_kw: Any) -> None:
         raise RuntimeError("test-enqueue-failure")
 
-    async def _noop_dispatch(*_a: Any, **_kw: Any) -> None:
-        pass
-
     from openbot.entrypoints.api.app import app as _app
 
     monkeypatch.setattr(_app.state.queue, "enqueue", _raise_on_enqueue)
-    monkeypatch.setattr(
-        "openbot.entrypoints.api.routes.github_webhook.decide_and_enqueue", _noop_dispatch
-    )
 
     body = issue_body("opened", number=42)
-    resp = await sm.client.post(
-        "/webhook/github",
-        content=body,
-        headers=sign(body, event="issues", delivery="d-32"),
-    )
+    with pytest.raises(RuntimeError, match="test-enqueue-failure"):
+        await sm.client.post(
+            "/webhook/github",
+            content=body,
+            headers=sign(body, event="issues", delivery="d-32"),
+        )
 
-    # The webapp must NOT 5xx — graceful degradation.
-    assert resp.status_code == 202
-    assert resp.json()["status"] == "accepted"
     # Nothing was enqueued to the stream.
     assert await sm.queue_len() == 0
 
