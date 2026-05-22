@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from deepagents import create_deep_agent
 
 from openbot.domain.events import UnifiedEvent
 from openbot.infrastructure.llm.model_router import Feature, primary_model_for
+
+if TYPE_CHECKING:
+    from langchain_core.runnables import RunnableConfig
+    from langgraph.checkpoint.base import BaseCheckpointSaver
 
 _SYSTEM_PROMPT = """You are OpenBot, a GitHub maintainer bot assistant.
 
@@ -83,18 +86,38 @@ def _extract_reply(result: dict[str, Any]) -> str:
     return reply
 
 
-@lru_cache(maxsize=4)
-def _agent_for_model(model: str):
-    return create_deep_agent(
-        model=_normalize_model_name(model),
-        tools=[],
-        system_prompt=_SYSTEM_PROMPT,
-    )
-
-
 class DeepAgentsChatResponder:
-    async def reply_for_event(self, event: UnifiedEvent, *, user_request: str) -> str:
-        agent = _agent_for_model(primary_model_for(Feature.CHAT))
+    """Chat responder — a fresh agent is built per call.
+
+    The ``lru_cache`` that previously cached agents by model was removed
+    when checkpointer support landed: caching would let a caller with
+    ``checkpointer=None`` receive a cached graph that was built without a
+    checkpointer, silently skipping persistence. Rebuilding per call is
+    cheap relative to the LLM invocation and avoids the correctness risk.
+    """
+
+    async def reply_for_event(
+        self,
+        event: UnifiedEvent,
+        *,
+        user_request: str,
+        run_id: str | None = None,
+        checkpointer: BaseCheckpointSaver | None = None,
+    ) -> str:
+        # Only activate checkpointing when both pieces are present: a
+        # checkpointer without a run_id has no thread_id to key on and
+        # LangGraph would error. Gate both on the same condition so they
+        # are always in sync.
+        effective_checkpointer = checkpointer if (run_id and checkpointer) else None
+        agent = create_deep_agent(
+            model=_normalize_model_name(primary_model_for(Feature.CHAT)),
+            tools=[],
+            system_prompt=_SYSTEM_PROMPT,
+            checkpointer=effective_checkpointer,
+        )
+        config: RunnableConfig = {}
+        if run_id and effective_checkpointer:
+            config["configurable"] = {"thread_id": run_id}
         result = await agent.ainvoke(
             {
                 "messages": [
@@ -103,7 +126,8 @@ class DeepAgentsChatResponder:
                         "content": _user_prompt(event, user_request),
                     }
                 ]
-            }
+            },
+            config=config or None,
         )
         return _extract_reply(result)
 
