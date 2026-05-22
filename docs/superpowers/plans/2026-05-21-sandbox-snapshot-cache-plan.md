@@ -20,7 +20,7 @@
 
 | Part | Status | Commits |
 |---|---|---|
-| 1 — Port + key + in-memory cache | ⏳ pending | — |
+| 1 — Port + key + in-memory cache | 🚧 in progress (1.1 ✅ `28c20b3`; 1.2–1.4 pending) | — |
 | 2 — Dispatcher wiring + observability | ⏳ pending | — |
 | 3 — Daytona snapshot adapter | ⏳ pending | — |
 | 4 — Rollout, guardrails, E2E | ⏳ pending | — |
@@ -71,20 +71,20 @@ If a name in a later part doesn't match this table, **fix the earliest part and 
 | `openbot/application/sandbox_cache_key.py` | NEW |
 | `openbot/infrastructure/sandboxes/cache_noop.py` | NEW |
 | `openbot/infrastructure/sandboxes/cache_fake.py` | NEW |
-| `tests/application/ports/test_sandbox_cache.py` | NEW |
+| `tests/application/ports/test_sandbox_cache_port_contract.py` | NEW (matches the existing `test_<port>_port_contract.py` convention) |
 | `tests/application/test_sandbox_cache_key.py` | NEW |
 | `tests/infrastructure/sandboxes/test_cache_noop.py` | NEW |
 | `tests/infrastructure/sandboxes/test_cache_fake.py` | NEW |
 
 ### Task 1.1: `SandboxCachePort` protocol
 
-- [ ] **Write failing test** `tests/application/ports/test_sandbox_cache.py`:
-  - `test_port_is_runtime_checkable` — `isinstance(NoOpSandboxCache(), SandboxCachePort) is True`.
-  - `test_port_requires_acquire_publish_evict_repo` — a class missing any of the three methods fails `isinstance` check.
-- [ ] **Implement** `openbot/application/ports/sandbox_cache.py`:
+- [x] **Write failing test** `tests/application/ports/test_sandbox_cache_port_contract.py`:
+  - `test_complete_implementer_satisfies_port` — inline `_Complete` dummy with all three coroutines passes `isinstance`. (Use an inline dummy here so Task 1.1 doesn't depend on the not-yet-built `NoOpSandboxCache`; Task 1.3 adds a NoOp-specific isinstance test.)
+  - `test_missing_acquire_does_not_satisfy_port`, `test_missing_publish_does_not_satisfy_port`, `test_missing_evict_repo_does_not_satisfy_port` — one test per missing method, for clearer failure messages on regression.
+- [x] **Implement** `openbot/application/ports/sandbox_cache.py`:
   - `@runtime_checkable class SandboxCachePort(Protocol)` with `async def acquire`, `async def publish`, `async def evict_repo`.
   - Docstrings match spec § "Type contract" verbatim (acquire returns `SandboxedHandle | None` on miss; backend errors MAY raise).
-- [ ] Run `make check`. Commit: `feat(application): SandboxCachePort protocol`.
+- [x] Run `make check`. Commit: `feat(application): SandboxCachePort protocol` — landed as `28c20b3` (1097→1101 tests).
 
 ### Task 1.2: `_cache_key` + `CacheCorruptedError`
 
