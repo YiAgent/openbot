@@ -51,7 +51,7 @@ def test_sandbox_cache_features_stores_raw_comma_separated_string(
     """``OPENBOT_SANDBOX_CACHE_FEATURES=chat,fix`` is stored as-is.
 
     Parsing into a set is done by ``build_sandbox_cache`` in
-    ``openbot.core.dependencies``.
+    ``openbot.application.sandbox_cache_deps``.
     """
     monkeypatch.setenv("OPENBOT_SANDBOX_CACHE_FEATURES", "chat,fix")
     s = Settings()
@@ -75,7 +75,7 @@ def test_sandbox_cache_ttl_seconds_default() -> None:
 def test_build_sandbox_cache_returns_noop_when_disabled() -> None:
     """``sandbox_cache_enabled=False`` → ``build_sandbox_cache`` returns
     a ``NoOpSandboxCache`` regardless of feature."""
-    from openbot.core.dependencies import build_sandbox_cache
+    from openbot.application.sandbox_cache_deps import build_sandbox_cache
 
     s = Settings()
     cache = build_sandbox_cache(s, feature="triage")
@@ -86,7 +86,7 @@ def test_build_sandbox_cache_returns_noop_when_feature_not_in_allow_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cache enabled for ``chat`` only — ``triage`` still gets ``NoOpSandboxCache``."""
-    from openbot.core.dependencies import build_sandbox_cache
+    from openbot.application.sandbox_cache_deps import build_sandbox_cache
 
     monkeypatch.setenv("OPENBOT_SANDBOX_CACHE_ENABLED", "true")
     monkeypatch.setenv("OPENBOT_SANDBOX_CACHE_FEATURES", "chat")
@@ -101,7 +101,7 @@ def test_build_sandbox_cache_returns_daytona_cache_when_enabled_and_feature_matc
 ) -> None:
     """``sandbox_cache_enabled=True`` + feature in allow list + daytona_api_key set
     → ``DaytonaSnapshotCache`` is returned."""
-    from openbot.core.dependencies import build_sandbox_cache
+    from openbot.application.sandbox_cache_deps import build_sandbox_cache
     from openbot.infrastructure.sandboxes.cache_daytona import DaytonaSnapshotCache
 
     monkeypatch.setenv("OPENBOT_SANDBOX_CACHE_ENABLED", "true")
@@ -121,7 +121,7 @@ def test_build_sandbox_cache_raises_when_enabled_but_no_daytona_key(
     Ops must set the key *before* enabling the cache to prevent silent
     degradation from masking a misconfiguration.
     """
-    from openbot.core.dependencies import build_sandbox_cache
+    from openbot.application.sandbox_cache_deps import build_sandbox_cache
 
     monkeypatch.setenv("OPENBOT_SANDBOX_CACHE_ENABLED", "true")
     monkeypatch.setenv("OPENBOT_SANDBOX_CACHE_FEATURES", "fix")

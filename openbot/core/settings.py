@@ -133,7 +133,7 @@ class Settings(BaseSettings):
             "Comma-separated list of features that use the snapshot cache "
             "when sandbox_cache_enabled=True. "
             "Example: 'chat,fix'. Empty string = no features enabled. "
-            "Parsed into a set by build_sandbox_cache in openbot.core.dependencies."
+            "Parsed into a set by build_sandbox_cache in openbot.application.sandbox_cache_deps."
         ),
     )
     sandbox_cache_max_entries: int = Field(

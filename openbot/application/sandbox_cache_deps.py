@@ -1,7 +1,10 @@
-"""Application-level dependency factories.
+"""Composition-root factory for ``SandboxCachePort``.
 
-Provides ``build_sandbox_cache`` — the single place that maps
-``Settings`` to the correct ``SandboxCachePort`` implementation.
+Maps ``Settings`` → the correct ``SandboxCachePort`` implementation.
+Lives in ``openbot.application`` (not ``openbot.core``) because it must
+import from ``openbot.infrastructure`` (concrete adapters) and
+``openbot.application.ports`` — both above ``openbot.core`` in the
+hexagonal layer stack.
 
 Design:
   - Phase 1 default is OFF (``sandbox_cache_enabled=False`` → ``NoOpSandboxCache``).

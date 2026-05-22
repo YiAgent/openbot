@@ -81,14 +81,21 @@ async def _evict_snapshot(client: Any, snapshot_id: str) -> None:
 async def _sweep_secrets(sandbox: Any) -> None:
     """Remove credential-bearing paths from the workspace before snapshotting.
 
-    Runs ``find . -name <pattern> -delete`` for file patterns and
-    ``find . -type d -name <dir> -exec rm -rf {} +`` for directory names.
-    Errors are ignored per-pattern (best-effort defence-in-depth).
+    Two-pass approach:
+      Pass 1 — Delete known patterns (``find . -name <pattern> -delete`` etc).
+      Pass 2 — Verification scan (``find . -name <pattern>``); if any result is
+               non-empty, the snapshot is **aborted** by raising ``RuntimeError``.
+
+    This is defence-in-depth on top of ``.gitignore``: the snapshot API captures
+    the live filesystem regardless of git tracking.
+
+    Raises:
+        ``RuntimeError``: if the verification scan finds any forbidden path
+        still present after the sweep attempt.
 
     Called by ``DaytonaSnapshotCache.publish`` before the snapshot API call.
-    The ``sandbox`` parameter accepts any object with an async ``run`` method
-    matching ``SandboxPort.run``.
     """
+    # ── Pass 1: delete ──────────────────────────────────────────────────────
     for pattern in _SWEEP_FILE_PATTERNS:
         await sandbox.run(command=["find", ".", "-name", pattern, "-delete"])
     for name in _SWEEP_DIR_NAMES:
@@ -111,6 +118,32 @@ async def _sweep_secrets(sandbox: Any) -> None:
                 "+",
             ]
         )
+
+    # ── Pass 2: verify ──────────────────────────────────────────────────────
+    for pattern in _SWEEP_FILE_PATTERNS:
+        result = await sandbox.run(command=["find", ".", "-name", pattern])
+        if result.stdout.strip():
+            raise RuntimeError(
+                f"Secret sweep failed: forbidden file pattern {pattern!r} still "
+                f"present after sweep. Aborting snapshot creation.\n"
+                f"Matches: {result.stdout.strip()!r}"
+            )
+    for name in _SWEEP_DIR_NAMES:
+        result = await sandbox.run(command=["find", ".", "-type", "d", "-name", name])
+        if result.stdout.strip():
+            raise RuntimeError(
+                f"Secret sweep failed: forbidden directory {name!r} still "
+                f"present after sweep. Aborting snapshot creation.\n"
+                f"Matches: {result.stdout.strip()!r}"
+            )
+    for path in _SWEEP_DIR_PATHS:
+        result = await sandbox.run(command=["find", ".", "-type", "d", "-path", f"./{path}"])
+        if result.stdout.strip():
+            raise RuntimeError(
+                f"Secret sweep failed: forbidden path {path!r} still "
+                f"present after sweep. Aborting snapshot creation.\n"
+                f"Matches: {result.stdout.strip()!r}"
+            )
 
 
 async def _refresh_to_ref(

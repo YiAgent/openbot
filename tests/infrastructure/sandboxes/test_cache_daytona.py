@@ -549,3 +549,48 @@ async def test_evict_repo_deletes_all_keys_for_repo_url() -> None:
         and lbl.get("openbot_installation_id") == str(installation_id)
         for lbl in list_call_labels
     ), f"Expected list_snapshots with repo_url+installation_id labels; got {list_call_labels}"
+
+
+# ── Task 4.2 tests — two-pass secret sweep (security audit gate) ─────────────
+
+
+@pytest.mark.asyncio
+async def test_publish_aborts_if_post_sweep_still_finds_secrets() -> None:
+    """After the first sweep, publish must run a verification pass.
+
+    If the verification pass finds any forbidden pattern still present in
+    the workspace (e.g. the find command failed silently or a different
+    path matched), publish must:
+      - NOT call create_snapshot.
+      - Raise a RuntimeError (so the dispatcher's _safe_publish records
+        the 'failed' counter).
+
+    Test setup: exec returns non-empty output for the verify scan (simulating
+    that at least one secret file was found after the sweep attempt).
+    """
+    checkout = _checkout()
+    installation_id = 77
+
+    client = _make_client(snapshots=[])
+
+    sweep_call_count = 0
+
+    def _tracking_exec(cmd: Any, timeout: Any) -> MagicMock:  # type: ignore[misc]
+        nonlocal sweep_call_count
+        cmd_str = str(cmd)
+        # Simulate: verification pass (a find without -delete) finds a .env file.
+        if "find" in cmd_str and "-delete" not in cmd_str:
+            # Verify pass returns a file path — secrets still present!
+            return MagicMock(exit_code=0, result="./.env", additional_properties={})
+        sweep_call_count += 1
+        return MagicMock(exit_code=0, result="", additional_properties={})
+
+    handle, ws = _make_handle(client=client, workspace_id="ws-audit", checkout=checkout)
+    ws.process.exec.side_effect = _tracking_exec
+    cache = DaytonaSnapshotCache(daytona_client=client, ttl_seconds=86_400)
+
+    with pytest.raises(RuntimeError, match=r"[Ss]ecret|[Ff]orbidden|[Ee]xcluded"):
+        await cache.publish(handle, installation_id=installation_id)
+
+    # create_snapshot must NOT be called.
+    client.create_snapshot.assert_not_called()
