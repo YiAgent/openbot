@@ -16,6 +16,24 @@
 
 ---
 
+## Status checkpoint (2026-05-21, branch `feat/unified-sandbox-entry`)
+
+| Part | Status | Commits |
+|---|---|---|
+| 1 — Foundations | ✅ landed | `f4d2b7d` `e2c8166` `9bf8961` `dbf242d` `e667f26` `8c5fe8a` `0bbc4e7` `2ad4ff0` `2d84b7b` |
+| 2.1 — Classifier relocation | ✅ landed | `4251a6b` |
+| 2.2 — OR-merge policy + provisioning | ✅ landed | `db93427` |
+| 2.3 — Bypass observability counters | ✅ landed | `1be5dbc` |
+| 3 — `fix.py` migration | ✅ landed | `3a0ab50` |
+| 4 — Snapshot cache | ⏸ split to follow-up spec | — |
+| 5 — Triage repro responder | ⏳ pending | — |
+| 6 — Review grounded responder | ⏳ pending | — |
+| 7 — Chat code-grounding responder | ⏳ pending | — |
+
+**Tests at checkpoint:** 1097 passing, hexagonal contract held across all 14 commits, no `--no-verify`. See "Retro" section at the bottom of this file for what we learned in Parts 1–3.
+
+---
+
 ## Per-PR slicing
 
 Each numbered part below ≈ one PR. They land in order; later parts may merge later if responder development needs more iteration.
@@ -58,7 +76,7 @@ Method/property names in later parts must match this table exactly. If you disco
 
 ---
 
-## Part 1 — Foundations (data types + pure functions)
+## Part 1 — Foundations (data types + pure functions) ✅
 
 **Goal:** All new value types, ports, and pure functions land with full test coverage. Zero behavior change visible to GitHub. Existing tests still pass.
 
@@ -212,7 +230,7 @@ Method/property names in later parts must match this table exactly. If you disco
 
 ---
 
-## Part 2 — Dispatcher wiring + classifier relocation
+## Part 2 — Dispatcher wiring + classifier relocation ✅
 
 **Goal:** `dispatcher.run_dispatch` provisions the sandbox after preflight, gated by the OR-merged policy. Existing fix path keeps working (it still has its own internal clone — that's removed in Part 3).
 
@@ -307,7 +325,7 @@ Method/property names in later parts must match this table exactly. If you disco
 
 ---
 
-## Part 3 — `fix.py` migration
+## Part 3 — `fix.py` migration ✅
 
 **Goal:** Drop `fix.py`'s internal `factory() → clone()` block; use `ctx.sandbox_handle` instead. Preserves all existing fallback copy.
 
@@ -523,3 +541,40 @@ If any part is delayed:
 - [ ] No double-clone in any workflow (dispatcher integration test).
 - [ ] Classifier-bypass eval suite gates CI.
 - [ ] Spec + plan archived to `docs/_archive/superpowers/`.
+
+---
+
+## Retro — Parts 1–3 (2026-05-21)
+
+Captured after `3a0ab50` (Part 3) landed, before Parts 4–7 start. 14 commits, 1078 → 1097 tests, hexagonal contract held throughout, no `--no-verify` invocations.
+
+### What worked
+
+- **Type & symbol contract table** (top of plan): every later part referenced the table by symbol name. Zero "what was that field called?" thrash mid-implementation. Spec ↔ plan name drift caught at Part 1 review, fixed once.
+- **TDD discipline on pure functions** (`derive_sandbox_policy`, `resolve_checkout`): 11-cell parametrized matrix on `resolve_checkout` caught two ref-resolution corner cases (PR review comment fallback; inline-comment commit_id vs head_sha) before any dispatcher wiring. Cost: ~15 min upfront, saved ~45 min of debugging in Part 2.
+- **Late-bottom-of-file imports**: `derive_sandbox_policy` lives in `application/sandbox_policy.py` but imports `Feature` from `domain/workflows.py`; `Feature` is a domain-side enum and the application module is shallower. The contract check (`lint-imports`) catches reverse-direction imports — pushing imports to bottom of file (after definitions) kept the module tree acyclic without TYPE_CHECKING gymnastics.
+- **`_LabelledSentryCounter` generic wrapper**: consolidated Prometheus + Sentry mirror call sites into one labelled-counter abstraction. Adding `dispatch_sandbox_total` and `classifier_error_total` in Task 2.3 took ~10 LoC each instead of ~30.
+
+### What we learned the hard way
+
+- **Cause-ordered precedence > symptom-ordered checks.** Task 2.3's RED test expected `bypass_source="classifier"` but production code returned `"degrade"` because the check order was: factory missing? → degrade. classifier said skip? → classifier. The classifier reason was the *cause*; the missing factory was a *symptom* of the same decision. Fix: order checks by cause (static → classifier → degrade), not by which `if` branch happens to match first. **Heuristic for future:** when a labelled counter has multiple precedences, write the labels in cause order on paper before coding the `if`/`elif`.
+- **E2E fake-adapter port-coverage gap.** Part 1 added `get_default_branch_sha` and `get_pull_request` to `ChannelAdapterPort`. Unit tests passed because `tests/_fakes/channel_adapter.py` got both methods. E2E tests (`tests/e2e/conftest.py`'s `FakeChannelAdapter`) failed because the E2E fake is *a separate file* that wasn't touched. Both adapters claim to implement the same Protocol but Python's structural typing only catches the mismatch at call-time. **Heuristic for future:** when adding a Protocol method, `grep -rn "class.*ChannelAdapter\(.*Port" tests/` (any file with "channel_adapter" in path) and update every fake in one commit.
+- **`sys.modules` monkeypatch shim idiom is now load-bearing.** The dispatcher imports `classify_for_dispatch`, `resolve_checkout`, `load_for_repo`, `run_preflight`, and two Prometheus counters — all overridable in tests via `monkeypatch.setattr(sys.modules["openbot.application.dispatcher"], "name", fake)`. Production code accesses them through *its own module's namespace* (e.g. `from openbot.application.dispatcher import resolve_checkout as _resolve`). This keeps tests fast (no DI plumbing) but means **the late-binding contract is implicit**. Worth a comment at the top of dispatcher.py noting which symbols are intended as monkeypatch seams.
+- **Removing `_CLONE_FAIL` user-facing template.** Once the dispatcher owns clone failures, the use-case-level "could not clone" reply became dead code. The `bypass_source="degrade"` counter is the new SRE-side signal; users see the generic `_NO_SANDBOX` text because the cause distinction doesn't help them but does help dashboards. **Heuristic for future:** when moving an error from one layer to another, ask "who needed to *act* on this message?" — if it's ops, route to metrics; if it's the user, route to copy. Don't keep both.
+
+### Mechanics that paid off
+
+- **Per-task commits, not per-part.** 9 commits for Part 1 (one per task) made bisect cheap when Task 1.6 (clone strategies) silently broke a Daytona snapshot test in Task 1.9 — `git bisect run` pointed at the exact commit in 4 steps.
+- **`make check` green at every commit, never `--no-verify`.** Pre-commit hooks caught two ruff fmt-check regressions (auto-fixed) and one import-sort issue (fixed with `ruff check --fix`). Total recovery time: ~30s each.
+- **Status checkpoint table at the top of this plan.** Added after Part 3 landed, before Parts 4–7. Future sessions can resume from "Parts 1–3 ✅, Part 4 split, 5–7 pending" without reading 540 lines.
+
+### Open questions for Part 4+
+
+- **Snapshot cache key shape.** `(repo_url, ref, strategy)` is the obvious key, but `strategy=BLOBLESS` vs `SHALLOW` produces different working-tree shapes for the same `ref`. Spec needs to nail this before any caching code.
+- **Classifier-bypass eval suite (cross-cutting concern).** Listed at line 519 but not built yet. Should land alongside Part 5 (triage) since triage is where the bypass-precision risk is highest (classifier false-positive `NO_SANDBOX` on a real bug).
+- **Budget-exhausted counter.** Cross-cutting concerns list mentions `openbot_responder_budget_exhausted_total{feature}` but it's not implemented. Add when Part 5's responder lands (first new responder with a real budget).
+
+### Don't repeat
+
+- Don't substitute *any* checkbox-marking commit for a status-checkpoint table. Task-level checkboxes are sprint state; the checkpoint table is the human-readable summary. Both can coexist; the table is what readers actually use.
+- Don't move this plan to `docs/_archive/superpowers/` until Parts 5–7 land. The plan is still active reference for those parts.
