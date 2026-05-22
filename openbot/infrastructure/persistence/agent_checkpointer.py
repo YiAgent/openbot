@@ -33,6 +33,22 @@ async def _AsyncPostgresSaver_from_conn_string(
         yield saver
 
 
+def _to_psycopg_dsn(dsn: str) -> str:
+    """Normalise a SQLAlchemy URL to a bare psycopg connection string.
+
+    ``settings.postgres_url`` is documented as a SQLAlchemy/asyncpg URL
+    (``postgresql+asyncpg://...``).  LangGraph's ``AsyncPostgresSaver``
+    uses psycopg under the hood and its ``from_conn_string`` accepts
+    ``postgresql://...`` only — the ``+asyncpg`` dialect suffix makes
+    psycopg's URL parser raise ``ProgrammingError: missing '=' after ...``.
+
+    Stripping the dialect part here keeps the single
+    ``OPENBOT_POSTGRES_URL`` setting as the source of truth without
+    requiring callers to supply a second variable.
+    """
+    return dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+
+
 @asynccontextmanager
 async def agent_checkpointer(
     dsn: str | None,
@@ -51,6 +67,6 @@ async def agent_checkpointer(
         yield None
         return
 
-    async with _AsyncPostgresSaver_from_conn_string(dsn) as saver:
+    async with _AsyncPostgresSaver_from_conn_string(_to_psycopg_dsn(dsn)) as saver:
         await saver.setup()
         yield saver
