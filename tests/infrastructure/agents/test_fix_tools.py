@@ -3,6 +3,9 @@
 These tests use a hand-rolled StubSandbox that satisfies SandboxPort,
 because we want to assert tool↔sandbox wiring without dragging in either
 the fake (subprocess + tempdir) or Daytona (MagicMock) machinery.
+
+ToolBudget is retired — budget enforcement is now handled by
+ToolCallLimitMiddleware in the runtime stack.
 """
 
 from __future__ import annotations
@@ -10,16 +13,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import pytest
-
 from openbot.application.ports.sandbox import ExecResult
 from openbot.domain.events import EventKind, UnifiedEvent
-from openbot.infrastructure.agents._fix_tools import (
-    DEFAULT_FIX_TOOL_BUDGET,
-    ToolBudget,
-    ToolBudgetExceededError,
-    make_fix_tools,
-)
+from openbot.infrastructure.agents._fix_tools import make_fix_tools
 
 
 @dataclass
@@ -149,23 +145,17 @@ async def test_search_files_wraps_grep() -> None:
     assert sandbox.run_calls[0][:2] == ["grep", "-rn"]
 
 
-async def test_tool_budget_drains_after_max_calls() -> None:
-    sandbox = _StubSandbox()
-    budget = ToolBudget(remaining=2)
-    tools = make_fix_tools(sandbox=sandbox, event=_event(), budget=budget)
-    read = _tool(tools, "read_file")
-
-    await read.coroutine(path="a")
-    await read.coroutine(path="b")
-    with pytest.raises(ToolBudgetExceededError) as exc_info:
-        await read.coroutine(path="c")
-    assert exc_info.value.tool == "read_file"
-
-
-def test_default_budget_constant_is_twenty() -> None:
-    """Locked by spec — bumping this is a deliberate code change.
-    See `docs/superpowers/specs/2026-05-20-fix-deepagent-design.md` §Responder."""
-    assert DEFAULT_FIX_TOOL_BUDGET == 20
+async def test_make_fix_tools_returns_six_tools() -> None:
+    tools = make_fix_tools(sandbox=_StubSandbox(), event=_event())  # type: ignore[arg-type]
+    names = {t.name for t in tools}
+    assert names == {
+        "read_file",
+        "write_file",
+        "list_files",
+        "run_command",
+        "git_diff",
+        "search_files",
+    }
 
 
 async def test_git_diff_returns_sandbox_diff() -> None:
