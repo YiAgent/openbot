@@ -201,105 +201,122 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
     # v0.1, but coupling on the handle makes the dependency explicit).
     base_sha = handle.checkout.ref
 
-    async with audit_lifecycle(ctx, workflow=Workflow.FIX) as audit:
-        try:
-            issue = await adapter.get_issue(event, issue_number)
-        except Exception:
-            _logger.exception("fix_get_issue_failed", extra=_log_extra(event))
-            await _safe_reply(adapter, event, _ISSUE_READ_FAIL)
-            audit.outcome = "get_issue_failed"
-            return
+    try:
+        async with audit_lifecycle(ctx, workflow=Workflow.FIX) as audit:
+            try:
+                issue = await adapter.get_issue(event, issue_number)
+            except Exception:
+                _logger.exception("fix_get_issue_failed", extra=_log_extra(event))
+                await _safe_reply(adapter, event, _ISSUE_READ_FAIL)
+                audit.outcome = "get_issue_failed"
+                return
 
-        # ① Cancellation checkpoint after slow I/O — raises RunCancelledError
-        # (BaseException, not Exception) if the user cancelled the run.
-        # RunCancelledError propagates through audit_lifecycle's except-Exception
-        # guard unchanged, reaching the worker where the task is cleaned up.
-        if run_id:
-            await checkpoint(ctx.redis, run_id)
+            # ① Cancellation checkpoint after slow I/O — raises RunCancelledError
+            # (BaseException, not Exception) if the user cancelled the run.
+            # RunCancelledError propagates through audit_lifecycle's BaseException
+            # guard, writing CANCELLED before re-raising to the worker.
+            if run_id:
+                await checkpoint(ctx.redis, run_id)
 
-        default_branch = str(issue.get("default_branch", "main"))
+            default_branch = str(issue.get("default_branch", "main"))
 
-        try:
-            outcome = await _generate_fix_outcome(
-                sandbox=sandbox,
-                event=event,
-                adapter=adapter,
-                issue=issue,
-                run_id=run_id,
-                checkpointer=checkpointer,
-            )
-        except Exception:
-            _logger.exception("fix_agent_failed", extra=_log_extra(event))
-            await _safe_reply(adapter, event, _AGENT_FAIL)
-            audit.outcome = "agent_failed"
-            return
+            try:
+                outcome = await _generate_fix_outcome(
+                    sandbox=sandbox,
+                    event=event,
+                    adapter=adapter,
+                    issue=issue,
+                    run_id=run_id,
+                    checkpointer=checkpointer,
+                )
+            except Exception:
+                _logger.exception("fix_agent_failed", extra=_log_extra(event))
+                await _safe_reply(adapter, event, _AGENT_FAIL)
+                audit.outcome = "agent_failed"
+                return
 
-        # ② Checkpoint after the (potentially long) agent loop.
-        if run_id:
-            await checkpoint(ctx.redis, run_id)
+            # ② Checkpoint after the (potentially long) agent loop.
+            if run_id:
+                await checkpoint(ctx.redis, run_id)
 
-        if not outcome.attempt.tests_passed:
+            if not outcome.attempt.tests_passed:
+                await _safe_reply(
+                    adapter,
+                    event,
+                    _TESTS_FAILED_HEADER.format(
+                        summary=outcome.attempt.summary,
+                        cmd=outcome.attempt.test_command,
+                        output=_truncate(outcome.attempt.test_output),
+                    ),
+                )
+                audit.outcome = "tests_failed"
+                return
+
+            branch = _branch_name(issue_number=issue_number, base_sha=base_sha)
+
+            try:
+                await adapter.create_branch(event, branch, base_sha)
+            except Exception:
+                _logger.exception("fix_create_branch_failed", extra=_log_extra(event))
+                await _safe_reply(adapter, event, _BRANCH_CONFLICT)
+                audit.outcome = "create_branch_failed"
+                return
+
+            # ③ Checkpoint after branch creation.
+            if run_id:
+                await checkpoint(ctx.redis, run_id)
+
+            try:
+                await sandbox.commit_and_push(
+                    branch_ref=branch,
+                    message=f"openbot: fix #{issue_number}",
+                    token=token,
+                )
+            except Exception:
+                _logger.exception("fix_push_failed", extra=_log_extra(event))
+                await _safe_reply(adapter, event, _PUSH_FAIL)
+                audit.outcome = "push_failed"
+                return
+
+            # ④ Checkpoint after push.
+            if run_id:
+                await checkpoint(ctx.redis, run_id)
+
+            try:
+                pr = await adapter.open_pull_request(
+                    event,
+                    title=_pr_title(str(issue.get("title", "")), issue_number),
+                    body=_pr_body(
+                        attempt_summary=outcome.attempt.summary,
+                        issue_number=issue_number,
+                        test_command=outcome.attempt.test_command,
+                    ),
+                    head=branch,
+                    base=default_branch,
+                )
+            except Exception:
+                _logger.exception("fix_open_pr_failed", extra=_log_extra(event))
+                await _safe_reply(adapter, event, _OPEN_PR_FAIL)
+                audit.outcome = "open_pr_failed"
+                return
+
+            pr_url = str(pr.get("html_url", ""))
             await _safe_reply(
                 adapter,
                 event,
-                _TESTS_FAILED_HEADER.format(
+                _PR_OPENED.format(
+                    issue=issue_number,
+                    url=pr_url,
                     summary=outcome.attempt.summary,
+                    files=_files_changed_str(outcome.attempt.files_changed),
                     cmd=outcome.attempt.test_command,
-                    output=_truncate(outcome.attempt.test_output),
                 ),
             )
-            audit.outcome = "tests_failed"
-            return
-
-        branch = _branch_name(issue_number=issue_number, base_sha=base_sha)
-
-        try:
-            await adapter.create_branch(event, branch, base_sha)
-        except Exception:
-            _logger.exception("fix_create_branch_failed", extra=_log_extra(event))
-            await _safe_reply(adapter, event, _BRANCH_CONFLICT)
-            audit.outcome = "create_branch_failed"
-            return
-
-        # ③ Checkpoint after branch creation.
-        if run_id:
-            await checkpoint(ctx.redis, run_id)
-
-        try:
-            await sandbox.commit_and_push(
-                branch_ref=branch,
-                message=f"openbot: fix #{issue_number}",
-                token=token,
-            )
-        except Exception:
-            _logger.exception("fix_push_failed", extra=_log_extra(event))
-            await _safe_reply(adapter, event, _PUSH_FAIL)
-            audit.outcome = "push_failed"
-            return
-
-        # ④ Checkpoint after push.
-        if run_id:
-            await checkpoint(ctx.redis, run_id)
-
-        try:
-            pr = await adapter.open_pull_request(
-                event,
-                title=_pr_title(str(issue.get("title", "")), issue_number),
-                body=_pr_body(
-                    attempt_summary=outcome.attempt.summary,
-                    issue_number=issue_number,
-                    test_command=outcome.attempt.test_command,
-                ),
-                head=branch,
-                base=default_branch,
-            )
-        except Exception:
-            _logger.exception("fix_open_pr_failed", extra=_log_extra(event))
-            await _safe_reply(adapter, event, _OPEN_PR_FAIL)
-            audit.outcome = "open_pr_failed"
-            return
-
-        # ⑤ Cleanup: agent completed successfully, checkpoint data no longer needed.
+            audit.outcome = f"pr_opened:{pr_url}"
+    finally:
+        # ⑤ Cleanup: delete LangGraph checkpoint rows regardless of outcome
+        # (success, agent failure, push failure, cancellation, etc.) so they
+        # don't accumulate in Postgres indefinitely.
         if run_id and checkpointer is not None:
             try:
                 await checkpointer.adelete_thread(run_id)
@@ -308,20 +325,6 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
                     "fix_checkpoint_delete_failed",
                     extra={"run_id": run_id, **_log_extra(event)},
                 )
-
-        pr_url = str(pr.get("html_url", ""))
-        await _safe_reply(
-            adapter,
-            event,
-            _PR_OPENED.format(
-                issue=issue_number,
-                url=pr_url,
-                summary=outcome.attempt.summary,
-                files=_files_changed_str(outcome.attempt.files_changed),
-                cmd=outcome.attempt.test_command,
-            ),
-        )
-        audit.outcome = f"pr_opened:{pr_url}"
 
 
 async def _safe_reply(adapter: ChannelAdapterPort, event: UnifiedEvent, message: str) -> None:
