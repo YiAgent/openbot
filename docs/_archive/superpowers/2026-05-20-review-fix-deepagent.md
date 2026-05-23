@@ -1,231 +1,492 @@
-# Review / Fix DeepAgent integration — slice plan
+# Review / Fix DeepAgent Integration — Plan
 
-**Status:** slices A + A2 + B + C landed (C complete 2026-05-21).
-**Branch:** `feat/review-deepagent`
-**PRD anchors:** §4.2 (review), §4.3 (fix), §13 #2 (locked model routing)
+> **Status:** DRAFT — surfacing design decisions before implementation.
+> Implementation tasks (slices A/B/C) are concrete TDD checklists, but the
+> four **Open Questions** in §2 must be answered first because they change
+> the surface area of slice C (Fix).
 
----
-
-## Locked decisions (from session 2026-05-20)
-
-| Q | Decision | Rationale |
-|---|----------|-----------|
-| Q1 (tools) | **Minimal — inline diff, `tools=[]`** | `ChannelAdapterPort` exposes neither `read_file` nor `grep_repo` yet; widening the port to add them would blow up slice A. `get_pr_diff` is the only port change we ship this slice. |
-| Q2 (Fix workflow) | **Defer to v0.2** | Fix touches a sandbox (`SandboxPort`) + PR creation flow; out of scope for "make review do something". |
-| Q3 (TaskSpec) | **Don't widen TaskSpec for slice A** | The responder reads the diff via `ctx.adapter.get_pr_diff` at handler time; no need to thread it through the queue. Revisit when slice B introduces structured output. |
-| Q4 (tracing) | **`@_traceable(run_type="chain", name="review")`** | Matches chat / triage / fix — one chain span per webhook event. |
-
-## Slice A (this commit, DONE)
-
-### What landed
-
-- `ChannelAdapterPort.get_pr_diff(event, pr_number) -> str`
-  - Returns the unified diff via `Accept: application/vnd.github.v3.diff`.
-  - Returns `""` on 404 (closed / deleted PRs must not block review).
-  - Raises on other HTTP errors (transient gateway failures bubble to caller).
-- `GitHubAdapter.get_pr_diff` — bypasses `_authed_json` (which assumes JSON body); manages its own request + headers.
-- `DeepAgentsReviewResponder` (mirrors `DeepAgentsChatResponder`):
-  - `tools=[]`, opus-4-7 model, system prompt = senior code reviewer.
-  - Diff is truncated to `_MAX_DIFF_CHARS = 64_000` (~16k tokens) before prompting.
-  - Empty diff → "(diff unavailable…)" placeholder + the agent answers with a brief no-op note.
-- `maybe_run_review`:
-  - LLM call happens **outside** the `audit_lifecycle` span (slow LLM ≠ open STARTED row for minutes).
-  - On responder failure → `_ERROR_TEMPLATE` posted, so the PR author sees real feedback instead of silence.
-  - On reply failure → audit row marked FAILED, exception swallowed (GitHub already got 202).
-
-### Tests (TDD-first)
-
-- `tests/infrastructure/adapters/test_github.py` — 3 tests for `get_pr_diff` (200, 404, 5xx).
-- `tests/infrastructure/agents/test_deepagents_review.py` — 6 tests covering model, prompt shape, empty diff, truncation, block-content extraction, empty-reply guard, missing-pr-number guard.
-- `tests/_fakes/channel_adapter.py` — added `get_pr_diff` stub returning `""` to keep `FakeChannelAdapter` conforming to the port.
-
-### Out-of-scope for slice A
-
-- Structured findings (severity, file, line, rule_id).
-- Multi-turn conversation / "ask for more context".
-- Re-reviewing the same PR after `synchronize` (incremental review wiring lives in F3 — already shipped, just doesn't have a real reviewer behind it until slice B).
-- Tool-using agent (read_file, grep_repo, list_files).
+**Date:** 2026-05-20
+**Branch (target):** `feat/review-fix-deepagent`
+**Tech stack:** Python 3.12, deepagents, LiteLLM, LangSmith, pytest-asyncio
+**Related plans:**
+- `2026-05-20-webhook-worker-layering-f3-part1.md` — TaskSpec F3 fields (already shipped)
+- `2026-05-20-webhook-worker-layering-f3-part3.md` — wiring + acceptance (already shipped)
+- `docs/_archive/webhook-worker/openbot-harness-spec.md` §1.2 (archived) — original sandbox decision
 
 ---
 
-## Slice A2 (DONE — tool-using reviewer)
+## 1. Goal & Scope
 
-### What landed
+**Goal:** Port the `DeepAgentsChatResponder` pattern from
+`openbot/infrastructure/agents/deepagents_chat.py` to the `review` and `fix`
+workflows so they emit a real LLM-driven reply instead of the
+`_ACK_TEMPLATE` stub.
 
-- `ChannelAdapterPort.read_file(event, path) -> str`
-  - Returns UTF-8 text or `""` on missing/binary; tools don't branch on failure.
-  - `GitHubAdapter.read_file` delegates to `fetch_repo_file` for the bytes-level fetch and decodes.
-- `ChannelAdapterPort.grep_repo(event, *, pattern, path_glob, max_matches=20) -> list[str]`
-  - Backed by GitHub Code Search REST (`/search/code` with text-match Accept header).
-  - Returns `[]` on 422 (unindexed/malformed) so transient backend issues don't block review.
-  - Hits formatted `"{path}: {fragment}"` (first line of first text-match).
-- `openbot/infrastructure/agents/_review_tools.py` — `make_review_tools(adapter, event)` builds a per-event `[read_file, grep_repo]` list of `StructuredTool`s.
-- `ToolBudget` enforces `DEFAULT_TOOL_BUDGET = 5` total invocations per review run; the 6th call raises `ToolBudgetExceededError` (surfaced as a tool error to the agent so it synthesizes a final answer).
-- `DeepAgentsReviewResponder`:
-  - Removed `@lru_cache(_agent_for_model)` — tools close over `(adapter, event)`, so caching by model alone was a multi-tenant correctness bug, not just an optimization miss.
-  - Builds a fresh agent per `review_for_event` call. Cheap relative to the LLM call.
-  - Passes `config={"recursion_limit": 25}` on `ainvoke` to catch non-tool loops the budget guard can't see.
-  - System prompt teaches when to use tools vs trust the inline diff.
+**In scope (this plan):**
 
-### Tests
+1. `DeepAgentsReviewResponder` — read-only tools (PR diff, file fetch, grep)
+2. `DeepAgentsFixResponder` — tools above + write-file + (maybe) run-tests
+3. Plumbing F3 hints (`is_incremental`, `classifier_output`,
+   `stages_to_run`) through `PreflightContext` so review can honour them
+4. New `evals/` cells: review quality + fix quality (lives outside `tests/`
+   per CLAUDE.md "no LLM-behavior assertions in tests/")
 
-- 8 new adapter tests (3× `read_file`, 5× `grep_repo`) — all via `httpx.MockTransport`, no network.
-- 7 `_review_tools.py` tests — tool surface, budget enforcement, per-call freshness.
-- 8 responder tests (2 added: `test_review_responder_rebuilds_agent_per_event`, `test_review_responder_passes_recursion_limit`).
-- `FakeChannelAdapter` + `RecordingGitHubAdapter` got `read_file` / `grep_repo` stubs so the contract still holds.
-- 855 → 878 passing.
+**Out of scope (deferred):**
 
-### Out-of-scope for slice A2
-
-- Smarter tool selection (e.g. "AST-walk this function" vs raw `read_file`) — slice B.
-- Caching `read_file` results within a single review run — current call counts are low enough that an LRU on the tool wrapper would be premature.
-- Surfacing tool budget exhaustion in the PR reply — agent currently absorbs it via the final-answer path. If reviewers report "agent gave up early", revisit.
+- `evals.sandboxes.factory` integration for Fix — see Open Question #2
+- Cross-workflow Sandbox Port wiring (the Protocol in
+  `application/ports/sandbox.py` stays unimplemented until Fix lands)
+- Branch creation / PR opening for Fix output — slice C only generates the
+  patch and replies; PR opening lands in v0.2
 
 ---
 
-## Slice B (DONE — structured findings + PR Review API)
+## 2. Open Questions (need user decisions before slice C)
 
-### Locked design decisions (from session 2026-05-20)
+### Q1. Tool surface for Review
 
-| Q | Decision | Rationale |
-|---|----------|-----------|
-| Verdict ceiling | **COMMENT-only** — never `REQUEST_CHANGES` regardless of severity | OpenBot is advisory in v0.1 (PRD §13). Humans still make merge calls. Lowers blast radius if the model gets things wrong. |
-| Zero findings | **APPROVE review with summary** | Posting a real APPROVE makes "no findings above threshold" feel intentional rather than a no-op. |
+Review reads but never writes. Three candidate tool sets:
 
-### What landed
+| Option | Tools | Pro | Con |
+|--------|-------|-----|-----|
+| **A. Minimal** | `get_pr_diff`, `get_pr_metadata` | Cheapest tokens; one HTTP call. | Agent can't follow up on unfamiliar identifiers. |
+| **B. Standard (recommended)** | A + `read_file(path, ref)`, `grep_repo(pattern, glob)` | Matches Cursor / Aider review UX. | Two extra GitHub API calls per turn × N turns ⇒ budget tracking matters. |
+| **C. Full** | B + `web_fetch(url)` | Agent can read linked RFCs / issues. | Network egress + LangSmith trace bloat. |
 
-- `openbot/domain/review.py`
-  - Frozen `Finding(severity, file, message, line=None, quote=None)`, frozen `ReviewFindings(summary, findings=())`.
-  - `Severity = Literal["critical", "high", "medium", "low", "nit"]` — strict superset of `SeverityThreshold` (which omits `nit`; threshold of "nit" would be useless).
-  - `passes_threshold(finding, threshold)` ranks by tuple index; unknown severities silently drop rather than crash the run (LLM hallucination resilience).
-- `openbot/infrastructure/agents/_review_schema.py`
-  - Pydantic `_FindingModel` / `_ReviewFindingsModel` with `extra="forbid"` — schema drift is a deliberate code change.
-  - `to_domain()` is the anti-corruption boundary; pydantic does not leak past this module.
-  - `parse_structured_response()` accepts pydantic instance OR plain dict; raises on anything else so silent approve on garbage is impossible.
-- `ChannelAdapterPort.create_pr_review(event, pr_number, *, body, event_type, comments)`
-  - `event_type: Literal["APPROVE", "COMMENT"]` — `REQUEST_CHANGES` is unreachable by construction.
-  - `GitHubAdapter` impl POSTs to `/repos/{owner}/{repo}/pulls/{n}/reviews` via the existing `_authed_json` helper.
-- `DeepAgentsReviewResponder`
-  - Returns `ReviewFindings` (was `str`).
-  - Passes `response_format=ReviewFindingsSchema` to `create_deep_agent`.
-  - Reads `result["structured_response"]`; fails loud if missing.
-  - System prompt rewritten to demand structured output and explain when to omit `line` (repo-wide findings).
-- `maybe_run_review` (use case)
-  - Calls the responder, filters by `ctx.config.severity_threshold`, partitions into inline (`line is not None`) and repo-wide.
-  - Inline findings → PR review comments shaped `{path, line, body: "**severity** — message"}` (quote rendered as a fenced block when present).
-  - Repo-wide findings → folded into the review body under "Repo-wide notes" (PR Review API rejects line-less inline comments).
-  - Verdict: `APPROVE` iff filtered findings is empty, else `COMMENT`. PRD-locked, asserted by `test_never_emits_request_changes_even_on_critical`.
-  - Responder failure → fallback COMMENT review with the error template (so the PR author still sees a real signal, never silent).
+Default if unanswered: **B**.
 
-### Tests
+### Q2. Sandbox for Fix
 
-- `tests/domain/test_review.py` — 16 tests covering immutability, defaults, and the full severity-ranking matrix (including unknown severities).
-- `tests/infrastructure/agents/test_review_schema.py` — 7 tests covering `to_domain()` happy/drop paths, `parse_structured_response` shape acceptance, and `extra="forbid"`.
-- `tests/infrastructure/adapters/test_github.py` — 3 new tests for `create_pr_review` (APPROVE body-only, COMMENT with inline comments, missing-auth guard).
-- `tests/infrastructure/agents/test_deepagents_review.py` — rewritten for structured output (8 tests; added `test_review_responder_returns_findings_from_structured_response` and `test_review_responder_raises_on_missing_structured_response`).
-- `tests/application/use_cases/test_review.py` — 9 new tests covering approve, comment with inline comments, severity filter (drop and keep paths), repo-wide folding, responder failure, both skip-conditions, and the no-REQUEST_CHANGES lock.
-- `tests/e2e/conftest.py` — `_fake_review_findings` returns a `ReviewFindings`; `RecordingGitHubAdapter` records via new `pr_reviews` list.
-- `tests/e2e/test_spec_demos.py` — demo 02 asserts on `pr_reviews` (APPROVE shape); demo 07 split between `replies` (announce) and `pr_reviews` (review).
-- 878 → 915 passing.
+PRD `CLAUDE.md` locks `evals.sandboxes.factory` under `evals/`. The
+`application/ports/sandbox.py` Protocol is stubbed. Three paths:
 
-### Out-of-scope for slice B
+| Option | What ships | When |
+|--------|-----------|------|
+| **A. Defer Fix to v0.2** | Slice C generates a markdown patch suggestion only (no execution); user copy-pastes. | This plan = review-only; Fix becomes a v0.2 plan. |
+| **B. No-sandbox Fix** | Fix runs `git apply` inside the worker process. **Dangerous** — no isolation; LLM has shell. | Not recommended — violates PRD §3 locked boundary. |
+| **C. Lift `evals.sandboxes.factory` to `infrastructure/`** | Move Daytona/Docker adapters under `infrastructure/sandbox/`, wire `SandboxPort` to them, refactor `evals/` to import from `infrastructure/`. | This plan adds slice C2 (~1 day refactor). |
 
-- Re-review on `PR_SYNCHRONIZED` — incremental review wiring lives in F3 (already in router); the responder is event-stateless by design. A future "diff since last review" feature is a separate slice.
-- Suggested edits (`suggestion` code blocks) — GitHub renders them as one-click commits. Useful but the agent would need to emit a target line range, not just a single line. Defer until reviewers ask for it.
-- LangSmith feedback on individual findings — would require persisting `findings_id` per comment. Out of scope; the chain-level trace is enough for v0.1.
+Recommended: **A (defer Fix)**. Ship review now, add Fix slice later when
+sandbox lift is its own focused PR.
 
-## Slice C (Fix workflow) — complete (2026-05-21)
+### Q3. F3 hint plumbing
 
-Goal: implement `openbot/application/use_cases/fix.py` end-to-end.
+F3 stores `is_incremental` / `classifier_output` / `stages_to_run` on
+`TaskSpec` but `PreflightContext` doesn't carry them. Review needs at
+least `is_incremental` and `classifier_output` to:
 
-Landed across nine subtasks under `docs/superpowers/plans/2026-05-20-fix-deepagent-slice-c-part{1..8}.md`:
+- Skip the diff fetch when `is_incremental` and no new code (force_push
+  edge case)
+- Mention the classifier's `severity_guess` in the review preamble
 
-- C.1 — `FixAttempt` + `FixOutcome` domain types.
-- C.2 — `_fix_schema.py` pydantic bridge (domain stays pydantic-free).
-- C.3 — `SandboxPort` grown to `clone` / `read_file` / `write_file` / `list_files` / `run` / `git_diff` / `commit_and_push` / `close`; `FakeSandboxAdapter` (in-process tempdir) lands alongside.
-- C.4 — `ChannelAdapterPort` grows `get_issue`, `create_branch`, `open_pull_request`, `get_installation_token`; `GitHubAdapter` implements all four.
-- C.5 — `DaytonaSandboxAdapter` (production): HTTPS token interpolation, idempotent close, per-call workspace.
-- C.6 — `make_fix_tools` factory (read/write/run/diff) bound to the sandbox.
-- C.7 — `DeepAgentsFixResponder` (separate from the reviewer; tools wired via C.6).
-- C.8 — `maybe_run_fix` use case wired end-to-end with `audit_lifecycle`, per-stage error templates, and a `_generate_fix_outcome` seam mirroring `_generate_review_findings`.
-- C.9 — E2E demos: demo 03 rewritten to assert on the PR creation contract (replaces the old "sandbox not configured" ACK), demo 10 added for the tests-failed terminal. `run_dispatch` / `execute_handler` grow `sandbox_factory=None` so production wiring stays one-line in webapp/worker.
+Two options:
+
+| Option | Change | Blast radius |
+|--------|--------|--------------|
+| **A. Add fields to `PreflightContext`** (recommended) | Add `task_spec: TaskSpec \| None` to `PreflightContext`; worker passes it in. | One dataclass field + one assignment in `execute_handler`. |
+| **B. Re-derive from `event.raw`** | `review.py` re-runs `compute_diff_scope` + classifier. | Wasteful (already computed in webhook segment) and breaks symmetry. |
+
+Default if unanswered: **A**.
+
+### Q4. LangSmith trace granularity
+
+`@_traceable(run_type="chain", name="review")` already wraps
+`maybe_run_review`. The new DeepAgent will emit its own LiteLLM spans.
+
+Options:
+
+| Option | Trace shape | Operator UX |
+|--------|------------|-------------|
+| **A. Wrap responder in `chain`** (recommended) | One workflow span → one DeepAgent span → N LLM spans. | Matches chat; cost per workflow is one query. |
+| **B. Tools-only trace** | Each tool call is its own LangSmith run. | Loses workflow-level cost rollup. |
+
+Default if unanswered: **A** (chat already does this).
 
 ---
 
-## Acceptance checks (slice A)
+## 3. Current State (verified by code reading, not memory)
 
-- [x] `make test` passes (responder + adapter tests).
-- [x] No new lint warnings (`make lint`).
-- [x] `FakeChannelAdapter` still satisfies `ChannelAdapterPort` (contract test).
-- [x] No tests assert prompt-quality / LLM-behavior (those belong in `evals/`, per CLAUDE.md).
-- [x] No new network calls in unit tests (everything mocked via `httpx.MockTransport` + monkeypatched `create_deep_agent`).
-- [ ] Smoke test against a real PR — manual, after merge.
-
-## Acceptance checks (slice A2)
-
-- [x] `make check` passes (fmt + lint + 878 tests).
-- [x] `FakeChannelAdapter` + `RecordingGitHubAdapter` still satisfy `ChannelAdapterPort`.
-- [x] Tool budget exhaustion does not crash the responder (raises `ToolBudgetExceededError` to the agent; agent absorbs as tool-error path).
-- [x] No new prompt-quality assertions in `tests/`.
-- [x] No new network calls in unit tests.
-- [ ] Smoke test on a real PR — does the agent actually fetch files when the diff is insufficient? (manual, after merge.)
-- [ ] Cost test — how many tool calls does opus-4-7 average across a small batch of real PRs? Confirm `DEFAULT_TOOL_BUDGET = 5` is enough headroom.
-
-## Acceptance checks (slice B)
-
-- [x] `make check` passes (fmt + lint + 915 tests).
-- [x] `FakeChannelAdapter` + `RecordingGitHubAdapter` still satisfy `ChannelAdapterPort` (now including `create_pr_review`).
-- [x] Domain layer has no pydantic dependency — verified by the hexagonal contract (import-linter green).
-- [x] `event_type` is `Literal["APPROVE", "COMMENT"]` — `REQUEST_CHANGES` is unreachable by construction (PRD §13 lock).
-- [x] LLM hallucinations on `severity` are dropped, not raised (`test_to_domain_drops_unknown_severity` + `passes_threshold` test for unknown).
-- [x] No new prompt-quality assertions in `tests/`.
-- [x] No new network calls in unit tests.
-- [ ] Smoke test on a real PR — does the structured-output pass actually produce parseable findings on opus-4-7? (manual, after merge.)
-- [ ] Configure `.openbot/config.yaml` `review.severity_threshold` per repo and verify filter behavior (manual.)
+| Surface | Current code | Comment |
+|---------|--------------|---------|
+| `openbot/application/use_cases/review.py` | Stub posting `_ACK_TEMPLATE`, wrapped in `audit_lifecycle`. ~75 lines. | Replace `_ACK_TEMPLATE` with `_RESPONDER.review_for_event(...)`; keep audit + error fallback. |
+| `openbot/application/use_cases/fix.py` | Stub posting `_ACK_TEMPLATE`. ~60 lines. | Untouched if Q2 = A. |
+| `openbot/infrastructure/agents/deepagents_chat.py` | Real impl: `create_deep_agent(model=…, tools=[], system_prompt=…)` + `lru_cache(4)`. | Template for the two new responders. |
+| `openbot/application/ports/sandbox.py` | `SandboxPort` Protocol, no adapter wired. | Stays unimplemented; first impl follows the Fix slice. |
+| `openbot/dispatcher/incremental.py` | `compute_diff_scope` returns `DiffScope(is_incremental, is_force_push, …)`. | Already shipped in F3. |
+| `openbot/infrastructure/queue/worker.py:218-228` | Persists `head_sha` to `task_runs.last_reviewed_sha` after a completed review. | Already shipped — relevant for incremental review. |
+| `openbot/infrastructure/queue/task_spec.py` | Carries `classifier_output`, `is_incremental`, `is_force_push`, `stages_to_run`. | Shipped. **Not** forwarded to `PreflightContext` yet — see Q3. |
 
 ---
 
-## Files touched
+## 4. Slice A — `DeepAgentsReviewResponder` (read-only, no sandbox)
 
-### Slice A
-```
-openbot/application/ports/channel_adapter.py        +9   (port method)
-openbot/application/use_cases/review.py             ~50  (wired responder, error fallback)
-openbot/infrastructure/adapters/github.py           +20  (get_pr_diff impl)
-openbot/infrastructure/agents/__init__.py           +2   (export)
-openbot/infrastructure/agents/deepagents_review.py  +147 (new file)
-tests/_fakes/channel_adapter.py                     +3   (port conformance)
-tests/infrastructure/adapters/test_github.py        +40  (3 tests + sample diff)
-tests/infrastructure/agents/test_deepagents_review.py +170 (new file, 6 tests)
+**Goal:** Wire a DeepAgent reply to `maybe_run_review`. Tool set = Q1's
+chosen option (default B). No F3 hints yet (slice B adds those).
+
+**Files:**
+
+- Create: `openbot/infrastructure/agents/deepagents_review.py`
+- Modify: `openbot/infrastructure/agents/__init__.py` (export the class)
+- Modify: `openbot/application/use_cases/review.py`
+- Create: `tests/infrastructure/agents/test_deepagents_review.py`
+- Create: `tests/application/use_cases/test_review_deepagent_wiring.py`
+
+### Step 1 — Skeleton + test scaffolding
+
+- [ ] Create `tests/infrastructure/agents/test_deepagents_review.py`:
+
+```python
+"""Wiring tests — DeepAgentsReviewResponder.
+
+Asserts the tool surface, prompt assembly, and cache behaviour. Does NOT
+assert LLM output quality — that lives in evals/.
+"""
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.infrastructure.agents.deepagents_review import (
+    DeepAgentsReviewResponder,
+)
+
+
+def _pr_event() -> UnifiedEvent:
+    return UnifiedEvent(
+        channel="github",
+        delivery_id="d1",
+        kind=EventKind.PR_OPENED,
+        repo="org/repo",
+        actor="alice",
+        actor_type="User",
+        issue_number=None,
+        pr_number=42,
+        installation_id=100,
+        comment_body=None,
+        raw={
+            "pull_request": {
+                "title": "Refactor parser",
+                "body": "Cleans up edge cases",
+                "head": {"sha": "HEADSHA"},
+                "base": {"sha": "BASESHA"},
+            }
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_review_invokes_agent_with_pr_context() -> None:
+    fake_agent = MagicMock()
+    fake_agent.ainvoke = AsyncMock(
+        return_value={
+            "messages": [MagicMock(content="No blocking issues found.")]
+        }
+    )
+    with patch(
+        "openbot.infrastructure.agents.deepagents_review._agent_for_model",
+        return_value=fake_agent,
+    ):
+        responder = DeepAgentsReviewResponder(adapter=MagicMock())
+        reply = await responder.review_for_event(_pr_event())
+
+    assert "No blocking issues" in reply
+    call = fake_agent.ainvoke.await_args.args[0]
+    prompt = call["messages"][0]["content"]
+    assert "org/repo" in prompt
+    assert "#42" in prompt
+    assert "HEADSHA" in prompt
 ```
 
-### Slice A2
-```
-openbot/application/ports/channel_adapter.py        +30  (read_file + grep_repo on port)
-openbot/infrastructure/adapters/github.py           +90  (read_file + grep_repo impl)
-openbot/infrastructure/agents/_review_tools.py      +130 (new — tool factory + ToolBudget)
-openbot/infrastructure/agents/deepagents_review.py  ~50  (per-event build, tools wired, prompt updated)
-tests/_fakes/channel_adapter.py                     +14  (port conformance)
-tests/e2e/conftest.py                               +22  (RecordingGitHubAdapter parity)
-tests/infrastructure/adapters/test_github.py        +130 (8 tests)
-tests/infrastructure/agents/test_deepagents_review.py +60 (2 new tests + ainvoke signature updates)
-tests/infrastructure/agents/test_review_tools.py    +130 (new file, 7 tests)
+- [ ] Run to confirm FAIL (module does not exist):
+  `python -m pytest tests/infrastructure/agents/test_deepagents_review.py -v`
+
+### Step 2 — Implement the responder
+
+- [ ] Create `openbot/infrastructure/agents/deepagents_review.py` (~150
+      lines target, hard cap 250). Skeleton:
+
+```python
+"""DeepAgent-backed PR review responder."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Any
+
+from deepagents import create_deep_agent
+
+from openbot.application.ports.channel_adapter import ChannelAdapterPort
+from openbot.domain.events import UnifiedEvent
+from openbot.domain.workflows import Feature
+from openbot.infrastructure.llm.model_router import primary_model_for
+
+_SYSTEM_PROMPT = """You are OpenBot, a senior code reviewer reviewing one
+GitHub pull request.
+
+Rules:
+- Comment only on issues you can justify from the diff or file content.
+- Prefer "blocking" / "nit" / "praise" tags.
+- Skip drive-by suggestions unrelated to the diff.
+- If you cannot read a file via the tools, say so — never fabricate.
+"""
+
+
+def _normalize_model_name(model: str) -> str:
+    if ":" in model:
+        return model
+    if "/" in model:
+        provider, name = model.split("/", 1)
+        return f"{provider}:{name}"
+    return model
+
+
+def _build_tools(adapter: ChannelAdapterPort, event: UnifiedEvent) -> list[Any]:
+    """Tool set — see plan §2 Q1. Default = option B (standard)."""
+    # Each tool is a thin async closure over the adapter + event.
+    # Implementations live alongside this module to keep adapter coupling local.
+    raise NotImplementedError  # filled in by step 2.b
+
+
+def _user_prompt(event: UnifiedEvent) -> str:
+    pr = event.raw.get("pull_request") or {}
+    return (
+        f"Review PR #{event.pr_number} in {event.repo}.\n"
+        f"Title: {pr.get('title', '(no title)')}\n"
+        f"Author: @{event.actor}\n"
+        f"head SHA: {(pr.get('head') or {}).get('sha')}\n"
+        f"base SHA: {(pr.get('base') or {}).get('sha')}\n\n"
+        "Use the provided tools to read the diff and any files you need, "
+        "then post one consolidated review comment."
+    )
+
+
+def _extract_reply(result: dict[str, Any]) -> str:
+    messages = result.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("deepagents_review_missing_messages")
+    last = messages[-1]
+    content = getattr(last, "content", None) or ""
+    if isinstance(content, list):
+        content = "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content
+        )
+    text = str(content).strip()
+    if not text:
+        raise ValueError("deepagents_review_empty_reply")
+    return text
+
+
+@lru_cache(maxsize=4)
+def _agent_for_model(model: str, tools_signature: tuple):
+    # tools_signature is part of the cache key so per-event tools still
+    # share an agent when the surface is identical (model + tool names).
+    return create_deep_agent(
+        model=_normalize_model_name(model),
+        tools=[],  # placeholder; step 2.b wires real tools
+        system_prompt=_SYSTEM_PROMPT,
+    )
+
+
+class DeepAgentsReviewResponder:
+    def __init__(self, *, adapter: ChannelAdapterPort) -> None:
+        self._adapter = adapter
+
+    async def review_for_event(self, event: UnifiedEvent) -> str:
+        tools = _build_tools(self._adapter, event)
+        agent = _agent_for_model(
+            primary_model_for(Feature.REVIEW),
+            tuple(getattr(t, "name", repr(t)) for t in tools),
+        )
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": _user_prompt(event)}]}
+        )
+        return _extract_reply(result)
+
+
+__all__ = ["DeepAgentsReviewResponder"]
 ```
 
-### Slice B
-```
-openbot/domain/review.py                             +85  (new — Finding/ReviewFindings + passes_threshold)
-openbot/application/ports/channel_adapter.py        +25  (create_pr_review)
-openbot/application/use_cases/review.py             ~120 (severity filter + PR Review API submission)
-openbot/infrastructure/adapters/github.py           +25  (create_pr_review impl)
-openbot/infrastructure/agents/_review_schema.py     +120 (new — pydantic ⇄ domain boundary)
-openbot/infrastructure/agents/deepagents_review.py  ~40  (structured response_format + prompt)
-tests/_fakes/channel_adapter.py                     +20  (port conformance)
-tests/e2e/conftest.py                               +25  (RecordingGitHubAdapter parity + monkeypatch swap)
-tests/e2e/test_spec_demos.py                        ~20  (demo 02 + demo 07 reshape for PR Review API)
-tests/domain/test_review.py                         +80  (new — 16 tests)
-tests/application/use_cases/test_review.py          +220 (new — 9 tests)
-tests/infrastructure/adapters/test_github.py        +60  (3 tests)
-tests/infrastructure/agents/test_review_schema.py   +85  (new — 7 tests)
-tests/infrastructure/agents/test_deepagents_review.py ~50 (rewritten for structured_response path)
-```
+- [ ] Step 2.b — implement `_build_tools` for the chosen option from Q1.
+  Each tool is `async def` returning a string the agent consumes; use
+  `@_traceable(run_type="tool", name=…)` so LangSmith picks them up.
+
+- [ ] Add `DeepAgentsReviewResponder` to
+  `openbot/infrastructure/agents/__init__.py` exports.
+
+- [ ] Run unit test until green.
+
+### Step 3 — Wire into `review.py`
+
+- [ ] In `openbot/application/use_cases/review.py`:
+  - Replace `_ACK_TEMPLATE` block with
+    `message = await _RESPONDER.review_for_event(event)`.
+  - Instantiate `_RESPONDER = DeepAgentsReviewResponder(adapter=…)` —
+    but `adapter` lives on `ctx`, so the responder takes the adapter at
+    call-time (`DeepAgentsReviewResponder().review_for_event(event,
+    adapter=ctx.adapter)`) or we keep a module-level singleton **without**
+    adapter and pass adapter into `review_for_event`. The latter mirrors
+    chat; pick it.
+  - Wrap in the existing try/except — on failure post a friendly error
+    template (mirror chat's `_ERROR_TEMPLATE`).
+  - Keep the `audit_lifecycle` block and `outcome` assignment.
+
+- [ ] Add `tests/application/use_cases/test_review_deepagent_wiring.py`
+  asserting: success path posts the responder reply; responder exception
+  triggers fallback message + `audit_lifecycle` records `FAILED`.
+
+### Step 4 — Make-check + commit
+
+- [ ] `make check` green (lint + tests).
+- [ ] Commit:
+  `feat(review): wire DeepAgents responder; tools= <option-B/...>`
+
+---
+
+## 5. Slice B — F3 hint plumbing through `PreflightContext`
+
+Skip this slice if Q3 is answered **B** (re-derive). Default **A**.
+
+**Files:**
+
+- Modify: `openbot/application/middleware/preflight.py` (add field)
+- Modify: `openbot/application/dispatcher.py` (`execute_handler` accepts spec)
+- Modify: `openbot/infrastructure/queue/worker.py` (pass `spec`)
+- Modify: `openbot/application/use_cases/review.py` (use `ctx.task_spec`)
+- Test: `tests/application/test_execute_handler_carries_task_spec.py`
+
+### Step 1 — Failing test
+
+- [ ] Test asserts that `PreflightContext` constructed from a `TaskSpec`
+  with `is_incremental=True, classifier_output={"type":"bug"}` carries
+  those through to the workflow handler.
+
+### Step 2 — Implementation
+
+- [ ] Add `task_spec: TaskSpec | None = None` to `PreflightContext`
+  (frozen-dataclass field, default None to keep existing call sites
+  working).
+- [ ] `execute_handler` signature gains
+  `task_spec: TaskSpec | None = None`; passes it to `PreflightContext`.
+- [ ] Worker passes `spec` into `execute_handler(..., task_spec=spec)`.
+- [ ] Review responder accepts `task_spec` and, when present, prepends a
+  preamble to the user prompt describing
+  `is_incremental` / `classifier_output.severity_guess`.
+
+### Step 3 — Tests + commit
+
+- [ ] Unit test for the prompt-preamble branch (mock the agent, assert
+  preamble text appears in the dispatched prompt).
+- [ ] `make check`.
+- [ ] Commit:
+  `feat(preflight): forward TaskSpec to handlers; review consumes F3 hints`
+
+---
+
+## 6. Slice C — Fix DeepAgent (conditional on Q2)
+
+**If Q2 = A (defer):** This slice is a separate v0.2 plan; this PR ends
+after slice B.
+
+**If Q2 = C (lift sandbox factory):** Add the slices below. **Do not
+adopt option B (no-sandbox)** — violates PRD §3.
+
+### Slice C1 — Lift sandbox factory to `infrastructure/`
+
+- [ ] Move `evals/sandboxes/{factory,daytona_backend,docker_backend,modal_backend,repo_setup}.py`
+  → `openbot/infrastructure/sandbox/`.
+- [ ] Provide a re-export shim under `evals/sandboxes/__init__.py` so
+  eval harnesses keep importing from the old path during transition.
+- [ ] Wire `SandboxPort` adapter in `infrastructure/sandbox/adapter.py`
+  that implements the Protocol in `application/ports/sandbox.py`.
+- [ ] Update `OPENBOT_SANDBOX_BACKEND` documentation in README — note
+  the new dual-use surface.
+- [ ] Tests live under `tests/infrastructure/sandbox/`.
+
+### Slice C2 — `DeepAgentsFixResponder`
+
+- [ ] Mirror `DeepAgentsReviewResponder` but with tools:
+  `read_file`, `write_file`, `run_command(cmd, timeout)` — the last
+  goes through `SandboxPort.run`.
+- [ ] System prompt enforces "produce a unified diff in the final
+  message" so we can extract a patch from `_extract_reply`.
+- [ ] Reply format: post the patch as a markdown fenced block; do NOT
+  open a PR yet (deferred to v0.2).
+- [ ] Tests: tool surface, sandbox call counts, patch extraction.
+
+### Slice C3 — Wire into `fix.py`
+
+- [ ] Replace `_ACK_TEMPLATE.format(...)` with the responder call inside
+  `audit_lifecycle`.
+
+---
+
+## 7. Acceptance Checks
+
+After each slice:
+
+1. `make check` — full ruff + pytest green; no skipped tests.
+2. `python -m pytest tests/e2e/test_spec_demos.py -v` — the 18 E2E
+   scenarios still pass (this plan does not change the dispatcher).
+3. `python -m pytest tests/infrastructure/agents/ -v` — new wiring
+   tests cover tool surface, prompt content, cache behaviour, error
+   fallback.
+4. Manual smoke (optional): run the worker locally with `make dev`
+   against a personal repo, open a PR, confirm a DeepAgent review
+   comment appears.
+
+**Evals (separate PR, lands in `evals/`):**
+
+- `evals/review/` cell — 10 hand-picked PRs with expected
+  "should-block" / "nit" / "approve" verdicts. Scored by
+  precision@blocking + manual rubric per PRD §8.3.
+- `evals/fix/` cell — only if slice C ships.
+
+---
+
+## 8. Risks & Open Issues
+
+1. **DeepAgents tool latency** — each tool call is one HTTP roundtrip
+   through `ChannelAdapterPort`. A chatty agent on a 20-file PR could
+   spike LLM cost. Mitigation: `evals/` measures `tool_call_count`
+   per task and gates regressions; `CostMeter` tracks $ via existing
+   middleware.
+2. **F3 hint backward compat** — adding `task_spec: TaskSpec | None` to
+   `PreflightContext` is opt-in (default None) so existing webhook-path
+   tests pass unchanged. Verified by reading `preflight.py:97-124`.
+3. **Sandbox lift scope (slice C1)** — moving `evals/sandboxes/` is a
+   ~300-line move + import-rewrite. Doable but should land as its own
+   PR before slice C2.
+4. **LangSmith trace inflation** — DeepAgent emits per-tool spans. Q4
+   default (A) keeps the workflow-level rollup intact; if Q4 = B we
+   should add a `langsmith.run_helpers.trace` context manager around
+   the responder call.
+
+---
+
+## 9. Locked Decisions (do not re-litigate)
+
+- **No LLM-behavior assertions in `tests/`** — quality evals live in
+  `evals/` per CLAUDE.md.
+- **`v0.1` feature set stays `triage+review+fix+chat`** — this plan
+  upgrades review (and possibly fix), nothing else.
+- **GitHub-only channel** — no Slack/Discord/Linear in this plan.
+- **LangSmith is the only tracer** — do not introduce Langfuse here.
+- **Model routing per PRD §13 #2** — review/fix → `claude-opus-4-7`,
+  not configurable per request.
+
+---
+
+## 10. Next Action
+
+Answer Open Questions §2 (Q1–Q4) before slice A begins. Q2 has the
+largest impact (defer-vs-lift). Suggested defaults:
+
+| Q | Default | Why |
+|---|---------|-----|
+| Q1 | B (standard tools) | Matches industry baseline; lets `evals/` measure tool-call budget. |
+| Q2 | **A (defer Fix)** | Keeps this PR ~500 LOC; sandbox lift becomes its own focused PR. |
+| Q3 | A (add to `PreflightContext`) | One-line dataclass change; avoids re-deriving incremental scope. |
+| Q4 | A (chain wrap) | Matches chat trace shape; gives one cost rollup per workflow run. |
