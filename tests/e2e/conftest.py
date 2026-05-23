@@ -448,7 +448,13 @@ async def webhook_harness(
 
     from openbot.domain.review import ReviewFindings as _ReviewFindings
 
-    async def _fake_review_findings(*, event: UnifiedEvent, adapter: Any) -> _ReviewFindings:
+    async def _fake_review_findings(
+        *,
+        event: UnifiedEvent,
+        adapter: Any,
+        run_id: Any = None,
+        checkpointer: Any = None,
+    ) -> _ReviewFindings:
         # E2E doesn't exercise the real reviewer — only the audit + PR Review
         # API plumbing. PRD §8.3: prompt-quality assertions live in evals/.
         return _ReviewFindings(summary=f"DeepAgents review summary for PR #{event.pr_number}")
