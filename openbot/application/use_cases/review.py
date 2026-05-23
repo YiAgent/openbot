@@ -33,6 +33,8 @@ from openbot.domain.workflows import Workflow
 from openbot.infrastructure.agents import DeepAgentsReviewResponder
 
 if TYPE_CHECKING:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
     from openbot.application.middleware.preflight import PreflightContext
     from openbot.domain.config_schema import SeverityThreshold
 
@@ -51,10 +53,16 @@ _ERROR_TEMPLATE = (
 
 
 async def _generate_review_findings(
-    *, event: UnifiedEvent, adapter: ChannelAdapterPort
+    *,
+    event: UnifiedEvent,
+    adapter: ChannelAdapterPort,
+    run_id: str | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ) -> ReviewFindings:
     """Module-level seam — E2E tests monkeypatch this to avoid LLM calls."""
-    return await _RESPONDER.review_for_event(event, adapter=adapter)
+    return await _RESPONDER.review_for_event(
+        event, adapter=adapter, run_id=run_id, checkpointer=checkpointer
+    )
 
 
 def _filter_findings(
@@ -137,7 +145,12 @@ async def maybe_run_review(ctx: PreflightContext) -> None:
     # slow LLM call doesn't keep a STARTED row sitting open for minutes.
     findings: ReviewFindings | None = None
     try:
-        findings = await _generate_review_findings(event=event, adapter=ctx.adapter)
+        findings = await _generate_review_findings(
+            event=event,
+            adapter=ctx.adapter,
+            run_id=ctx.dispatch.run_id,
+            checkpointer=ctx.agent_checkpointer,
+        )
     except Exception:
         _logger.exception(
             "review_agent_reply_failed",

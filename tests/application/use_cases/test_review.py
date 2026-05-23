@@ -51,7 +51,13 @@ def _ctx(adapter: Any, event: UnifiedEvent, **config_overrides: Any) -> Prefligh
 
 
 def _patch_findings(monkeypatch: pytest.MonkeyPatch, findings: ReviewFindings | Exception) -> None:
-    async def _fake(*, event: UnifiedEvent, adapter: Any) -> ReviewFindings:
+    async def _fake(
+        *,
+        event: UnifiedEvent,
+        adapter: Any,
+        run_id: str | None = None,
+        checkpointer: Any = None,
+    ) -> ReviewFindings:
         if isinstance(findings, Exception):
             raise findings
         return findings
@@ -275,3 +281,62 @@ async def test_never_emits_request_changes_even_on_critical(monkeypatch) -> None
     await maybe_run_review(_ctx(adapter, _event()))
 
     assert adapter.create_pr_review.await_args.kwargs["event_type"] == "COMMENT"
+
+
+# ───── run_id + checkpointer forwarding ─────
+
+
+def _make_preflight_ctx(
+    event: UnifiedEvent,
+    adapter: Any,
+    agent_checkpointer: Any = None,
+    **config_overrides: Any,
+) -> PreflightContext:
+    """Like ``_ctx`` but also accepts ``agent_checkpointer``."""
+    config = baked_in_defaults()
+    if config_overrides:
+        config = replace(config, **config_overrides)
+    return PreflightContext(
+        event=event,
+        dispatch=Dispatch(Feature.REVIEW, maybe_run_review, derive_task_id(event)),
+        config=config,
+        adapter=adapter,
+        session_factory=None,
+        redis=None,
+        agent_checkpointer=agent_checkpointer,
+    )
+
+
+async def test_review_use_case_passes_run_id_and_checkpointer_to_responder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """maybe_run_review must forward ctx.dispatch.run_id and ctx.agent_checkpointer."""
+    from langgraph.checkpoint.memory import MemorySaver
+
+    import openbot.application.use_cases.review as review_mod
+    from openbot.domain.review import ReviewFindings
+
+    captured: dict[str, Any] = {}
+
+    async def fake_generate(
+        *,
+        event: Any,
+        adapter: Any,
+        run_id: str | None = None,
+        checkpointer: Any = None,
+    ) -> ReviewFindings:
+        captured["run_id"] = run_id
+        captured["checkpointer"] = checkpointer
+        return ReviewFindings(summary="ok", findings=())
+
+    monkeypatch.setattr(review_mod, "_generate_review_findings", fake_generate)
+
+    saver = MemorySaver()
+    event = _event()
+    adapter = _adapter()
+    ctx = _make_preflight_ctx(event=event, adapter=adapter, agent_checkpointer=saver)
+
+    await review_mod.maybe_run_review(ctx)
+
+    assert captured.get("run_id") == ctx.dispatch.run_id
+    assert captured.get("checkpointer") is saver
