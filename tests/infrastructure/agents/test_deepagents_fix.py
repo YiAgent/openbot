@@ -11,6 +11,65 @@ from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.fix import FixAttempt, FixOutcome
 
 
+async def test_fix_responder_delegates_to_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The compatibility wrapper must delegate to BaseDeepAgentRuntime.run."""
+    from openbot.domain.fix import FixOutcome
+    from openbot.infrastructure.agents.deepagents_fix import DeepAgentsFixResponder, FixProfile
+    from openbot.infrastructure.agents.runtime import BaseDeepAgentRuntime
+
+    run_calls: list[Any] = []
+
+    async def fake_run(self: Any, profile: Any, request: Any) -> FixOutcome:
+        run_calls.append((profile, request))
+        return FixOutcome(
+            attempt=FixAttempt(
+                summary="delegated",
+                diff="",
+                files_changed=(),
+                tests_passed=True,
+                test_command="pytest -q",
+                test_output="",
+            ),
+        )
+
+    monkeypatch.setattr(BaseDeepAgentRuntime, "run", fake_run)
+
+    class _StubSandbox:
+        pass
+
+    class _StubAdapter:
+        pass
+
+    event = UnifiedEvent(
+        channel="github",
+        delivery_id="d-fix",
+        kind=EventKind.ISSUE_ASSIGNED,
+        repo="o/r",
+        actor="alice",
+        issue_number=42,
+        installation_id=1,
+    )
+    result = await DeepAgentsFixResponder().fix_for_event(
+        event,
+        adapter=_StubAdapter(),  # type: ignore[arg-type]
+        sandbox=_StubSandbox(),  # type: ignore[arg-type]
+        issue={"title": "Bug", "body": "It's broken", "base_sha": "abc123"},
+    )
+
+    assert len(run_calls) == 1
+    assert isinstance(run_calls[0][0], FixProfile)
+    assert result.attempt.summary == "delegated"
+
+
+async def test_fix_profile_has_wall_seconds_limit() -> None:
+    """FixProfile must declare a wall_seconds ceiling to cap runaway fix loops."""
+    from openbot.infrastructure.agents.deepagents_fix import FixProfile
+
+    profile = FixProfile()
+    assert profile.limits.wall_seconds is not None
+    assert profile.limits.wall_seconds >= 60
+
+
 def _event() -> UnifiedEvent:
     return UnifiedEvent(
         channel="github",
@@ -62,7 +121,7 @@ def _fake_agent_result(
 
 
 async def test_returns_fix_outcome_when_agent_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    from openbot.infrastructure.agents import deepagents_fix as mod
+    import openbot.infrastructure.agents.runtime as runtime_mod
 
     captured: dict[str, Any] = {}
 
@@ -78,6 +137,7 @@ async def test_returns_fix_outcome_when_agent_succeeds(monkeypatch: pytest.Monke
         tools: Any,
         system_prompt: Any,
         response_format: Any,
+        middleware: Any = None,
         checkpointer: Any = None,
     ) -> FakeAgent:
         captured["model"] = model
@@ -85,7 +145,9 @@ async def test_returns_fix_outcome_when_agent_succeeds(monkeypatch: pytest.Monke
         captured["response_format"] = response_format
         return FakeAgent()
 
-    monkeypatch.setattr(mod, "create_deep_agent", fake_create_deep_agent)
+    monkeypatch.setattr(runtime_mod, "create_deep_agent", fake_create_deep_agent)
+
+    from openbot.infrastructure.agents import deepagents_fix as mod
 
     responder = mod.DeepAgentsFixResponder()
     outcome = await responder.fix_for_event(
@@ -114,13 +176,13 @@ async def test_returns_fix_outcome_when_agent_succeeds(monkeypatch: pytest.Monke
         "git_diff",
         "search_files",
     ]
-    assert captured["config"]["recursion_limit"] == 25
+    assert captured["config"]["recursion_limit"] == 60
     # Schema bridge wiring — pydantic class, not the dict shape.
     assert captured["response_format"].__name__ == "_FixOutcomeModel"
 
 
 async def test_includes_issue_context_in_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
-    from openbot.infrastructure.agents import deepagents_fix as mod
+    import openbot.infrastructure.agents.runtime as runtime_mod
 
     captured: dict[str, Any] = {}
 
@@ -132,7 +194,9 @@ async def test_includes_issue_context_in_prompt(monkeypatch: pytest.MonkeyPatch)
     def fake_create_deep_agent(**_: Any) -> FakeAgent:
         return FakeAgent()
 
-    monkeypatch.setattr(mod, "create_deep_agent", fake_create_deep_agent)
+    monkeypatch.setattr(runtime_mod, "create_deep_agent", fake_create_deep_agent)
+
+    from openbot.infrastructure.agents import deepagents_fix as mod
 
     responder = mod.DeepAgentsFixResponder()
     await responder.fix_for_event(
@@ -157,7 +221,7 @@ async def test_includes_issue_context_in_prompt(monkeypatch: pytest.MonkeyPatch)
 
 
 async def test_returns_failure_outcome_when_tests_failed(monkeypatch: pytest.MonkeyPatch) -> None:
-    from openbot.infrastructure.agents import deepagents_fix as mod
+    import openbot.infrastructure.agents.runtime as runtime_mod
 
     class FakeAgent:
         async def ainvoke(self, payload: Any, config: Any) -> dict[str, Any]:
@@ -167,10 +231,12 @@ async def test_returns_failure_outcome_when_tests_failed(monkeypatch: pytest.Mon
             )
 
     monkeypatch.setattr(
-        mod,
+        runtime_mod,
         "create_deep_agent",
         lambda **_: FakeAgent(),
     )
+
+    from openbot.infrastructure.agents import deepagents_fix as mod
 
     responder = mod.DeepAgentsFixResponder()
     outcome = await responder.fix_for_event(
@@ -189,20 +255,26 @@ async def test_returns_failure_outcome_when_tests_failed(monkeypatch: pytest.Mon
 
 
 async def test_raises_when_structured_response_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    from openbot.infrastructure.agents import deepagents_fix as mod
+    import openbot.infrastructure.agents.runtime as runtime_mod
+    from openbot.infrastructure.agents.profiles import AgentStructuredOutputError
 
     class FakeAgent:
         async def ainvoke(self, payload: Any, config: Any) -> dict[str, Any]:
             return {"messages": []}  # no structured_response key
 
     monkeypatch.setattr(
-        mod,
+        runtime_mod,
         "create_deep_agent",
         lambda **_: FakeAgent(),
     )
 
+    from openbot.infrastructure.agents import deepagents_fix as mod
+
     responder = mod.DeepAgentsFixResponder()
-    with pytest.raises(ValueError, match="deepagents_fix_result_missing_structured_response"):
+    with pytest.raises(
+        AgentStructuredOutputError,
+        match="deepagents_fix_result_missing_structured_response",
+    ):
         await responder.fix_for_event(
             _event(),
             adapter=_StubAdapter(),  # type: ignore[arg-type]
@@ -216,13 +288,15 @@ async def test_raises_when_issue_number_missing(monkeypatch: pytest.MonkeyPatch)
     number — fail loudly rather than render ``#None`` and waste a model
     call. Mirrors ``test_review_responder_requires_pr_number``.
     """
-    from openbot.infrastructure.agents import deepagents_fix as mod
+    import openbot.infrastructure.agents.runtime as runtime_mod
 
     # The guard fires before ``make_fix_tools`` and ``create_deep_agent``,
     # so the monkeypatch returns an opaque sentinel — if the guard
     # regressed, the test would surface a different (less actionable)
     # failure from the stub, not a silent pass.
-    monkeypatch.setattr(mod, "create_deep_agent", lambda **_: object())
+    monkeypatch.setattr(runtime_mod, "create_deep_agent", lambda **_: object())
+
+    from openbot.infrastructure.agents import deepagents_fix as mod
 
     event = UnifiedEvent(
         channel="github",
@@ -252,7 +326,7 @@ async def test_fix_responder_passes_checkpointer_and_thread_id(
     """
     from langgraph.checkpoint.memory import MemorySaver
 
-    from openbot.infrastructure.agents import deepagents_fix as mod
+    import openbot.infrastructure.agents.runtime as runtime_mod
 
     captured: dict[str, Any] = {}
 
@@ -267,12 +341,15 @@ async def test_fix_responder_passes_checkpointer_and_thread_id(
         tools: Any,
         system_prompt: Any,
         response_format: Any,
-        checkpointer: Any,
+        middleware: Any = None,
+        checkpointer: Any = None,
     ) -> FakeAgent:
         captured["checkpointer"] = checkpointer
         return FakeAgent()
 
-    monkeypatch.setattr(mod, "create_deep_agent", fake_create_deep_agent)
+    monkeypatch.setattr(runtime_mod, "create_deep_agent", fake_create_deep_agent)
+
+    from openbot.infrastructure.agents import deepagents_fix as mod
 
     saver = MemorySaver()
     responder = mod.DeepAgentsFixResponder()
@@ -295,7 +372,7 @@ async def test_fix_responder_no_checkpointer_no_thread_id(
     """When run_id / checkpointer are omitted, checkpointer=None is passed
     to create_deep_agent and no 'configurable' key is added to config.
     """
-    from openbot.infrastructure.agents import deepagents_fix as mod
+    import openbot.infrastructure.agents.runtime as runtime_mod
 
     captured: dict[str, Any] = {}
 
@@ -310,12 +387,15 @@ async def test_fix_responder_no_checkpointer_no_thread_id(
         tools: Any,
         system_prompt: Any,
         response_format: Any,
-        checkpointer: Any,
+        middleware: Any = None,
+        checkpointer: Any = None,
     ) -> FakeAgent:
         captured["checkpointer"] = checkpointer
         return FakeAgent()
 
-    monkeypatch.setattr(mod, "create_deep_agent", fake_create_deep_agent)
+    monkeypatch.setattr(runtime_mod, "create_deep_agent", fake_create_deep_agent)
+
+    from openbot.infrastructure.agents import deepagents_fix as mod
 
     responder = mod.DeepAgentsFixResponder()
     await responder.fix_for_event(
@@ -336,7 +416,7 @@ async def test_responder_rebuilds_agent_per_event(monkeypatch: pytest.MonkeyPatc
     Two consecutive calls must produce distinct ``tools`` lists.
     Mirrors ``test_review_responder_rebuilds_agent_per_event``.
     """
-    from openbot.infrastructure.agents import deepagents_fix as mod
+    import openbot.infrastructure.agents.runtime as runtime_mod
 
     builds: list[dict[str, Any]] = []
 
@@ -348,7 +428,9 @@ async def test_responder_rebuilds_agent_per_event(monkeypatch: pytest.MonkeyPatc
         builds.append(kwargs)
         return FakeAgent()
 
-    monkeypatch.setattr(mod, "create_deep_agent", _capture)
+    monkeypatch.setattr(runtime_mod, "create_deep_agent", _capture)
+
+    from openbot.infrastructure.agents import deepagents_fix as mod
 
     responder = mod.DeepAgentsFixResponder()
     await responder.fix_for_event(
