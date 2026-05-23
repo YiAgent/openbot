@@ -18,11 +18,12 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
+from langchain_core.messages.tool import ToolCall
 
 logger = logging.getLogger(__name__)
 
 
-def _canonical_tool_signature(tool_call: dict[str, Any]) -> str:
+def _canonical_tool_signature(tool_call: ToolCall) -> str:
     name = tool_call.get("name") or ""
     args = tool_call.get("args") or {}
     try:
@@ -41,7 +42,8 @@ class ToolCallRepetitionGuard(AgentMiddleware):
         max_steers: Max interceptions per run. Default 2.
     """
 
-    name = "ToolCallRepetitionGuard"
+    # name is inherited from AgentMiddleware as a property returning __class__.__name__
+    # which already equals "ToolCallRepetitionGuard" — no override needed.
 
     _STEER_MESSAGE = (
         "REPEATED TOOL CALL DETECTED. You have already invoked this exact "
