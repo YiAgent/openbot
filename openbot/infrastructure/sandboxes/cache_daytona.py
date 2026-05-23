@@ -33,7 +33,11 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from openbot.application.sandbox_cache_key import CacheCorruptedError, _cache_key
-from openbot.infrastructure.sandboxes.daytona import DaytonaSandboxAdapter, _inject_token
+from openbot.infrastructure.sandboxes.daytona import (
+    DaytonaSandboxAdapter,
+    _inject_token,
+    _redact_tokens,
+)
 
 # Paths swept out of the workspace before snapshotting (defence-in-depth on top
 # of .gitignore).  Matches the forbidden list in CLAUDE.md and the spec §
@@ -166,18 +170,24 @@ async def _refresh_to_ref(
 
     r1 = await sandbox.run(command=["git", "remote", "set-url", "origin", credentialed])
     if r1.exit_code != 0:
+        # Redact tokens before embedding stderr: git routinely echoes the
+        # full credentialed URL (x-access-token:TOKEN@github.com/...) in
+        # error messages, which would leak the installation token into
+        # exception text, log lines, and Sentry reports.
         raise CacheCorruptedError(
-            f"git remote set-url failed (exit {r1.exit_code}): {r1.stderr.strip()!r}"
+            f"git remote set-url failed (exit {r1.exit_code}): {_redact_tokens(r1.stderr.strip())!r}"
         )
 
     r2 = await sandbox.run(command=["git", "fetch", "origin", ref])
     if r2.exit_code != 0:
-        raise CacheCorruptedError(f"git fetch failed (exit {r2.exit_code}): {r2.stderr.strip()!r}")
+        raise CacheCorruptedError(
+            f"git fetch failed (exit {r2.exit_code}): {_redact_tokens(r2.stderr.strip())!r}"
+        )
 
     r3 = await sandbox.run(command=["git", "reset", "--hard", ref])
     if r3.exit_code != 0:
         raise CacheCorruptedError(
-            f"git reset --hard failed (exit {r3.exit_code}): {r3.stderr.strip()!r}"
+            f"git reset --hard failed (exit {r3.exit_code}): {_redact_tokens(r3.stderr.strip())!r}"
         )
 
 

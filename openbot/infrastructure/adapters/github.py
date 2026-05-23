@@ -602,11 +602,13 @@ class GitHubAdapter(ChannelAdapter):
             else "main"
         )
         ref = await self._authed_json("GET", f"{base}/git/ref/heads/{default_branch}", event)
-        return (
-            str(ref["object"]["sha"])
-            if isinstance(ref, dict) and isinstance(ref.get("object"), dict)
-            else ""
-        )
+        if isinstance(ref, dict) and isinstance(ref.get("object"), dict):
+            return str(ref["object"]["sha"])
+        # A malformed-but-200 response (missing object.sha) must raise so
+        # the checkout resolver can catch it as CheckoutResolutionError and
+        # degrade gracefully.  Returning "" would produce a CheckoutSpec
+        # with ref="" that silently triggers a bad git clone downstream.
+        raise ValueError(f"unexpected ref shape from GitHub API: {ref!r}")
 
     async def get_issue(self, event: UnifiedEvent, issue_number: int) -> dict[str, Any]:
         """Return a normalized issue snapshot for the fix loop.

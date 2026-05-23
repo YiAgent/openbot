@@ -20,7 +20,6 @@ then the fix use case posts a graceful "sandbox not configured" comment.
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import logging
 import sys as _sys
@@ -75,19 +74,6 @@ _logger = logging.getLogger(__name__)
 # Module-level set keeps strong references to fire-and-forget tasks so
 # the garbage collector cannot discard them before they complete (RUF006).
 # The ``discard`` done-callback removes each task automatically on exit.
-_BACKGROUND_TASKS: set[asyncio.Task] = set()
-
-
-def _schedule_background(coro: Any) -> None:
-    """Schedule ``coro`` as a fire-and-forget task with a GC-safe reference.
-
-    The task is added to ``_BACKGROUND_TASKS`` and removes itself when
-    done. Use this instead of bare ``asyncio.create_task`` anywhere in
-    this module.
-    """
-    task: asyncio.Task = asyncio.create_task(coro)
-    _BACKGROUND_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def _emit_sandbox_metric(*, feature: str, policy: SandboxPolicy, bypass_source: str) -> None:
@@ -368,18 +354,20 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
             try:
                 await dispatch.handler(ctx_with_handle)
             finally:
-                # Schedule publish regardless of handler outcome so the
-                # warm pool is populated for the next request. Failure in
-                # the handler is the handler's concern; the cache layer
-                # should not miss a publish opportunity because of it.
+                # Await publish *inside* the ``async with`` block so the
+                # sandbox is still alive when _safe_publish calls
+                # _sweep_secrets / create_snapshot.  Using
+                # ``asyncio.create_task`` (the previous approach) scheduled
+                # the coroutine to run *after* the context manager's
+                # __aexit__ closed/deleted the Daytona workspace, making
+                # every publish fail silently.  _safe_publish swallows all
+                # exceptions so failure here never surfaces to callers.
                 if cache is not None and installation_id is not None:
-                    _schedule_background(
-                        _safe_publish(
-                            cache,
-                            cold_handle,
-                            installation_id,
-                            dispatch.feature.value,
-                        )
+                    await _safe_publish(
+                        cache,
+                        cold_handle,
+                        installation_id,
+                        dispatch.feature.value,
                     )
     except Exception:
         # Factory itself blew up (connection failure to remote backend,

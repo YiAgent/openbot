@@ -43,7 +43,12 @@ def make_fix_tools(
         return await sandbox.list_files(path=path, max=max)
 
     async def run_command(command: list[str], timeout_seconds: int = 60) -> dict[str, Any]:
-        result = await sandbox.run(command=command, timeout_seconds=timeout_seconds)
+        # Clamp LLM-supplied timeout to prevent a single tool call from
+        # occupying a thread-pool slot for an unbounded duration.  The
+        # agent-level wall_seconds ceiling (AgentRunLimits.wall_seconds)
+        # guards the full run, but an individual call could stall the
+        # asyncio thread pool before that limit fires.
+        result = await sandbox.run(command=command, timeout_seconds=min(timeout_seconds, 300))
         return _exec_result_to_dict(result)
 
     async def git_diff() -> str:

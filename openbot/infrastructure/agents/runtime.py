@@ -59,6 +59,12 @@ def _register_harness_profile(model: str) -> None:
     """Register HarnessProfile for model (idempotent). No-ops if API unavailable."""
     if model in _REGISTERED_MODELS:
         return
+    # Optimistic write *before* the call so that a second concurrent
+    # coroutine that passes the guard above (check-then-act window) will
+    # skip the registration even if the first call hasn't returned yet.
+    # The underlying deepagents.register_harness_profile is documented as
+    # idempotent, but writing early is cheaper than relying on that.
+    _REGISTERED_MODELS.add(model)
     try:
         from deepagents.profiles import (  # type: ignore[import]
             GeneralPurposeSubagentProfile,
@@ -74,7 +80,6 @@ def _register_harness_profile(model: str) -> None:
         )
     except (ImportError, AttributeError):
         _logger.debug("HarnessProfile registration not available for model %s", model)
-    _REGISTERED_MODELS.add(model)
 
 
 def _build_standard_middleware(limits: AgentRunLimits) -> list[AgentMiddleware]:
