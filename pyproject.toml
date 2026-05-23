@@ -1,6 +1,6 @@
 [project]
 name = "openbot"
-version = "0.0.1"
+version = "0.1.0"
 description = "Open-source, self-hosted, BYO-API-key GitHub maintenance bot for individual OSS maintainers."
 readme = "README.md"
 license = "Apache-2.0"
