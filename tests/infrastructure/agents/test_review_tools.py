@@ -80,7 +80,7 @@ async def test_make_review_tools_returns_two_tools() -> None:
 async def test_read_file_tool_forwards_to_adapter() -> None:
     adapter = _RecordingAdapter()
     adapter.file_contents["src/auth.py"] = "def login(): ..."
-    tools = make_review_tools(adapter=adapter, event=_event())
+    tools = make_review_tools(adapter=adapter, event=_event())  # type: ignore[arg-type]
 
     result = await _tool_by_name(tools, "read_file").ainvoke({"path": "src/auth.py"})
 
@@ -91,7 +91,7 @@ async def test_read_file_tool_forwards_to_adapter() -> None:
 async def test_grep_repo_tool_forwards_to_adapter() -> None:
     adapter = _RecordingAdapter()
     adapter.grep_hits = ["src/auth.py: def login(...)"]
-    tools = make_review_tools(adapter=adapter, event=_event())
+    tools = make_review_tools(adapter=adapter, event=_event())  # type: ignore[arg-type]
 
     result = await _tool_by_name(tools, "grep_repo").ainvoke(
         {"pattern": "login", "path_glob": "src"}
@@ -103,7 +103,7 @@ async def test_grep_repo_tool_forwards_to_adapter() -> None:
 
 async def test_grep_repo_tool_default_path_glob_is_none() -> None:
     adapter = _RecordingAdapter()
-    tools = make_review_tools(adapter=adapter, event=_event())
+    tools = make_review_tools(adapter=adapter, event=_event())  # type: ignore[arg-type]
 
     await _tool_by_name(tools, "grep_repo").ainvoke({"pattern": "TODO"})
 
