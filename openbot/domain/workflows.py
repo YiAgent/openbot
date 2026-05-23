@@ -58,7 +58,7 @@ class WorkflowPhase(StrEnum):
     """Lifecycle position for one workflow run.
 
     Written to ``audit_log.phase`` at each transition:
-    STARTED → COMPLETED | FAILED | SKIPPED | REJECTED
+    STARTED → COMPLETED | FAILED | SKIPPED | REJECTED | CANCELLED
     """
 
     STARTED = "started"
@@ -66,3 +66,4 @@ class WorkflowPhase(StrEnum):
     FAILED = "failed"
     SKIPPED = "skipped"
     REJECTED = "rejected"  # signature mismatch / unauthorized
+    CANCELLED = "cancelled"  # RunCancelledError / asyncio.CancelledError

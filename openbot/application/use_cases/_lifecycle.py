@@ -110,12 +110,27 @@ async def audit_lifecycle(
         await _write_phase(ctx, workflow=workflow, phase=WorkflowPhase.STARTED, outcome=None)
     try:
         yield handle
-    except Exception as exc:
-        # Keep the FAILED outcome short and PII-free — the body of any
-        # GitHub API error can leak repo paths or login names.
-        outcome = f"{type(exc).__name__}"
-        await _write_phase(ctx, workflow=workflow, phase=WorkflowPhase.FAILED, outcome=outcome)
-        workflow_total.labels(feature=workflow.value, outcome="failed").inc()
+    except BaseException as exc:
+        import asyncio
+
+        if isinstance(exc, asyncio.CancelledError):
+            # RunCancelledError is a subclass of asyncio.CancelledError which
+            # is BaseException, NOT Exception.  Without this branch the audit
+            # row stays in STARTED forever on cancellation.  Write CANCELLED
+            # before re-raising so lifecycle rows always reach a terminal state.
+            await _write_phase(
+                ctx,
+                workflow=workflow,
+                phase=WorkflowPhase.CANCELLED,
+                outcome="RunCancelledError",
+            )
+            workflow_total.labels(feature=workflow.value, outcome="cancelled").inc()
+        else:
+            # Keep the FAILED outcome short and PII-free — the body of any
+            # GitHub API error can leak repo paths or login names.
+            outcome = f"{type(exc).__name__}"
+            await _write_phase(ctx, workflow=workflow, phase=WorkflowPhase.FAILED, outcome=outcome)
+            workflow_total.labels(feature=workflow.value, outcome="failed").inc()
         raise
     await _write_phase(
         ctx, workflow=workflow, phase=WorkflowPhase.COMPLETED, outcome=handle.outcome
