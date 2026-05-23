@@ -141,64 +141,80 @@ async def maybe_run_review(ctx: PreflightContext) -> None:
         )
         return
 
-    # Generate the review BEFORE opening the audit-lifecycle span so a
-    # slow LLM call doesn't keep a STARTED row sitting open for minutes.
-    findings: ReviewFindings | None = None
-    try:
-        findings = await _generate_review_findings(
-            event=event,
-            adapter=ctx.adapter,
-            run_id=ctx.dispatch.run_id,
-            checkpointer=ctx.agent_checkpointer,
-        )
-    except Exception:
-        _logger.exception(
-            "review_agent_reply_failed",
-            extra={"delivery_id": event.delivery_id, "repo": event.repo},
-        )
-
-    # Build the PR Review submission. On responder failure: an error-body
-    # COMMENT review with no inline comments. On success: filter →
-    # partition → format.
-    if findings is None:
-        body = _ERROR_TEMPLATE
-        event_type: Literal["APPROVE", "COMMENT"] = "COMMENT"
-        comments: list[dict[str, object]] = []
-        kept = 0
-    else:
-        filtered = _filter_findings(findings.findings, ctx.config.severity_threshold)
-        inline, repo_wide = _partition_findings(filtered)
-        body = _build_review_body(findings.summary, repo_wide)
-        comments = _build_inline_comments(inline)
-        # Per PRD §13 lock: APPROVE on zero filtered findings, never REQUEST_CHANGES.
-        event_type = "APPROVE" if not filtered else "COMMENT"
-        kept = len(filtered)
+    run_id = ctx.dispatch.run_id
+    checkpointer = ctx.agent_checkpointer
 
     try:
-        async with audit_lifecycle(ctx, workflow=Workflow.REVIEW) as audit:
-            result = await ctx.adapter.create_pr_review(
-                event,
-                event.pr_number,
-                body=body,
-                event_type=event_type,
-                comments=comments or None,
+        # Generate the review BEFORE opening the audit-lifecycle span so a
+        # slow LLM call doesn't keep a STARTED row sitting open for minutes.
+        findings: ReviewFindings | None = None
+        try:
+            findings = await _generate_review_findings(
+                event=event,
+                adapter=ctx.adapter,
+                run_id=run_id,
+                checkpointer=checkpointer,
             )
-            audit.outcome = f"review_id={result.get('id')} event={event_type} findings={kept}"
-            _logger.info(
-                "review_posted",
-                extra={
-                    "delivery_id": event.delivery_id,
-                    "repo": event.repo,
-                    "pr_number": event.pr_number,
-                    "review_id": result.get("id"),
-                    "event_type": event_type,
-                    "findings_kept": kept,
-                },
+        except Exception:
+            _logger.exception(
+                "review_agent_reply_failed",
+                extra={"delivery_id": event.delivery_id, "repo": event.repo},
             )
-    except Exception:
-        # audit_lifecycle already wrote FAILED. Swallow so the background
-        # task doesn't surface as 5xx — GitHub already got its 202.
-        _logger.exception(
-            "review_post_failed",
-            extra={"delivery_id": event.delivery_id, "repo": event.repo},
-        )
+
+        # Build the PR Review submission. On responder failure: an error-body
+        # COMMENT review with no inline comments. On success: filter →
+        # partition → format.
+        if findings is None:
+            body = _ERROR_TEMPLATE
+            event_type: Literal["APPROVE", "COMMENT"] = "COMMENT"
+            comments: list[dict[str, object]] = []
+            kept = 0
+        else:
+            filtered = _filter_findings(findings.findings, ctx.config.severity_threshold)
+            inline, repo_wide = _partition_findings(filtered)
+            body = _build_review_body(findings.summary, repo_wide)
+            comments = _build_inline_comments(inline)
+            # Per PRD §13 lock: APPROVE on zero filtered findings, never REQUEST_CHANGES.
+            event_type = "APPROVE" if not filtered else "COMMENT"
+            kept = len(filtered)
+
+        try:
+            async with audit_lifecycle(ctx, workflow=Workflow.REVIEW) as audit:
+                result = await ctx.adapter.create_pr_review(
+                    event,
+                    event.pr_number,
+                    body=body,
+                    event_type=event_type,
+                    comments=comments or None,
+                )
+                audit.outcome = f"review_id={result.get('id')} event={event_type} findings={kept}"
+                _logger.info(
+                    "review_posted",
+                    extra={
+                        "delivery_id": event.delivery_id,
+                        "repo": event.repo,
+                        "pr_number": event.pr_number,
+                        "review_id": result.get("id"),
+                        "event_type": event_type,
+                        "findings_kept": kept,
+                    },
+                )
+        except Exception:
+            # audit_lifecycle already wrote FAILED. Swallow so the background
+            # task doesn't surface as 5xx — GitHub already got its 202.
+            _logger.exception(
+                "review_post_failed",
+                extra={"delivery_id": event.delivery_id, "repo": event.repo},
+            )
+    finally:
+        # Cleanup: delete LangGraph checkpoint rows regardless of outcome
+        # (success, agent failure, post failure, CancelledError, etc.) so
+        # they don't accumulate in Postgres indefinitely.
+        if run_id and checkpointer is not None:
+            try:
+                await checkpointer.adelete_thread(run_id)
+            except Exception:
+                _logger.warning(
+                    "review_checkpoint_delete_failed",
+                    extra={"run_id": run_id, "delivery_id": event.delivery_id, "repo": event.repo},
+                )
