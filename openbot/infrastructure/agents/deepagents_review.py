@@ -78,7 +78,7 @@ prose outside the schema.
 
 _REVIEW_LIMITS = AgentRunLimits(
     recursion_limit=25,
-    tool_call_limit=8,  # slightly above ToolBudget=5 during transition; reduced in Task 5.1
+    tool_call_limit=5,  # matches retired ToolBudget value
     model_call_limit=10,
     model_timeout_s=120,
     max_retries=2,

@@ -1,24 +1,15 @@
-"""Review tool wrappers — port-method bindings + per-run budget guard.
+"""Tests for review agent tool wrappers.
 
-Tools close over ``(adapter, event, budget)`` so the deepagents runtime
-can invoke them without knowing about either. The budget guard caps total
-tool invocations per review run — opus-4-7 will happily issue 30+ greps
-if asked, and each one hits api.github.com.
+ToolBudget and ToolBudgetExceededError have been retired — budget enforcement
+is now handled by ToolCallLimitMiddleware in the runtime stack.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from openbot.domain.events import EventKind, UnifiedEvent
-from openbot.infrastructure.agents._review_tools import (
-    DEFAULT_TOOL_BUDGET,
-    ToolBudget,
-    ToolBudgetExceededError,
-    make_review_tools,
-)
+from openbot.infrastructure.agents._review_tools import make_review_tools
 
 
 def _event() -> UnifiedEvent:
@@ -65,9 +56,23 @@ def _tool_by_name(tools: list[Any], name: str) -> Any:
     raise AssertionError(f"no tool named {name!r} among {[t.name for t in tools]}")
 
 
-async def test_make_review_tools_exposes_read_file_and_grep_repo() -> None:
-    adapter = _RecordingAdapter()
-    tools = make_review_tools(adapter=adapter, event=_event())
+async def test_make_review_tools_returns_two_tools() -> None:
+    class _StubAdapter:
+        async def read_file(self, event: Any, path: str) -> str:
+            return ""
+
+        async def grep_repo(self, event: Any, **kwargs: Any) -> list[str]:
+            return []
+
+    event = UnifiedEvent(
+        channel="github",
+        delivery_id="d",
+        kind=EventKind.PR_OPENED,
+        repo="o/r",
+        actor="alice",
+        installation_id=1,
+    )
+    tools = make_review_tools(adapter=_StubAdapter(), event=event)  # type: ignore[arg-type]
     names = {t.name for t in tools}
     assert names == {"read_file", "grep_repo"}
 
@@ -103,44 +108,3 @@ async def test_grep_repo_tool_default_path_glob_is_none() -> None:
     await _tool_by_name(tools, "grep_repo").ainvoke({"pattern": "TODO"})
 
     assert adapter.grep_calls == [("TODO", None, 20)]
-
-
-async def test_budget_blocks_excess_tool_calls() -> None:
-    adapter = _RecordingAdapter()
-    budget = ToolBudget(remaining=2)
-    tools = make_review_tools(adapter=adapter, event=_event(), budget=budget)
-    read = _tool_by_name(tools, "read_file")
-    grep = _tool_by_name(tools, "grep_repo")
-
-    await read.ainvoke({"path": "a"})
-    await grep.ainvoke({"pattern": "x"})
-
-    with pytest.raises(ToolBudgetExceededError):
-        await read.ainvoke({"path": "b"})
-
-    # Adapter only saw the two pre-budget calls; the third was blocked.
-    assert adapter.read_calls == ["a"]
-    assert len(adapter.grep_calls) == 1
-
-
-async def test_default_budget_matches_documented_cap() -> None:
-    # The docstring + plan promise a small cap so opus-4-7 can't grep-spam.
-    # Whatever the number is, freeze it here so a future bump is intentional.
-    assert DEFAULT_TOOL_BUDGET == 5
-
-
-async def test_budget_is_per_responder_call_not_global() -> None:
-    adapter = _RecordingAdapter()
-    tools1 = make_review_tools(adapter=adapter, event=_event())
-    tools2 = make_review_tools(adapter=adapter, event=_event())
-
-    # Consume the first tool-set's budget entirely.
-    read1 = _tool_by_name(tools1, "read_file")
-    for i in range(DEFAULT_TOOL_BUDGET):
-        await read1.ainvoke({"path": f"f{i}"})
-    with pytest.raises(ToolBudgetExceededError):
-        await read1.ainvoke({"path": "x"})
-
-    # The second tool-set should have its own fresh budget.
-    await _tool_by_name(tools2, "read_file").ainvoke({"path": "y"})
-    assert "y" in adapter.read_calls
