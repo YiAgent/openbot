@@ -132,9 +132,11 @@ async def _safe_publish(
 ) -> None:
     """Publish ``handle`` to the cache; swallows all exceptions.
 
-    Called via ``asyncio.create_task`` on the cold path after the handler
-    returns (or raises). A publish failure must never surface to the
-    webhook layer — it's an optimisation, not a correctness requirement.
+    Awaited directly on the cold path inside the ``async with factory()``
+    block (before the sandbox context exits) so the sandbox is guaranteed
+    to be alive when the publish runs. A publish failure must never
+    surface to the webhook layer — it's an optimisation, not a
+    correctness requirement.
     """
     try:
         await cache.publish(handle, installation_id=installation_id)
