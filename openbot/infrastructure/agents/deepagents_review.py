@@ -1,59 +1,54 @@
-"""DeepAgent-backed PR review responder — slice B.
+# openbot/infrastructure/agents/deepagents_review.py
+"""PR review profile and compatibility wrapper — migrated to BaseDeepAgentRuntime.
 
-What changed from slice A2:
+The public class ``DeepAgentsReviewResponder`` keeps its original signature
+so use cases need no changes. Internally it delegates to BaseDeepAgentRuntime.
 
-  - The agent now returns *structured findings* (one ``ReviewFindings``
-    value) instead of a free-form markdown reply. We pass
-    ``response_format=ReviewFindingsSchema`` so DeepAgents/LangGraph coerces
-    the model's final answer into a typed pydantic object, then convert
-    that to the domain ``ReviewFindings`` (anti-corruption boundary —
-    pydantic stops at this module).
-  - The use case (`maybe_run_review`) filters findings by severity and
-    submits them through the PR Review API (POST .../reviews) instead of
-    posting one free-form comment. This module no longer knows or cares
-    how the result is rendered to GitHub.
-
-Carried over from A2:
-
-  - Tools (``read_file``, ``grep_repo``) close over ``(adapter, event)`` so
-    the agent is rebuilt per call — caching by model alone would be a
-    multi-tenant correctness bug.
-  - ``ToolBudget`` caps total tool invocations (5); ``recursion_limit``
-    (25) catches non-tool loops the budget guard can't see.
+ReviewProfile owns: system_prompt, user_message, tools, response_schema, parser.
+The runtime owns: model construction, middleware, checkpoint wiring, telemetry.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from deepagents import create_deep_agent
+from langchain_core.tools import BaseTool
 
-from openbot.domain.events import UnifiedEvent
 from openbot.domain.review import ReviewFindings
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.agents._review_schema import (
     ReviewFindingsSchema,
     parse_structured_response,
 )
 from openbot.infrastructure.agents._review_tools import make_review_tools
-from openbot.infrastructure.llm.model_router import Feature, primary_model_for
-from openbot.infrastructure.observability import get_langfuse_handler
+from openbot.infrastructure.agents.profiles import (
+    AgentRequest,
+    AgentRunLimits,
+    AgentStructuredOutputError,
+    SandboxRequirement,
+)
+from openbot.infrastructure.agents.runtime import BaseDeepAgentRuntime
 
 if TYPE_CHECKING:
-    from langchain_core.runnables import RunnableConfig
     from langgraph.checkpoint.base import BaseCheckpointSaver
 
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
+    from openbot.domain.events import UnifiedEvent
 
-# PR diffs can grow large; opus-4-7 has plenty of headroom but pure-noise
-# tokens (lockfile churn, generated assets) waste budget. 64KB ≈ ~16k
-# tokens — still well below model context but keeps cost predictable.
 _MAX_DIFF_CHARS = 64_000
 
-# LangGraph counts every node visit toward this limit; a ReAct loop with
-# 5 tool calls visits ~15-20 nodes. 25 gives the agent a small budget over
-# the ToolBudget cap so it can still produce a final answer if the very
-# last tool call exhausts the budget.
-_RECURSION_LIMIT = 25
+
+def _truncate_diff(diff: str) -> str:
+    if len(diff) <= _MAX_DIFF_CHARS:
+        return diff
+    head = diff[:_MAX_DIFF_CHARS]
+    dropped = len(diff) - _MAX_DIFF_CHARS
+    return (
+        f"{head}\n\n(diff truncated — dropped {dropped} chars; review remaining changes manually)"
+    )
+
 
 _SYSTEM_PROMPT = """You are OpenBot, a senior code reviewer. You will return a JSON object \
 matching the provided schema — never plain text.
@@ -70,10 +65,8 @@ when the issue is local to one line; omit `line` for repo-wide findings (e.g. mi
 locate the issue without clicking.
 
 Tools available (use sparingly — total tool calls are budget-capped):
-- `read_file(path)` — fetch the UTF-8 text of a file in the repo. Use when the diff references a \
-function or class you need to see in full to judge the change.
-- `grep_repo(pattern, path_glob=None)` — find lines matching `pattern` across the repo. \
-`path_glob` is GitHub's `path:` qualifier (substring, not real glob).
+- `read_file(path)` — fetch the UTF-8 text of a file in the repo.
+- `grep_repo(pattern, path_glob=None)` — find lines matching `pattern` across the repo.
 
 Rules:
 - Default to the inline diff. Only reach for tools when the diff alone is genuinely insufficient.
@@ -83,70 +76,68 @@ prose outside the schema.
 - Do not invent line numbers — when you're not sure, omit `line` and explain in `message`.
 """
 
-
-def _normalize_model_name(model: str) -> str:
-    """Map ``provider/name`` (LiteLLM) → ``provider:name`` (langchain_litellm)."""
-    if ":" in model:
-        return model
-    if "/" in model:
-        provider, name = model.split("/", 1)
-        return f"{provider}:{name}"
-    return model
-
-
-def _truncate_diff(diff: str) -> str:
-    if len(diff) <= _MAX_DIFF_CHARS:
-        return diff
-    head = diff[:_MAX_DIFF_CHARS]
-    dropped = len(diff) - _MAX_DIFF_CHARS
-    return (
-        f"{head}\n\n(diff truncated — dropped {dropped} chars; review remaining changes manually)"
-    )
+_REVIEW_LIMITS = AgentRunLimits(
+    recursion_limit=25,
+    tool_call_limit=8,  # slightly above ToolBudget=5 during transition; reduced in Task 5.1
+    model_call_limit=10,
+    model_timeout_s=120,
+    max_retries=2,
+    max_output_tokens=16_384,
+)
 
 
-def _user_prompt(event: UnifiedEvent, diff: str) -> str:
-    diff_block = (
-        _truncate_diff(diff)
-        if diff
-        else "(diff unavailable — the PR may be closed, empty, or deleted)"
-    )
-    return (
-        "GitHub context:\n"
-        f"- repository: {event.repo}\n"
-        f"- pull request: #{event.pr_number}\n"
-        f"- actor: {event.actor}\n\n"
-        "Unified diff:\n"
-        "```diff\n"
-        f"{diff_block}\n"
-        "```\n\n"
-        "Review the diff and return a single structured object matching the schema."
-    )
+@dataclass
+class ReviewProfile:
+    """Profile for the PR review agent."""
 
+    feature: Feature = field(default=Feature.REVIEW, init=False)
+    agent_name: str = field(default="review", init=False)
+    response_schema: type = field(default=ReviewFindingsSchema, init=False)
+    limits: AgentRunLimits = field(default_factory=lambda: _REVIEW_LIMITS, init=False)
+    sandbox_requirement: SandboxRequirement = field(default=SandboxRequirement.OPTIONAL, init=False)
+    checkpoint_enabled: bool = field(default=True, init=False)
+    extra_middleware: Sequence[Any] = field(default_factory=list, init=False)
 
-def _extract_findings(result: dict[str, Any]) -> ReviewFindings:
-    """Read DeepAgents' structured-output channel and coerce to the domain type.
+    def system_prompt(self, request: AgentRequest) -> str:
+        return _SYSTEM_PROMPT
 
-    Some agent runtimes (langgraph + ``response_format``) put the parsed
-    response under ``structured_response``; older or simpler graphs may
-    just include it in the final message. We try the dedicated key first
-    and fall back to inspecting the last message only if needed —
-    ``parse_structured_response`` does the heavy lifting.
-    """
-    structured = result.get("structured_response")
-    if structured is not None:
+    def user_message(self, request: AgentRequest) -> str:
+        diff = str(request.input.get("diff", ""))
+        diff_block = (
+            _truncate_diff(diff)
+            if diff
+            else "(diff unavailable — the PR may be closed, empty, or deleted)"
+        )
+        event = request.event
+        return (
+            "GitHub context:\n"
+            f"- repository: {event.repo}\n"
+            f"- pull request: #{event.pr_number}\n"
+            f"- actor: {event.actor}\n\n"
+            "Unified diff:\n"
+            "```diff\n"
+            f"{diff_block}\n"
+            "```\n\n"
+            "Review the diff and return a single structured object matching the schema."
+        )
+
+    def build_tools(self, request: AgentRequest) -> Sequence[BaseTool]:
+        if request.adapter is None:
+            return []
+        return make_review_tools(adapter=request.adapter, event=request.event)
+
+    def parse_result(self, result: Mapping[str, Any]) -> ReviewFindings:
+        structured = result.get("structured_response")
+        if structured is None:
+            raise AgentStructuredOutputError("deepagents_result_missing_structured_response")
         return parse_structured_response(structured)
-    raise ValueError("deepagents_result_missing_structured_response")
 
 
 class DeepAgentsReviewResponder:
-    """Stateless responder — a fresh agent is built per call.
+    """Compatibility wrapper — delegates to BaseDeepAgentRuntime."""
 
-    Why no cache: tools close over ``(adapter, event)``. Caching the
-    compiled graph by model would let tools from a previous event leak
-    into the current run. The cost of ``create_deep_agent`` is in-process
-    object wiring, not network, so building per call is cheap relative to
-    the LLM call itself.
-    """
+    def __init__(self, runtime: BaseDeepAgentRuntime | None = None) -> None:
+        self._runtime = runtime or BaseDeepAgentRuntime()
 
     async def review_for_event(
         self,
@@ -159,40 +150,16 @@ class DeepAgentsReviewResponder:
         if event.pr_number is None:
             raise ValueError("deepagents_review_requires_pr_number")
         diff = await adapter.get_pr_diff(event, event.pr_number)
-        tools = make_review_tools(adapter=adapter, event=event)
-        # Only activate checkpointing when both pieces are present: a
-        # checkpointer without a run_id has no thread_id to key on and
-        # LangGraph would error. Gate both on the same condition so they
-        # are always in sync.
-        effective_checkpointer = checkpointer if (run_id and checkpointer) else None
-        agent = create_deep_agent(
-            model=_normalize_model_name(primary_model_for(Feature.REVIEW)),
-            tools=tools,
-            system_prompt=_SYSTEM_PROMPT,
-            response_format=ReviewFindingsSchema,
-            checkpointer=effective_checkpointer,
+        return await self._runtime.run(
+            ReviewProfile(),
+            AgentRequest(
+                event=event,
+                adapter=adapter,
+                run_id=run_id,
+                checkpointer=checkpointer,
+                input={"diff": diff},
+            ),
         )
-        config: RunnableConfig = {"recursion_limit": _RECURSION_LIMIT}
-        if run_id and effective_checkpointer:
-            config["configurable"] = {"thread_id": run_id}
-        # Inject a fresh Langfuse callback so each review run gets its own
-        # trace with all agent steps + tool calls visible. No-op when
-        # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
-        lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
-        if lf_callbacks:
-            config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
-        result = await agent.ainvoke(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": _user_prompt(event, diff),
-                    }
-                ]
-            },
-            config=config,
-        )
-        return _extract_findings(result)
 
 
-__all__ = ["DeepAgentsReviewResponder"]
+__all__ = ["DeepAgentsReviewResponder", "ReviewProfile"]
