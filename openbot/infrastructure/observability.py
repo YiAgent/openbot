@@ -42,11 +42,12 @@ LangSmith
 
 Langfuse
 --------
-  - Reads ``LANGFUSE_PUBLIC_KEY`` + ``LANGFUSE_SECRET_KEY`` + ``LANGFUSE_HOST``
-    from the environment (Langfuse's own env-var convention; no OPENBOT_ prefix).
+  - Reads ``LANGFUSE_PUBLIC_KEY`` + ``LANGFUSE_SECRET_KEY`` from the environment
+    (Langfuse's own env-var convention; no OPENBOT_ prefix).
   - Both public and secret key must be set to activate tracing.
-  - ``LANGFUSE_HOST`` defaults to ``https://cloud.langfuse.com`` when unset;
-    override for self-hosted or EU/US region deployments.
+  - Host is read in SDK priority order: ``LANGFUSE_BASE_URL`` → ``LANGFUSE_HOST``
+    → ``https://cloud.langfuse.com``. Use ``LANGFUSE_BASE_URL`` for the US cloud
+    (``https://us.cloud.langfuse.com``) or a self-hosted instance.
   - Two trace layers:
       1. ``@observe`` decorators on use-case entry points (outer span, duration,
          error capture for the whole workflow).
@@ -183,8 +184,13 @@ def init_langfuse() -> None:
       - ``LANGFUSE_PUBLIC_KEY`` — project public key (starts with ``pk-lf-``)
       - ``LANGFUSE_SECRET_KEY`` — project secret key (starts with ``sk-lf-``)
 
-    ``LANGFUSE_HOST`` is optional; defaults to ``https://cloud.langfuse.com``.
-    Override for self-hosted deployments or the US-region cloud.
+    Host resolution mirrors the SDK's own priority (first match wins):
+      1. ``LANGFUSE_BASE_URL`` — preferred alias used by Langfuse v4+
+      2. ``LANGFUSE_HOST`` — legacy alias still accepted by the SDK
+      3. ``https://cloud.langfuse.com`` — SDK default (EU cloud)
+
+    Override to ``https://us.cloud.langfuse.com`` for the US-region cloud,
+    or supply your self-hosted URL.
 
     The function does NOT fail if langfuse is missing — same graceful
     degradation as Sentry and LangSmith.
@@ -199,7 +205,14 @@ def init_langfuse() -> None:
 
     public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
     secret_key = os.environ.get("LANGFUSE_SECRET_KEY")
-    host = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    # Mirror the SDK's own env-var priority so the logged host matches
+    # what the SDK actually connects to (LANGFUSE_BASE_URL wins over
+    # LANGFUSE_HOST; both default to the EU cloud).
+    host = (
+        os.environ.get("LANGFUSE_BASE_URL")
+        or os.environ.get("LANGFUSE_HOST")
+        or "https://cloud.langfuse.com"
+    )
 
     if public_key and secret_key:
         _logger.info(
