@@ -25,6 +25,7 @@ from openbot.infrastructure.agents.profiles import (
     SandboxRequirement,
 )
 from openbot.infrastructure.llm.model_router import primary_model_for
+from openbot.infrastructure.observability import get_langfuse_handler
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import AgentMiddleware
@@ -168,6 +169,13 @@ class BaseDeepAgentRuntime:
         )
         if effective_checkpointer is not None:
             config["configurable"] = {"thread_id": request.run_id}
+
+        # Inject a fresh Langfuse callback so every agent run gets its own
+        # trace with all steps + tool calls visible. No-op when
+        # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
+        lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
+        if lf_callbacks:
+            config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
 
         invoke_coro = agent.ainvoke(
             {"messages": [{"role": "user", "content": profile.user_message(request)}]},
