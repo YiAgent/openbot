@@ -92,7 +92,7 @@ class ReviewProfile:
 
     feature: Feature = field(default=Feature.REVIEW, init=False)
     agent_name: str = field(default="review", init=False)
-    response_schema: type = field(default=ReviewFindingsSchema, init=False)
+    response_schema: type[Any] | None = field(default=ReviewFindingsSchema, init=False)
     limits: AgentRunLimits = field(default_factory=lambda: _REVIEW_LIMITS, init=False)
     sandbox_requirement: SandboxRequirement = field(default=SandboxRequirement.OPTIONAL, init=False)
     checkpoint_enabled: bool = field(default=True, init=False)

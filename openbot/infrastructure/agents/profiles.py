@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from langchain.agents.middleware import AgentMiddleware
     from langchain_core.tools import BaseTool
     from langgraph.checkpoint.base import BaseCheckpointSaver
-    from pydantic import BaseModel
 
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
     from openbot.application.ports.sandbox import SandboxPort
@@ -99,7 +98,9 @@ class AgentProfile(Protocol[DomainResult]):
 
     feature: Feature
     agent_name: str
-    response_schema: type[BaseModel] | None
+    response_schema: (
+        type[Any] | None
+    )  # Pydantic models use ModelMetaclass; Any avoids metaclass mismatch
     limits: AgentRunLimits
     sandbox_requirement: SandboxRequirement
     checkpoint_enabled: bool
