@@ -308,30 +308,21 @@ async def ingest_webhook(
 
     assert queue is not None, "queue port must be set when redis_client is present"
 
-    # ── 5a. LLM classifier (fail-open) ───────────────────────────────────────
-    # Run *before* enqueuing so the worker receives pre-computed classifier
-    # output and doesn't need a second LLM round-trip. ``classify_for_dispatch``
-    # is fail-open: any exception returns None, which ``derive_sandbox_policy``
-    # treats as "respect the static SandboxPolicy". ``classifier_skipped`` in
-    # TaskSpec tracks whether the output was produced or not.
-    from dataclasses import asdict
-
-    from openbot.dispatcher.classifier import classify_for_dispatch
-
-    _classifier_output = await classify_for_dispatch(
-        event=event,
-        feature=dispatch.feature,
-        redis=redis_client,
-    )
-    classifier_output_dict = asdict(_classifier_output) if _classifier_output is not None else None
-
+    # ── 5a. Enqueue immediately (classifier runs in the worker) ───────────────
+    # The LLM classifier (``classify_for_dispatch``) has a 10 s timeout; running
+    # it here, before returning 202, risks exceeding GitHub's 10 s webhook
+    # delivery deadline and triggering an unnecessary retry storm.
+    #
+    # Instead we enqueue with ``classifier_output=None`` (``classifier_skipped``
+    # will be True on the TaskSpec) and let the worker run the classifier before
+    # ``execute_handler``.  The worker has no 10 s deadline.
     from openbot.infrastructure.queue.task_spec import TaskSpec
 
     spec = TaskSpec.from_event_and_dispatch(
         event,
         dispatch,
         check_run_id=check_run_id,
-        classifier_output=classifier_output_dict,
+        classifier_output=None,
     )
     entry_id = await queue.enqueue_task_spec(spec)
     return IngestResult(

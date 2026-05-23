@@ -21,6 +21,7 @@ On exit-with-exception     → FAILED row (uses str(exc)) + exception re-raised.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -111,8 +112,6 @@ async def audit_lifecycle(
     try:
         yield handle
     except BaseException as exc:
-        import asyncio
-
         if isinstance(exc, asyncio.CancelledError):
             # RunCancelledError is a subclass of asyncio.CancelledError which
             # is BaseException, NOT Exception.  Without this branch the audit

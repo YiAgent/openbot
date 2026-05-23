@@ -82,15 +82,36 @@ def _redact_tokens(text: str) -> str:
     return _TOKEN_PATTERN.sub("x-access-token:<redacted>@", text)
 
 
+# Allowlist of Git hosts that may receive x-access-token credentials.
+# Sending the credential to any other host would leak the GitHub installation
+# token to an attacker who controls the DNS or HTTP endpoint at that host.
+# GitHub Enterprise users: add their GHES hostname here (or make it
+# configurable via Settings.github_host in a follow-up slice).
+_ALLOWED_CLONE_HOSTS: frozenset[str] = frozenset({"github.com"})
+
+
 def _inject_token(repo_url: str, token: str) -> str:
-    """Build the x-access-token push URL. HTTPS-only by design.
+    """Build the x-access-token push URL. HTTPS + allowlisted host only.
 
     Refusing non-HTTPS prevents an SSH or file URL from silently bypassing
     the credential injection (and leaking a clone of a repo we don't own).
+    Checking the host prevents a crafted webhook payload (clone_url pointing
+    at an attacker-controlled server) from receiving the installation token
+    via HTTP Basic-auth in the git clone request.
     """
+    import urllib.parse
+
     if not repo_url.startswith("https://"):
         raise ValueError(
             f"DaytonaSandboxAdapter.clone requires an https repo_url, got: {repo_url!r}"
+        )
+    parsed = urllib.parse.urlparse(repo_url)
+    host = parsed.hostname or ""
+    if host not in _ALLOWED_CLONE_HOSTS:
+        raise ValueError(
+            f"DaytonaSandboxAdapter.clone: host {host!r} is not in the allowed clone "
+            f"host list {sorted(_ALLOWED_CLONE_HOSTS)}. "
+            "Injecting a credential into a non-GitHub URL would leak the installation token."
         )
     # https://github.com/X/Y.git -> https://x-access-token:TOKEN@github.com/X/Y.git
     return repo_url.replace("https://", f"https://x-access-token:{token}@", 1)

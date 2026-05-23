@@ -30,12 +30,22 @@ and § "Resolution algorithm" of the predecessor spec.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from openbot.application.sandbox_cache_key import CacheCorruptedError, _cache_key
+
+# Same pattern as daytona._redact_tokens — strip x-access-token credentials
+# from git error messages before embedding them in exception text or logs.
+_TOKEN_PATTERN = re.compile(r"x-access-token:[^@\s]+@")
+
+
+def _redact_tokens(text: str) -> str:
+    return _TOKEN_PATTERN.sub("x-access-token:<redacted>@", text)
+
 
 if TYPE_CHECKING:
     from openbot.application.ports.sandbox import SandboxPort
@@ -91,17 +101,19 @@ async def _refresh_to_ref(sandbox: SandboxPort, repo_url: str, ref: str, token: 
     r1 = await sandbox.run(command=["git", "remote", "set-url", "origin", credentialed])
     if r1.exit_code != 0:
         raise CacheCorruptedError(
-            f"git remote set-url failed (exit {r1.exit_code}): {r1.stderr.strip()!r}"
+            f"git remote set-url failed (exit {r1.exit_code}): {_redact_tokens(r1.stderr.strip())!r}"
         )
 
     r2 = await sandbox.run(command=["git", "fetch", "origin", ref])
     if r2.exit_code != 0:
-        raise CacheCorruptedError(f"git fetch failed (exit {r2.exit_code}): {r2.stderr.strip()!r}")
+        raise CacheCorruptedError(
+            f"git fetch failed (exit {r2.exit_code}): {_redact_tokens(r2.stderr.strip())!r}"
+        )
 
     r3 = await sandbox.run(command=["git", "reset", "--hard", ref])
     if r3.exit_code != 0:
         raise CacheCorruptedError(
-            f"git reset --hard failed (exit {r3.exit_code}): {r3.stderr.strip()!r}"
+            f"git reset --hard failed (exit {r3.exit_code}): {_redact_tokens(r3.stderr.strip())!r}"
         )
 
 

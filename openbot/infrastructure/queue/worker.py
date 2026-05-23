@@ -45,7 +45,7 @@ from openbot.application.state.cancellation import (
 )
 from openbot.application.state.runs_repo import store_reviewed_sha
 from openbot.core.metrics import queue_depth
-from openbot.dispatcher.classifier import parse_classifier_output
+from openbot.dispatcher.classifier import classify_for_dispatch, parse_classifier_output
 from openbot.infrastructure.config_loader import load_for_repo
 from openbot.infrastructure.persistence.db import session_scope
 from openbot.infrastructure.queue.payload import (
@@ -146,16 +146,25 @@ async def _execute_task_spec(
     # W4: Load effective config (adapter needed for GitHub API calls in config loader).
     config = await load_for_repo(adapter, event)
 
-    # W4.5: Rehydrate the typed classifier output from the TaskSpec.
-    # The webhook async segment ran ``classify_for_dispatch`` once, stored
-    # the dataclass as a dict on the spec, then we crossed the Redis Stream
-    # JSON boundary. The handler's policy gate expects the typed union
-    # (``isinstance(output, TriageClassifierOutput)`` etc.), so we reverse
-    # the ``dataclasses.asdict`` here. Fail-open: if the dict is malformed
-    # or absent we hand the handler ``None`` (same shape the in-process
-    # fallback uses on classifier crashes).
+    # W4.5: Resolve typed classifier output for the handler's policy gate.
+    #
+    # Two paths:
+    #   a) spec.classifier_output is not None — the webhook already ran the
+    #      classifier and stored the result as a dict on the TaskSpec. Rehydrate
+    #      it into the typed union (TriageClassifierOutput | ReviewClassifierOutput
+    #      | …) that ``derive_sandbox_policy`` expects.
+    #   b) spec.classifier_output is None (``classifier_skipped`` is True) — the
+    #      webhook deliberately deferred classification to avoid blocking the 202
+    #      response within GitHub's 10 s deadline.  Run ``classify_for_dispatch``
+    #      here; the worker has no deadline.
+    #
+    # Both paths are fail-open: any exception yields ``None``, which
+    # ``derive_sandbox_policy`` treats as "respect the static SandboxPolicy".
+    from dataclasses import asdict
+
     classifier_output = None
     if spec.classifier_output is not None:
+        # Path (a): rehydrate the pre-computed dict.
         try:
             classifier_output = parse_classifier_output(
                 new_dispatch.feature, spec.classifier_output
@@ -163,6 +172,20 @@ async def _execute_task_spec(
         except Exception:
             _logger.warning(
                 "queue_v3_classifier_output_rehydrate_failed",
+                extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
+                exc_info=True,
+            )
+    else:
+        # Path (b): run the classifier now that we're off the webhook fast path.
+        try:
+            raw = await classify_for_dispatch(
+                event=event, feature=new_dispatch.feature, redis=redis
+            )
+            if raw is not None:
+                classifier_output = parse_classifier_output(new_dispatch.feature, asdict(raw))
+        except Exception:
+            _logger.warning(
+                "queue_v3_classifier_dispatch_failed",
                 extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
                 exc_info=True,
             )

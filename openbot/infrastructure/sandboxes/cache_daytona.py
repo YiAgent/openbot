@@ -259,7 +259,11 @@ class DaytonaSnapshotCache:
         try:
             await _refresh_to_ref(adapter, checkout.repo_url, checkout.ref, token)
         except CacheCorruptedError:
+            # Evict the corrupted snapshot template AND delete the live
+            # hydrated workspace created two lines above — these are two
+            # distinct Daytona resources and both must be cleaned up.
             _schedule_background(_evict_snapshot(self._client, snap.id))
+            _schedule_background(adapter.close())
             return None
 
         return SandboxedHandle(sandbox=adapter, checkout=checkout, token=token)

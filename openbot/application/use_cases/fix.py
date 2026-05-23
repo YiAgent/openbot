@@ -266,11 +266,23 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
             if run_id:
                 await checkpoint(ctx.redis, run_id)
 
+            # Refresh the installation token immediately before the push.
+            # GitHub installation tokens have a ~1 h TTL; the fix-agent loop
+            # can run 10-60+ minutes, so the token captured at dispatch time
+            # (handle.token) may be expired by the time we push.  The adapter
+            # caches tokens internally and refreshes them on demand, so this
+            # call is cheap on a warm cache and correct on an expired one.
+            try:
+                fresh_token = await adapter.get_installation_token(event)
+            except Exception:
+                _logger.warning("fix_token_refresh_failed", extra=_log_extra(event))
+                fresh_token = token  # fall back to the original token
+
             try:
                 await sandbox.commit_and_push(
                     branch_ref=branch,
                     message=f"openbot: fix #{issue_number}",
-                    token=token,
+                    token=fresh_token,
                 )
             except Exception:
                 _logger.exception("fix_push_failed", extra=_log_extra(event))

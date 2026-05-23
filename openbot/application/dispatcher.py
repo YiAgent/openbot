@@ -313,7 +313,15 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
                 bypass_source="none",
             )
             ctx_with_handle = dataclasses.replace(ctx, sandbox_handle=cached)
-            await dispatch.handler(ctx_with_handle)
+            try:
+                await dispatch.handler(ctx_with_handle)
+            finally:
+                # Close the hydrated Daytona workspace after the handler returns.
+                # The cold path uses ``async with factory()`` whose __aexit__
+                # calls sandbox.close() automatically.  The warm-cache path
+                # bypasses that context manager entirely, so we must close
+                # explicitly here to avoid leaking a live remote workspace.
+                await cached.sandbox.close()
             return
 
     # ── Cold path — open factory and clone ────────────────────────────

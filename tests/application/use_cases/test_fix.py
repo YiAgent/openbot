@@ -97,12 +97,14 @@ def _adapter(**method_overrides: Any) -> MagicMock:
     """Happy-path adapter mock; pass kwargs to override a method
     (e.g. ``get_issue=AsyncMock(side_effect=RuntimeError())``).
 
-    Note ``get_installation_token`` is intentionally absent from the
-    defaults — the dispatcher already fetched the token before the fix
-    handler runs, so the handler never calls this method.
+    ``get_installation_token`` returns a fresh token string matching the
+    handle's default token.  The fix handler refreshes the token
+    immediately before commit_and_push to guard against 1-hour token
+    expiry during long agent runs.
     """
     a = MagicMock()
     a.get_issue = AsyncMock(return_value=_issue())
+    a.get_installation_token = AsyncMock(return_value="tok123")
     a.create_branch = AsyncMock()
     a.open_pull_request = AsyncMock(
         return_value={"html_url": "https://github.com/o/r/pull/9"},
@@ -205,11 +207,9 @@ async def test_fix_uses_sandbox_handle_from_context(monkeypatch):
 
     # The handler did NOT re-clone — provisioning is the dispatcher's job.
     assert sandbox.cloned == []
-    # The handler did NOT re-fetch the token — the dispatcher passed it
-    # through on the handle.
-    assert not hasattr(adapter, "get_installation_token") or not getattr(
-        adapter.get_installation_token, "called", False
-    )
+    # The handler refreshes the installation token before commit_and_push
+    # to guard against 1-hour token expiry during long agent runs.
+    assert adapter.get_installation_token.called
 
     # Branch name pattern + short SHA come from the handle's checkout.
     branch_ref = adapter.create_branch.call_args.args[1]
