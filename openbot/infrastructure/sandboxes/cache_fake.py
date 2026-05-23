@@ -3,8 +3,8 @@
 Used for **tests and dev** in place of ``DaytonaSnapshotCache``:
 
   - Tests don't pay cold-start cost (no network clone per test run).
-  - Dev mode warms up the pool from real clones; subsequent requests
-    in the same process hit the warm pool.
+  - Dev mode warms up the pool from real clones; the next request
+    in the same process hits the warm pool.
 
 This adapter intentionally holds **live sandbox objects**, not serialised
 snapshots. The consequence is that the pool survives only for the
@@ -12,10 +12,20 @@ process lifetime — a worker restart is a full cache miss. Production
 workloads that need cross-restart persistence must use
 ``DaytonaSnapshotCache`` (Part 3).
 
+Concurrency contract — consume-on-acquire:
+  ``acquire`` **removes** the entry from ``_index`` before releasing the
+  lock.  This means each published entry is handed to exactly one
+  caller; a concurrent second ``acquire`` for the same key returns
+  ``None`` and falls through to the cold path.  The trade-off is that
+  entries are single-use-per-publish (matching ``DaytonaSnapshotCache``'s
+  fresh-workspace-per-acquire semantics), not multi-use.  The dispatcher's
+  ``finally: sandbox.close()`` then closes the workspace cleanly without
+  racing a second concurrent caller.
+
 Architecture:
   - ``_index`` is a ``collections.OrderedDict`` keyed by
     ``_cache_key(checkout, installation_id=...)``. Insertion order is
-    preserved; ``move_to_end`` implements LRU recency bumping in O(1).
+    preserved; ``popitem(last=False)`` implements LRU eviction in O(1).
   - ``_lock`` is an ``asyncio.Lock`` that protects all mutations to
     ``_index``. Git I/O (``_refresh_to_ref``) runs **outside** the lock
     to avoid serialising concurrent acquires.
@@ -64,18 +74,32 @@ class _Entry:
     last_access: float = field(default_factory=time.monotonic)
 
 
+# Allowlist mirrors DaytonaSandboxAdapter._inject_token — prevents an
+# installation token from being injected into a non-GitHub HTTPS URL.
+_ALLOWED_CLONE_HOSTS: frozenset[str] = frozenset({"github.com"})
+
+
 def _inject_token(repo_url: str, token: str) -> str:
     """Build the credentialed origin URL for the fetch step.
 
-    HTTPS repos get ``x-access-token:<token>@`` injected; non-HTTPS
-    (``file://`` in tests) are returned unchanged — no credential needed.
-    Consistent with ``DaytonaSandboxAdapter._inject_token`` but without
-    the ValueError for non-HTTPS, because tests legitimately use
-    ``file://`` origins.
+    HTTPS repos get ``x-access-token:<token>@`` injected after validating
+    the hostname is in ``_ALLOWED_CLONE_HOSTS`` — prevents token leakage
+    to non-GitHub hosts.  Non-HTTPS (``file://`` in tests) is returned
+    unchanged — no credential needed, no allowlist check required.
     """
-    if repo_url.startswith("https://"):
-        return repo_url.replace("https://", f"https://x-access-token:{token}@", 1)
-    return repo_url
+    if not repo_url.startswith("https://"):
+        return repo_url
+
+    import urllib.parse
+
+    host = urllib.parse.urlparse(repo_url).hostname or ""
+    if host not in _ALLOWED_CLONE_HOSTS:
+        raise CacheCorruptedError(
+            f"InMemorySandboxCache: host {host!r} is not in the allowed clone host list "
+            f"{sorted(_ALLOWED_CLONE_HOSTS)}. Injecting a credential into a non-GitHub "
+            "URL would leak the installation token."
+        )
+    return repo_url.replace("https://", f"https://x-access-token:{token}@", 1)
 
 
 async def _refresh_to_ref(sandbox: SandboxPort, repo_url: str, ref: str, token: str) -> None:
@@ -151,7 +175,15 @@ class InMemorySandboxCache:
         *,
         installation_id: int,
     ) -> SandboxedHandle | None:
-        """Return a warm handle on hit, ``None`` on miss / stale / error."""
+        """Return a warm handle on hit, ``None`` on miss / stale / error.
+
+        Consume-on-acquire: the entry is **popped** from ``_index`` while
+        the lock is held, so a concurrent second ``acquire`` for the same
+        key returns ``None`` instead of returning the same
+        ``SandboxPort`` object to two callers simultaneously.  The
+        dispatcher's ``finally: sandbox.close()`` can then close the
+        workspace without racing a concurrent handler.
+        """
         from openbot.application.sandbox_handle import SandboxedHandle
 
         key = _cache_key(checkout, installation_id=installation_id)
@@ -168,8 +200,9 @@ class InMemorySandboxCache:
                 del self._index[key]
                 return None
 
-            # Recency bump: move to the back so eviction hits older entries.
-            self._index.move_to_end(key)
+            # Consume: remove the entry so no concurrent caller can acquire
+            # the same sandbox object.  Each published entry is single-use.
+            del self._index[key]
             entry.last_access = now
             sandbox = entry.sandbox
 
@@ -177,8 +210,7 @@ class InMemorySandboxCache:
         try:
             await _refresh_to_ref(sandbox, checkout.repo_url, checkout.ref, token)
         except CacheCorruptedError:
-            async with self._lock:
-                self._index.pop(key, None)
+            # Entry was already consumed (removed from _index) — nothing to evict.
             return None
 
         return SandboxedHandle(sandbox=sandbox, checkout=checkout, token=token)
