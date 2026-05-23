@@ -67,6 +67,17 @@ async def sm(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[SMHarness]:
     monkeypatch.setenv("OPENBOT_DEBUG_ECHO_ENABLED", "false")
     get_settings.cache_clear()
 
+    # State-machine tests focus on HTTP routing + task-state transitions —
+    # not on the LLM classifier.  Stub it out so the fixture never makes a
+    # real LLM call (which would add latency and fail without creds).
+    async def _no_classify(**_):  # type: ignore[return-value]
+        return None
+
+    monkeypatch.setattr(
+        "openbot.dispatcher.classifier.classify_for_dispatch",
+        _no_classify,
+    )
+
     redis_fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
     engine = make_engine("sqlite+aiosqlite:///:memory:")
     await create_schema(engine)
