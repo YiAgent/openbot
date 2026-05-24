@@ -17,6 +17,11 @@ audit pattern. Centralised here so:
 
 On exit-without-exception → COMPLETED row (uses `audit.outcome` if set).
 On exit-with-exception     → FAILED row (uses str(exc)) + exception re-raised.
+
+Note: when `request.metadata['budget_partial']` is True after a deepagents
+run, the responder should set the audit `outcome` to "budget_exceeded_in_loop"
+and prefix the user-facing comment with a one-line "(partial result)" tag.
+The middleware itself never raises — handlers must check the metadata flag.
 """
 
 from __future__ import annotations
