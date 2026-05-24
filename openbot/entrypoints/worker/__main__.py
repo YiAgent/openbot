@@ -173,6 +173,16 @@ async def _main() -> int:
             if db_engine is not None:
                 await db_engine.dispose()
             await redis_client.aclose()
+            # Flush any buffered Langfuse trace events before the process exits.
+            # The SDK batches events internally; without an explicit shutdown call
+            # the last few traces can be dropped on SIGTERM. No-op when Langfuse
+            # is not configured (keys absent → get_client() is a lightweight stub).
+            try:
+                from langfuse import get_client as _get_lf_client
+
+                _get_lf_client().shutdown()
+            except Exception:
+                _logger.debug("langfuse_shutdown_failed", exc_info=True)
             _logger.info("worker_stopped")
     return 0
 
