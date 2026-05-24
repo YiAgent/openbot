@@ -2,7 +2,7 @@
 
 > 版本：**v0.1 Alpha Current-State** · 起草日期：2026-05-15 · 最近更新：2026-05-22 · 状态：开发中 / 不可标记为端到端可发布
 > 历史演进：[v0.1](../research/openbot-prd-v0.1.md) · [v0.2](../research/openbot-prd-v0.2.md) · [v0.3](../research/openbot-prd-v0.3.md) · [80 问拷问清单](../research/openbot-interrogation.md)
-> 配套：[完整 config 示例](./openbot-config-example.yaml) · [v0.1 收口 spec](../superpowers/specs/2026-05-22-v0-1-product-closure-design.md)
+> 配套：[完整 config 示例](./openbot-config-example.yaml) · [v0.1 收口 spec](../_archive/superpowers/2026-05-22-v0-1-product-closure-design.md)
 
 OpenBot 是一个 **开源、自托管、用户自带 LLM API key 的 GitHub 维护机器人**。每位 OSS maintainer 自建 GitHub App，运行一个完全属于自己的实例；OpenBot 项目本身不托管用户代码、不持有用户数据、不抽成 LLM 费用。v0.1 仅 GitHub channel，v0.2 起再接入 Linear，v0.3+ 扩展到 Slack / Discord / Web frontend。
 
