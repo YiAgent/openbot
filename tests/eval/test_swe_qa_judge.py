@@ -53,7 +53,7 @@ def test_judge_prompt_is_single_official_user_message(monkeypatch: pytest.Monkey
         )
     )
     client = _JudgeClient(structured)
-    monkeypatch.setattr(swe_qa_judge, "_get_client", lambda: client)
+    monkeypatch.setattr(swe_qa_judge, "ChatAnthropic", lambda **kwargs: client)
 
     verdict = swe_qa_judge.judge_answer(
         question="What does the router do?",
@@ -89,7 +89,7 @@ def test_judge_prompt_is_single_official_user_message(monkeypatch: pytest.Monkey
 def test_invalid_structured_judge_output_is_not_repaired(monkeypatch: pytest.MonkeyPatch) -> None:
     structured = _StructuredJudge(error=ValueError("invalid structured output"))
     client = _JudgeClient(structured)
-    monkeypatch.setattr(swe_qa_judge, "_get_client", lambda: client)
+    monkeypatch.setattr(swe_qa_judge, "ChatAnthropic", lambda **kwargs: client)
 
     with pytest.raises(ValueError, match="invalid structured output"):
         swe_qa_judge.judge_answer(

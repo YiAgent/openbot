@@ -133,28 +133,28 @@ data: data-review data-chat data-fix data-test ## Publish all eval datasets safe
 data-refresh: data-review-refresh data-chat-refresh data-fix-refresh data-test-refresh ## Rebuild all eval datasets with --force
 
 data-review: ## Publish Martian review dataset to LangSmith
-	$(DOPPLER) $(PY) python -m evals.scripts.build_review_martian_dataset
+	$(DOPPLER) $(PY) python -m evals.data refresh review
 
 data-chat: ## Publish SWE-QA-Pro chat dataset to LangSmith
-	$(DOPPLER) $(PY) python -m evals.scripts.build_chat_swe_qa_pro_dataset
+	$(DOPPLER) $(PY) python -m evals.data refresh chat
 
 data-fix: ## Publish SWE-bench Verified LangSmith mirror
-	$(DOPPLER) $(PY) python -m evals.scripts.build_swe_bench_verified_dataset
+	$(DOPPLER) $(PY) python -m evals.data refresh fix
 
 data-test: ## Publish SWT-Bench Verified LangSmith mirror
-	$(DOPPLER) $(PY) python -m evals.scripts.build_swt_bench_verified_dataset
+	$(DOPPLER) $(PY) python -m evals.data refresh swt
 
-data-review-refresh: ## Rebuild Martian review dataset with --force
-	$(DOPPLER) $(PY) python -m evals.scripts.build_review_martian_dataset --force
+data-review-refresh: ## Rebuild Martian review dataset (idempotent re-collect + publish)
+	$(DOPPLER) $(PY) python -m evals.data refresh review
 
-data-chat-refresh: ## Rebuild SWE-QA-Pro chat dataset with --force
-	$(DOPPLER) $(PY) python -m evals.scripts.build_chat_swe_qa_pro_dataset --force
+data-chat-refresh: ## Rebuild SWE-QA-Pro chat dataset (idempotent re-collect + publish)
+	$(DOPPLER) $(PY) python -m evals.data refresh chat
 
-data-fix-refresh: ## Rebuild SWE-bench Verified LangSmith mirror with --force
-	$(DOPPLER) $(PY) python -m evals.scripts.build_swe_bench_verified_dataset --force
+data-fix-refresh: ## Rebuild SWE-bench Verified LangSmith mirror (idempotent re-collect + publish)
+	$(DOPPLER) $(PY) python -m evals.data refresh fix
 
-data-test-refresh: ## Rebuild SWT-Bench Verified LangSmith mirror with --force
-	$(DOPPLER) $(PY) python -m evals.scripts.build_swt_bench_verified_dataset --force
+data-test-refresh: ## Rebuild SWT-Bench Verified LangSmith mirror (idempotent re-collect + publish)
+	$(DOPPLER) $(PY) python -m evals.data refresh swt
 
 # ─── Local verification ─────────────────────────────────────────
 test: ## Run eval-focused pytest suite only
@@ -277,9 +277,9 @@ writeback-test: ## Writeback SWT harness verdicts → LangSmith swt_bench_pass_a
 		EXP_NAME="$(GRADE_EXPERIMENT)"; \
 	fi; \
 	printf '\033[36m▶ swt-bench writeback\033[0m %s → experiment %s\n' "$$GRADE_REPORT" "$$EXP_NAME"; \
-	cd .. && $(DOPPLER) $(PY) python -m evals.scripts.writeback_swt_grades \
-		--evaluation-result "$$GRADE_REPORT" \
-		--experiment-name "$$EXP_NAME" \
+	cd .. && $(DOPPLER) $(PY) python -m evals.data writeback swt \
+		--report "$$GRADE_REPORT" \
+		--experiment "$$EXP_NAME" \
 		$(if $(DRY_RUN),--dry-run)
 
 grade-test: ## Run vendored SWT-bench harness on remote docker (DOCKER_HOST) against GRADE_PREDICTIONS
@@ -422,9 +422,9 @@ writeback-fix: ## Writeback SWE harness verdicts → LangSmith swe_bench_pass_at
 		EXP_NAME="$(GRADE_FIX_EXPERIMENT)"; \
 	fi; \
 	printf '\033[36m▶ swe-bench writeback\033[0m %s → experiment %s\n' "$$GRADE_FIX_REPORT" "$$EXP_NAME"; \
-	cd .. && $(DOPPLER) $(PY) python -m evals.scripts.writeback_swe_grades \
-		--evaluation-result "$$GRADE_FIX_REPORT" \
-		--experiment-name "$$EXP_NAME" \
+	cd .. && $(DOPPLER) $(PY) python -m evals.data writeback fix \
+		--report "$$GRADE_FIX_REPORT" \
+		--experiment "$$EXP_NAME" \
 		$(if $(DRY_RUN),--dry-run)
 
 eval-fix: ## Full SWE-bench pipeline: agent run → offline grading → LangSmith writeback

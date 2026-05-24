@@ -196,8 +196,7 @@ evals/
 │   ├── review_overlap.py               # review overlap math
 │   ├── review_judge.py                 # Martian-CRB LLM-as-judge
 │   ├── swe_qa_judge.py                 # SWE-QA-Pro 5-dim judge
-│   ├── swe_qa_pro.py                   # @scorer wrapping the 5-dim judge
-│   └── _judge_client.py                # cached ChatAnthropic for judges
+│   └── swe_qa_pro.py                   # @scorer wrapping the 5-dim judge
 ├── scripts/
 │   ├── build_review_martian_dataset.py
 │   ├── build_chat_swe_qa_pro_dataset.py

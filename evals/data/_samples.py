@@ -139,8 +139,8 @@ def langsmith_dataset(
     if ds is None:
         raise RuntimeError(
             f"LangSmith dataset {dataset_version!r} not found. "
-            f"Publish it with `uv run python -m evals.scripts.build_{dataset_version.split('_')[0]}_dataset` "
-            f"(or pass --dataset {dataset_version} to the matching build script)."
+            f"Publish it with `uv run python -m evals.data refresh <suite>` "
+            f"(see `python -m evals.data --help` for available suites)."
         )
 
     examples = list(client.list_examples(dataset_id=ds.id))

@@ -4,17 +4,29 @@ PRD §4.1 + §6.1. Compares candidate review findings against golden ones via
 an LLM judge; produces an overlap report plus the unmatched sets on both
 sides (needed for failure-category attribution in PRD §10.2 / §12.4).
 
-Pure-function core (`compute_review_overlap`) takes an injected judge callable
-so tests can avoid live LLM calls. The inspect-ai `@scorer` shim sits in
-`review_overlap_scorer()` for v0.1; it's wired up once E1-T06 review solver
-gets real `TaskState.output` shape, but the math is identical.
+Two layers:
+
+- :func:`compute_review_overlap` — pure-function core. Takes an injected
+  judge callable so tests can run without a live LLM.
+- :func:`review_overlap_f1_scorer` — Inspect AI ``@scorer`` factory. Reads
+  ``state.metadata["candidate_findings"]`` (populated by the review solver)
+  and ``target.text`` (golden findings as JSON), runs the overlap math, and
+  returns a normalized ``Score`` with the precision / recall / matched /
+  unmatched breakdown in ``metadata`` for downstream attribution.
+
+Tasks reference the factory; they never define a scorer inline. This mirrors
+the contract documented in :mod:`evals.scorers.swe_qa_pro`.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TypedDict
+
+from inspect_ai.scorer import Score, Target, mean, scorer, stderr
+from inspect_ai.solver import TaskState
 
 
 class Finding(TypedDict):
@@ -119,14 +131,53 @@ def compute_review_overlap(
     )
 
 
-def review_overlap_scorer():  # type: ignore[no-untyped-def]
-    """Inspect AI `@scorer` shim — wraps `compute_review_overlap` for runner.
+def review_overlap_f1_scorer(judge: JudgeFn):  # type: ignore[no-untyped-def]
+    """Inspect AI scorer factory — overlap F1 against golden findings.
 
-    Not callable until E1-T06 review solver lands a concrete `TaskState.output`
-    shape: we don't yet know the inspect-ai version's exact `Score` ctor args.
-    Raising on construction keeps misuse loud.
+    Inputs (from the solver / dataset):
+      - ``state.metadata["candidate_findings"]`` — ``list[Finding]`` produced
+        by :mod:`evals.solvers.review`. Empty list if the solver emitted no
+        findings.
+      - ``target.text`` — golden findings as a JSON string. Decoded with
+        ``json.loads``; on parse error the golden set is treated as empty
+        (matches the legacy behaviour expected by the dataset shape).
+
+    Output: a :class:`Score` whose ``value`` is the F1, with precision /
+    recall / matched_pairs / unmatched_* / counts in ``metadata`` for
+    PRD §10.2 / §12.4 attribution.
     """
-    raise NotImplementedError(
-        "review_overlap_scorer() requires E1-T06 review solver output shape. "
-        "Use evals.scorers.review_overlap.compute_review_overlap directly until then."
-    )
+
+    @scorer(metrics=[mean(), stderr()])
+    def _factory():  # type: ignore[no-untyped-def]
+        async def _score(state: TaskState, target: Target) -> Score:
+            candidate: list[Finding] = state.metadata.get("candidate_findings", [])
+            try:
+                golden: list[Finding] = json.loads(target.text)
+            except (json.JSONDecodeError, TypeError):
+                golden = []
+
+            report = compute_review_overlap(golden, candidate, judge)
+            return Score(
+                value=report.f1,
+                answer=json.dumps({"findings": candidate}, ensure_ascii=False),
+                explanation=(
+                    f"precision={report.precision:.3f} recall={report.recall:.3f} "
+                    f"f1={report.f1:.3f} matched={len(report.matched_pairs)} "
+                    f"unmatched_golden={len(report.unmatched_golden)} "
+                    f"unmatched_candidate={len(report.unmatched_candidate)}"
+                ),
+                metadata={
+                    "precision": report.precision,
+                    "recall": report.recall,
+                    "f1": report.f1,
+                    "matched_pairs": report.matched_pairs,
+                    "unmatched_golden": report.unmatched_golden,
+                    "unmatched_candidate": report.unmatched_candidate,
+                    "candidate_count": len(candidate),
+                    "golden_count": len(golden),
+                },
+            )
+
+        return _score
+
+    return _factory()

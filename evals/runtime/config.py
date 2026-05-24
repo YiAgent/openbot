@@ -16,7 +16,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # ─── Re-exported env-var names ──────────────────────────────────────────────
 
-JUDGE_MODEL_DEFAULT: Final[str] = "anthropic:claude-opus-4-7"
+JUDGE_MODEL_DEFAULT: Final[str] = "claude-opus-4-7"
+"""Bare Anthropic model id — fed straight into :class:`ChatAnthropic`.
+
+The ``OPENBOT_*_JUDGE_MODEL*`` env vars must also be bare ids (e.g.
+``claude-opus-4-7``); the older ``anthropic:claude-opus-4-7`` /
+``anthropic/claude-opus-4-7`` deepagents-style prefixes are no longer
+stripped — pass them and ``ChatAnthropic`` will 404.
+"""
 
 JUDGE_MODEL_ENV: Final[str] = "OPENBOT_JUDGE_MODEL_ID"
 REVIEW_JUDGE_MODEL_ENV: Final[str] = "OPENBOT_REVIEW_JUDGE_MODEL_ID"
@@ -33,6 +40,12 @@ _SETTINGS_CONFIG = SettingsConfigDict(
     env_file_encoding="utf-8",
     extra="ignore",
     frozen=True,
+    # Treat empty env-var values as unset so silent ``OPENBOT_*=`` lines in
+    # Doppler / .env don't shadow the field defaults. Without this, the old
+    # resolver had to guard ``""`` explicitly; now ``JudgeSettings`` handles
+    # it uniformly and ``s.review_model_id or s.model_id`` always lands on
+    # a real id.
+    env_ignore_empty=True,
 )
 
 

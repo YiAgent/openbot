@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from evals.runtime.predictions import (
+from evals.data._predictions import (
     SweBenchPrediction,
     SweQaProAnswer,
     SweQaProCitation,
