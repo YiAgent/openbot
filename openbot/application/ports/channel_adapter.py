@@ -28,6 +28,21 @@ class ChannelAdapterPort(Protocol):
         """Post a reply on the originating thread."""
         ...
 
+    async def update_comment(
+        self,
+        event: UnifiedEvent,
+        comment_id: int,
+        message: str,
+    ) -> dict[str, Any]:
+        """Edit an existing issue or PR comment body in-place (sticky UX).
+
+        Used to replace a "thinking…" placeholder with the final response
+        without creating extra comment noise. Falls back gracefully —
+        callers should wrap in try/except and post a new comment when
+        this raises (e.g. the comment was deleted).
+        """
+        ...
+
     async def get_issue_labels(self, event: UnifiedEvent, number: int) -> frozenset[str]:
         """Return the set of label names on the given issue/PR number.
 

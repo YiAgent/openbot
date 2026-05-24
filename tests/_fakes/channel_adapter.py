@@ -59,6 +59,9 @@ class FakeChannelAdapter:
     # Records every ``update_check_run`` call so dispatcher / worker tests
     # can assert on conclusion + summary without subclassing.
     check_run_updates: list[dict[str, Any]] = field(default_factory=list)
+    # Records in-place edits via ``update_comment`` so sticky-reply tests
+    # can assert that the placeholder was replaced exactly once.
+    comment_updates: list[dict[str, Any]] = field(default_factory=list)
 
     def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
         return  # always accept
@@ -77,6 +80,17 @@ class FakeChannelAdapter:
     async def reply(self, event: UnifiedEvent, message: str) -> dict[str, Any]:
         self.replies.append((event.resource_key, message))
         return {"ok": True, "id": len(self.replies)}
+
+    async def update_comment(
+        self,
+        event: UnifiedEvent,
+        comment_id: int,
+        message: str,
+    ) -> dict[str, Any]:
+        self.comment_updates.append(
+            {"resource_key": event.resource_key, "comment_id": comment_id, "message": message}
+        )
+        return {"ok": True, "id": comment_id}
 
     async def get_issue_labels(self, event: UnifiedEvent, number: int) -> frozenset[str]:
         return frozenset()
