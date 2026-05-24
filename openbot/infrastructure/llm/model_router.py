@@ -2,13 +2,18 @@
 
 PRD §13 #2 locked routing (final 1.0 decision, not configurable per request):
 
-    triage / chat / review / fix  →  anthropic/GLM-5.1   (BigModel proxy)
-    any feature fallback          →  openai/gpt-5-mini   (if Anthropic 5xx)
+    triage / chat / review / fix  →  anthropic/glm-5.1   (beehears proxy)
+    any feature fallback          →  openai/gpt-5-mini    (if Anthropic 5xx)
 
 `LiteLLM` is the vendor abstraction; whatever model string we return is what
 LiteLLM dispatches on. The `anthropic/` prefix tells LiteLLM to use the
 Anthropic client path; ANTHROPIC_BASE_URL redirects those requests to the
-BigModel GLM proxy so `GLM-5.1` is the model actually served.
+beehears proxy so `glm-5.1` is the model actually served.
+
+NOTE: deepseek-v4-pro / deepseek-v4-flash are reasoning models that require
+`reasoning_content` to be echoed in multi-turn conversations. LangGraph does
+not preserve that field in its message history, so those models fail with 400
+on the second turn. GLM-5.1 (non-reasoning) is used instead.
 
 Users can override per-feature primary in their `.openbot/config.yaml`
 (PRD §6 `model.per_feature`) — this module exposes the **baked-in defaults**
@@ -30,10 +35,10 @@ __all__ = ["Feature", "fallback_model", "primary_model_for"]
 
 # Frozen mapping — never mutate at runtime. Override via config overlay.
 _PRIMARY: Final[dict[Feature, str]] = {
-    Feature.TRIAGE: "anthropic/GLM-5.1",
-    Feature.CHAT: "anthropic/GLM-5.1",
-    Feature.REVIEW: "anthropic/GLM-5.1",
-    Feature.FIX: "anthropic/GLM-5.1",
+    Feature.TRIAGE: "anthropic/glm-5.1",
+    Feature.CHAT: "anthropic/glm-5.1",
+    Feature.REVIEW: "anthropic/glm-5.1",
+    Feature.FIX: "anthropic/glm-5.1",
 }
 
 _FALLBACK: Final = "openai/gpt-5-mini"
