@@ -129,9 +129,11 @@ def test_triage_question_without_repro_bypasses() -> None:
     assert out is SandboxPolicy.NO_SANDBOX
 
 
-def test_triage_question_with_repro_still_required() -> None:
-    # If the user actually included repro steps, we want the sandbox to
-    # validate them — even on type=question.
+def test_triage_question_with_repro_bypasses() -> None:
+    # A7 (spec §A7): triage REQUIRES sandbox iff `bug AND repro AND not spam`.
+    # type=question with repro steps no longer warrants the sandbox — the
+    # reproduce loop only knows how to chew on bug reports. The full
+    # truth-table lives in ``test_sandbox_policy_repro.py``.
     out = derive_sandbox_policy(
         static=SandboxPolicy.REQUIRED,
         classifier_output=TriageClassifierOutput(
@@ -142,7 +144,7 @@ def test_triage_question_with_repro_still_required() -> None:
         ),
         feature=Feature.TRIAGE,
     )
-    assert out is SandboxPolicy.REQUIRED
+    assert out is SandboxPolicy.NO_SANDBOX
 
 
 def test_triage_bug_with_repro_required() -> None:
