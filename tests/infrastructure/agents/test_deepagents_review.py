@@ -292,8 +292,10 @@ async def test_review_responder_passes_recursion_limit(monkeypatch) -> None:
         session_factory=None,  # type: ignore[arg-type]
     )
 
-    # Freeze the explicit limit so a future bump is intentional.
-    assert seen["config"]["recursion_limit"] == 25
+    # Bumped from 25 → 50 so middleware limits (tool_call_limit / model_call_limit)
+    # have headroom to fire before LangGraph's per-node recursion ceiling is hit
+    # (each model-call + router + tool-exec ≈ 3-4 steps per iteration).
+    assert seen["config"]["recursion_limit"] == 50
 
 
 async def test_review_responder_passes_checkpointer_and_thread_id(
