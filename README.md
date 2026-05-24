@@ -56,8 +56,8 @@ OpenBot currently has working pieces, not a finished end-to-end alpha.
 
 The current alpha closure work is tracked in:
 
-- [Product closure spec](./docs/superpowers/specs/2026-05-22-v0-1-product-closure-design.md)
-- [Eval runtime redesign spec](./docs/superpowers/specs/2026-05-22-evals-runtime-redesign.md)
+- [Product closure spec](./docs/_archive/superpowers/2026-05-22-v0-1-product-closure-design.md)
+- [Eval runtime redesign spec](./docs/_archive/superpowers/2026-05-22-evals-runtime-redesign.md)
 - [Main PRD](./docs/prd/openbot-prd.md)
 
 ## Architecture
@@ -263,7 +263,7 @@ Eval documentation:
 
 - [Eval PRD](./docs/prd/openbot-eval-prd.md)
 - [Eval suite definitions](./docs/prd/openbot-eval-suites.md)
-- [Eval runtime redesign](./docs/superpowers/specs/2026-05-22-evals-runtime-redesign.md)
+- [Eval runtime redesign](./docs/_archive/superpowers/2026-05-22-evals-runtime-redesign.md)
 
 Common commands:
 
@@ -320,8 +320,8 @@ runbook.
 | [Main PRD](./docs/prd/openbot-prd.md) | Product vision, current implementation state, alpha readiness, roadmap. |
 | [Eval PRD](./docs/prd/openbot-eval-prd.md) | Eval architecture and product measurement rules. |
 | [Eval suites](./docs/prd/openbot-eval-suites.md) | Suite names, datasets, metrics, and gates. |
-| [Product closure spec](./docs/superpowers/specs/2026-05-22-v0-1-product-closure-design.md) | Concrete gaps before v0.1 alpha is runnable. |
-| [Eval runtime redesign](./docs/superpowers/specs/2026-05-22-evals-runtime-redesign.md) | Planned eval cleanup and naming rules. |
+| [Product closure spec](./docs/_archive/superpowers/2026-05-22-v0-1-product-closure-design.md) | Concrete gaps before v0.1 alpha is runnable. |
+| [Eval runtime redesign](./docs/_archive/superpowers/2026-05-22-evals-runtime-redesign.md) | Planned eval cleanup and naming rules. |
 | [Heroku runbook](./docs/deploy/heroku.md) | Deployment, secrets, monitoring, and operations. |
 
 ## Contributing

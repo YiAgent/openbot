@@ -2,7 +2,7 @@
 
 > 版本：**3.0 Current-State Redesign** · 最近更新：2026-05-22 · 状态：设计已锁定 / 待实现
 > 范围：v0.1 alpha ~ v0.3 评测体系
-> 关联设计：[`docs/superpowers/specs/2026-05-22-evals-runtime-redesign.md`](../superpowers/specs/2026-05-22-evals-runtime-redesign.md)
+> 关联设计：[`docs/_archive/superpowers/2026-05-22-evals-runtime-redesign.md`](../_archive/superpowers/2026-05-22-evals-runtime-redesign.md)
 
 ## 0. 核心原则
 

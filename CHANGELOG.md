@@ -4,6 +4,14 @@ All notable changes to OpenBot are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
+## [Unreleased]
+
+### Fixed
+
+- Re-point broken closure-spec and evals-runtime-redesign links in
+  `docs/prd/openbot-prd.md`, `docs/prd/openbot-eval-prd.md`, and `README.md`
+  to the archived paths under `docs/_archive/superpowers/`.
+
 ## [0.1.0] - 2026-05-23
 
 ### Added
