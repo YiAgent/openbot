@@ -16,12 +16,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
   model does not misread partial output as the full file.
 - System prompt now refuses state-changing requests ("open a PR", "merge")
   and points the user to issue assignment instead.
-
+- Runtime egress safety scanner (`detect-secrets`) wraps every bot-authored
+  string going through `ChannelAdapter.reply`, `create_pr_review`, and
+  `open_pull_request`. Default action is redaction
+  (`<openbot:redacted-secret>`); `safety.egress_action: block` in
+  `.openbot/config.yaml` switches to drop-and-fallback. Soft 500 ms timeout
+  fails-safe by replacing the chunk with a fixed audit string.
+- New `safety` config section and `budget.per_task_cap_usd` field
+  (PRD §4.5/§4.8).
 ### Fixed
 
 - Re-point broken closure-spec and evals-runtime-redesign links in
   `docs/prd/openbot-prd.md`, `docs/prd/openbot-eval-prd.md`, and `README.md`
   to the archived paths under `docs/_archive/superpowers/`.
+
+### Security
+
+- `tests/architecture/test_egress_boundary.py` enforces that use cases never
+  import the raw `GitHubAdapter`; egress is decorator-bound at composition root.
 
 ## [0.1.0] - 2026-05-23
 
