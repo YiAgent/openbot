@@ -60,6 +60,7 @@ class FakeChannelAdapter:
     # Records every ``update_check_run`` call so dispatcher / worker tests
     # can assert on conclusion + summary without subclassing.
     check_run_updates: list[dict[str, Any]] = field(default_factory=list)
+<<<<<<< HEAD
     # Records in-place edits via ``update_comment`` so sticky-reply tests
     # can assert that the placeholder was replaced exactly once.
     comment_updates: list[dict[str, Any]] = field(default_factory=list)
@@ -69,6 +70,12 @@ class FakeChannelAdapter:
     # can assert on conclusion + summary without subclassing.
     check_run_updates: list[dict[str, Any]] = field(default_factory=list)
 >>>>>>> 08e84a2 (refactor: complete evals.data unification — delete 9 legacy files, migrate callers)
+||||||| parent of 2d5db5f (feat: sticky comments + check-run lifecycle closure)
+=======
+    # Records in-place edits via ``update_comment`` so sticky-reply tests
+    # can assert that the placeholder was replaced exactly once.
+    comment_updates: list[dict[str, Any]] = field(default_factory=list)
+>>>>>>> 2d5db5f (feat: sticky comments + check-run lifecycle closure)
 
     def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
         return  # always accept

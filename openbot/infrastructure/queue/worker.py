@@ -240,6 +240,7 @@ async def _execute_task_spec(
             )
             await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
             return
+<<<<<<< HEAD
         except TimeoutError:
             # Budget exceeded — execute_handler already patched the check run
             # as ``cancelled``.  XACK so the entry doesn't stay in the PEL
@@ -271,6 +272,24 @@ async def _execute_task_spec(
             await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
             return
 >>>>>>> 08e84a2 (refactor: complete evals.data unification — delete 9 legacy files, migrate callers)
+||||||| parent of 2d5db5f (feat: sticky comments + check-run lifecycle closure)
+=======
+        except TimeoutError:
+            # Budget exceeded — execute_handler already patched the check run
+            # as ``cancelled``.  XACK so the entry doesn't stay in the PEL
+            # and get reclaimed (a timeout is not a transient failure worth
+            # retrying with the same budget guard that just fired).
+            _logger.warning(
+                "queue_v3_handler_timed_out",
+                extra={
+                    "entry_id": entry_id,
+                    "delivery_id": spec.delivery_id,
+                    "timeout_seconds": _HANDLER_TIMEOUT_SECONDS,
+                },
+            )
+            await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
+            return
+>>>>>>> 2d5db5f (feat: sticky comments + check-run lifecycle closure)
         except Exception:
             _logger.exception(
                 "queue_v3_execute_handler_escaped",

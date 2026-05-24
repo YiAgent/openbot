@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
+<<<<<<< HEAD
 # ──────────────────────────────────────────────────────────────────────────────
 # Sticky-reply helper
 # ──────────────────────────────────────────────────────────────────────────────
@@ -149,6 +150,79 @@ async def sticky_reply(
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+||||||| parent of 2d5db5f (feat: sticky comments + check-run lifecycle closure)
+=======
+# ──────────────────────────────────────────────────────────────────────────────
+# Sticky-reply helper
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(slots=True)
+class _StickyReply:
+    """Handle returned by :func:`sticky_reply`.
+
+    Call :meth:`update` to replace the placeholder comment body in-place.
+    If the initial POST failed (e.g. auth not wired), ``comment_id`` is
+    ``None`` and ``update`` is a silent no-op so callers never have to
+    branch on it.
+    """
+
+    comment_id: int | None
+    _adapter: Any
+    _event: Any
+
+    async def update(self, message: str) -> None:
+        """Replace the comment body via PATCH. Swallows all errors."""
+        if self.comment_id is None:
+            return
+        try:
+            await self._adapter.update_comment(self._event, self.comment_id, message)
+        except Exception:
+            _logger.exception(
+                "sticky_reply_update_failed",
+                extra={"comment_id": self.comment_id},
+            )
+
+
+@asynccontextmanager
+async def sticky_reply(
+    adapter: ChannelAdapterPort,
+    event: UnifiedEvent,
+    *,
+    initial: str,
+) -> AsyncGenerator[_StickyReply, None]:
+    """Post a placeholder comment; yield a handle to update it in-place.
+
+    Usage::
+
+        async with sticky_reply(adapter, event, initial="⏳ Working…") as sticky:
+            result = await do_heavy_work()
+            await sticky.update(f"✅ Done: {result}")
+
+    The initial POST runs outside the caller's try/except so a GitHub API
+    outage at startup doesn't silently skip the placeholder — failures are
+    logged and ``comment_id`` is set to ``None``.  Subsequent
+    :meth:`_StickyReply.update` calls are then no-ops so the caller's logic
+    continues without having to branch.
+    """
+    comment_id: int | None = None
+    try:
+        result = await adapter.reply(event, initial)
+        comment_id = result.get("id")
+    except Exception:
+        _logger.exception(
+            "sticky_reply_initial_failed",
+            extra={"repo": event.repo},
+        )
+    yield _StickyReply(comment_id=comment_id, _adapter=adapter, _event=event)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Audit-lifecycle helper
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+>>>>>>> 2d5db5f (feat: sticky comments + check-run lifecycle closure)
 @dataclass(slots=True)
 class _AuditHandle:
     """Mutable thunk the `with`-body fills in before COMPLETED is written."""
