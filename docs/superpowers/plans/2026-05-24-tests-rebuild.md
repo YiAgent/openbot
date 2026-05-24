@@ -422,7 +422,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from openbot.domain.events import UnifiedEvent
+from openbot.domain.events import EventKind, UnifiedEvent
+
+
+def _delivery(delivery_id: str | None) -> str:
+    return delivery_id or str(uuid.uuid4())
 
 
 def build_issue_opened_event(
@@ -434,15 +438,34 @@ def build_issue_opened_event(
     title: str = "test issue title",
     delivery_id: str | None = None,
     installation_id: int = 100,
+    event_seq: int = 0,
+    clone_url: str | None = None,
 ) -> UnifiedEvent:
     """Build a deterministic issues.opened UnifiedEvent.
 
     Read openbot.domain.events.UnifiedEvent for the canonical field list;
     if a field is missing here, it's because no current test needs it —
     add a kwarg before depending on a default."""
-    raise NotImplementedError(
-        "fill in by reading UnifiedEvent's actual constructor; "
-        "this stub is a TODO that the implementing engineer MUST resolve."
+    raw: dict[str, Any] = {
+        "action": "opened",
+        "issue": {"number": issue_number, "title": title, "body": body},
+        "repository": {"full_name": repo, "clone_url": clone_url or f"https://github.com/{repo}.git"},
+        "sender": {"login": sender, "type": "User"},
+        "installation": {"id": installation_id},
+    }
+    return UnifiedEvent(
+        channel="github",
+        delivery_id=_delivery(delivery_id),
+        kind=EventKind.ISSUE_OPENED,
+        repo=repo,
+        actor=sender,
+        issue_number=issue_number,
+        comment_body=body,
+        actor_type="User",
+        installation_id=installation_id,
+        event_seq=event_seq,
+        clone_url=clone_url,
+        raw=raw,
     )
 
 
@@ -454,8 +477,29 @@ def build_pull_request_opened_event(
     title: str = "test PR",
     delivery_id: str | None = None,
     installation_id: int = 100,
+    event_seq: int = 0,
+    clone_url: str | None = None,
 ) -> UnifiedEvent:
-    raise NotImplementedError("ditto: read UnifiedEvent first.")
+    raw: dict[str, Any] = {
+        "action": "opened",
+        "pull_request": {"number": pr_number, "title": title},
+        "repository": {"full_name": repo, "clone_url": clone_url or f"https://github.com/{repo}.git"},
+        "sender": {"login": sender, "type": "User"},
+        "installation": {"id": installation_id},
+    }
+    return UnifiedEvent(
+        channel="github",
+        delivery_id=_delivery(delivery_id),
+        kind=EventKind.PR_OPENED,
+        repo=repo,
+        actor=sender,
+        pr_number=pr_number,
+        actor_type="User",
+        installation_id=installation_id,
+        event_seq=event_seq,
+        clone_url=clone_url,
+        raw=raw,
+    )
 
 
 def build_issue_comment_command_event(
@@ -466,8 +510,29 @@ def build_issue_comment_command_event(
     command: str = "/fix",
     delivery_id: str | None = None,
     installation_id: int = 100,
+    event_seq: int = 0,
 ) -> UnifiedEvent:
-    raise NotImplementedError("ditto.")
+    raw: dict[str, Any] = {
+        "action": "created",
+        "issue": {"number": issue_number},
+        "comment": {"body": command, "user": {"login": sender, "type": "User"}},
+        "repository": {"full_name": repo},
+        "sender": {"login": sender, "type": "User"},
+        "installation": {"id": installation_id},
+    }
+    return UnifiedEvent(
+        channel="github",
+        delivery_id=_delivery(delivery_id),
+        kind=EventKind.ISSUE_COMMENT_CREATED,
+        repo=repo,
+        actor=sender,
+        issue_number=issue_number,
+        comment_body=command,
+        actor_type="User",
+        installation_id=installation_id,
+        event_seq=event_seq,
+        raw=raw,
+    )
 
 
 __all__ = [
@@ -477,12 +542,12 @@ __all__ = [
 ]
 ```
 
-> **Engineer note:** The three NotImplementedError stubs above are
-> intentional — UnifiedEvent's exact field shape changes faster than
-> this plan can track. Read `openbot/domain/events.py` first, then
-> replace each `raise NotImplementedError(...)` with a real constructor
-> call. Use `delivery_id or str(uuid.uuid4())` for the delivery default.
-> Tests for the builders are added in Task 1.4.
+> **Engineer note:** Field names above were taken from
+> `openbot/domain/events.py` at plan-write time. If the dataclass has
+> evolved by the time you read this, regenerate by re-reading the
+> module — keep `delivery_id`, `kind`, `repo`, `actor`, and
+> `actor_type="User"` (so `is_from_bot` is False) as the invariants any
+> v0.1 builder must satisfy. Tests for the builders are added in Task 1.4.
 
 - [ ] **Step 3: Create the payloads builder**
 
@@ -560,65 +625,31 @@ def build_pull_request_opened_payload(
 __all__ = ["build_issue_opened_payload", "build_pull_request_opened_payload"]
 ```
 
-- [ ] **Step 4: Create the runs and decisions builders**
+- [ ] **Step 4: Verify imports**
 
-`openbot/testing/builders/runs.py`:
-
-```python
-"""TaskRun / RunRecord factories. Read openbot.application.state.runs_repo
-for the actual model shape before customising — this file is a TODO
-stub the engineer MUST fill before any test depends on it."""
-
-from __future__ import annotations
-
-
-def build_run_record(**overrides):  # type: ignore[no-untyped-def]
-    raise NotImplementedError(
-        "Read openbot.application.state.runs_repo and "
-        "openbot.infrastructure.persistence.models.TaskRun first."
-    )
-
-
-__all__ = ["build_run_record"]
-```
-
-`openbot/testing/builders/decisions.py`:
-
-```python
-"""Decision factory. Read openbot.application.dispatcher for the
-Decision dataclass shape; replace this stub with a real builder."""
-
-from __future__ import annotations
-
-
-def build_decision(**overrides):  # type: ignore[no-untyped-def]
-    raise NotImplementedError(
-        "Read openbot.application.dispatcher.Decision first."
-    )
-
-
-__all__ = ["build_decision"]
-```
-
-> **Engineer note:** runs.py and decisions.py are placeholder stubs
-> because their consumed shapes are infrequently used and may not be
-> needed by every layer. Implement them on first use; do NOT export
-> them from `openbot.testing.builders` until they're real.
-
-- [ ] **Step 5: Verify imports**
-
-Run: `uv run python -c "from openbot.testing.builders import events, payloads, runs, decisions; print('ok')"`
+Run: `uv run python -c "from openbot.testing.builders import events, payloads; print('ok')"`
 Expected: `ok`
 
 Run: `uv run python -c "from openbot.testing.builders.payloads import build_issue_opened_payload; print(build_issue_opened_payload(repo='acme/api'))"`
 Expected: a dict with `repository.full_name == 'acme/api'`.
 
-- [ ] **Step 6: Commit**
+Run: `uv run python -c "from openbot.testing.builders.events import build_issue_opened_event; e=build_issue_opened_event(); print(e.kind, e.repo, e.actor_type)"`
+Expected: `EventKind.ISSUE_OPENED owner/repo User`
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git add openbot/testing/builders
-git commit -m "feat(testing): add event/payload/runs/decision builders (stubs for runs/decisions)"
+git commit -m "feat(testing): add UnifiedEvent + GitHub payload builders"
 ```
+
+> **Engineer note:** `runs.py` and `decisions.py` builders are
+> intentionally NOT created here. Add them on first use in a later
+> task — the rule is *no fake/builder lands without a test that needs
+> it*. When you do add one, mirror the events.py shape: read the model
+> first (`openbot.infrastructure.persistence.models.TaskRun`,
+> `openbot.application.dispatcher` Decision/Result types), then write
+> a typed factory with explicit kwargs and a frozen-dataclass return.
 
 ### Task 1.4: Fakes — write the canonical FakeQueue
 
@@ -2065,8 +2096,6 @@ git add -A
 git commit -m "test(unit): final pass — durations + xdist clean"
 ```
 
-PLACEHOLDER:PHASE_3_END
-
 ---
 
 ## Phase 4 — Contract layer (12 ports)
@@ -2961,7 +2990,7 @@ git add -A
 git commit -m "test(contract): whole layer under budget"
 ```
 
-## Phase 5: Integration layer tests
+## Phase 5 — Integration layer tests
 
 The integration layer assembles use cases (triage, review, fix, chat),
 the dispatcher, the middleware chain, persistence, queue, and agent
@@ -5010,7 +5039,7 @@ git add -A
 git commit -m "test(integration): whole layer under 4-minute budget"
 ```
 
-## Phase 6: Smoke layer tests
+## Phase 6 — Smoke layer tests
 
 The smoke layer is the boot-invariant safety net. Each test imports a
 top-level entrypoint, builds it with the fake-backed dependencies,
@@ -5460,7 +5489,7 @@ git add tests/smoke/test_budget.py
 git commit -m "test(smoke): per-layer wall-clock budget guard"
 ```
 
-## Phase 7: E2E layer tests
+## Phase 7 — E2E layer tests
 
 E2E tests assemble the **whole stack** with fakes and drive it from a
 realistic event payload. They are the strongest local signal that
@@ -6011,7 +6040,7 @@ git add tests/e2e/test_error_recovery.py
 git commit -m "test(e2e): error recovery scenario"
 ```
 
-## Phase 8: Real-service layer + cassettes + GH Actions
+## Phase 8 — Real-service layer + cassettes + GH Actions
 
 The real-service layer is the only place where `tests/` talks to a
 real database, real Redis, real GitHub API (replayed from cassettes),
@@ -6699,4 +6728,499 @@ git add .github/workflows/test-real-service.yml
 git commit -m "ci: nightly real-service workflow"
 ```
 
-PLACEHOLDER:PHASE_8_BODY
+### Task 8.10: GitHub Actions — manual workflow
+
+**Files:**
+- Create: `.github/workflows/test-manual.yml`
+
+The manual workflow runs the same matrix as nightly but on demand —
+useful for re-recording cassettes after a GitHub API change.
+
+- [ ] **Step 1: Write the workflow**
+
+```yaml
+name: test-manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      layer:
+        description: "Layer to run"
+        required: true
+        default: "all"
+        type: choice
+        options: ["all", "real_service", "e2e", "integration"]
+
+permissions:
+  contents: read
+
+jobs:
+  manual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with: { enable-cache: true }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: uv sync --dev --extra testing
+      - name: run selected layer
+        run: |
+          if [ "${{ inputs.layer }}" = "all" ]; then
+            uv run pytest tests/ -v
+          else
+            uv run pytest "tests/${{ inputs.layer }}" -v
+          fi
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add .github/workflows/test-manual.yml
+git commit -m "ci: manual workflow for re-recording cassettes"
+```
+
+## Phase 9 — Makefile + pre-commit + docs
+
+This phase wires the new test layout into the developer workflow:
+new make targets so each layer can be run independently, the existing
+pre-commit hooks updated to call the new layout, and the developer
+docs that explain the layered model.
+
+Spec coverage: §9 (developer workflow), §13 (security boundaries).
+
+### Task 9.1: Makefile rewrite — per-layer targets
+
+**Files:**
+- Modify: `Makefile`
+
+The current `make test` runs everything against the old `tests/`
+folder. Replace it with per-layer targets that map to the layered
+directory structure, plus an aggregate `test` that runs the local
+loop (unit + contract + smoke).
+
+- [ ] **Step 1: Update the `.PHONY` block in `Makefile`**
+
+```make
+.PHONY: help install sync hooks \
+        test test-unit test-contract test-integration test-smoke \
+        test-e2e test-real-service test-budget \
+        lint lint-fix lint-imports fmt fmt-check check \
+        dev dev-server dev-smee run worker smoke setup \
+        secret-scan check-cassettes doctor db-init \
+        compose-up compose-down compose-logs compose-ps clean distclean
+```
+
+- [ ] **Step 2: Replace the test targets**
+
+Replace the existing `test:` and `test-fast:` blocks with:
+
+```make
+# ─── tests by layer ──────────────────────────────────────────────
+test: test-unit test-contract test-smoke ## Local fast loop (unit+contract+smoke)
+
+test-unit: ## Layer 1 — pure logic, no IO
+	$(PYTEST) tests/unit -q -n auto
+
+test-contract: ## Layer 2 — Port shape, fake-vs-real double-run
+	$(PYTEST) tests/contract -q -n auto
+
+test-integration: ## Layer 3 — use cases assembled with fakes
+	$(PYTEST) tests/integration -q
+
+test-smoke: ## Layer 4 — boot invariants + linter contracts
+	$(PYTEST) tests/smoke -q
+
+test-e2e: ## Layer 5 — full stack with fakes
+	$(PYTEST) tests/e2e -q
+
+test-real-service: ## Layer 6 — postgres / redis / github via cassettes
+	$(PYTEST) tests/real_service -v
+
+test-budget: ## Wall-clock budget guard (opt-in)
+	OPENBOT_TEST_BUDGET_RUN=1 $(PYTEST) tests/smoke/test_budget.py -v
+```
+
+- [ ] **Step 3: Update `check` target**
+
+The verification trio now references the layered tests. Replace:
+
+```make
+check: fmt-check lint test ## Verification trio (fmt-check + lint + test)
+```
+
+- [ ] **Step 4: Add `check-cassettes` target**
+
+```make
+check-cassettes: ## Scan VCR cassettes for leaked secrets
+	$(PY) python scripts/check-cassettes.py
+```
+
+- [ ] **Step 5: Run `make help` to confirm**
+
+Run: `make help`
+Expected: new targets visible — `test-unit`, `test-contract`,
+`test-integration`, `test-smoke`, `test-e2e`, `test-real-service`,
+`test-budget`, `check-cassettes`.
+
+- [ ] **Step 6: Run `make check`**
+
+Run: `make check`
+Expected: fmt-check + lint + (unit+contract+smoke) all green.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add Makefile
+git commit -m "chore(make): per-layer test targets + check-cassettes"
+```
+
+### Task 9.2: pre-commit config update
+
+**Files:**
+- Modify: `.pre-commit-config.yaml`
+
+The pre-commit run on every commit must enforce:
+  1. ruff format + lint + import order (already configured)
+  2. import-linter contracts (new in Phase 6)
+  3. cassette secret scan (new in Phase 8.6)
+  4. unit tests (cheap, under 20 s)
+
+Integration / e2e / real_service must NOT run in pre-commit — they
+exceed the typical commit cycle. They run in CI.
+
+- [ ] **Step 1: Update `.pre-commit-config.yaml`**
+
+Append (or merge) the following hook entries:
+
+```yaml
+  - repo: local
+    hooks:
+      - id: import-linter
+        name: import-linter — layer contracts
+        entry: uv run lint-imports
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: pytest-unit
+        name: pytest unit (fast)
+        entry: uv run pytest tests/unit -q -x
+        language: system
+        pass_filenames: false
+        types: [python]
+        stages: [pre-commit]
+```
+
+(The cassette hook from Task 8.6 is already added.)
+
+- [ ] **Step 2: Run `pre-commit run --all-files`**
+
+Run: `pre-commit run --all-files`
+Expected: all hooks pass.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add .pre-commit-config.yaml
+git commit -m "chore(pre-commit): import-linter + unit-tests gate"
+```
+
+### Task 9.3: Developer docs — testing README
+
+**Files:**
+- Create: `docs/testing/README.md`
+
+The testing README is the single document a new contributor reads
+to understand the layered system. It should be short and prescriptive,
+not a re-statement of the spec.
+
+- [ ] **Step 1: Write the README**
+
+```markdown
+# OpenBot Testing
+
+OpenBot's tests are organized into **six layers**, each with a clear
+purpose and budget. Pick the right layer for what you're testing.
+
+## Layers at a glance
+
+| Layer          | What it tests                                  | IO                          | Typical wall |
+| -------------- | ---------------------------------------------- | --------------------------- | ------------ |
+| `unit`         | pure logic, no async, no IO                    | none                        | < 20 s       |
+| `contract`     | every Port's shape, fake vs in-process real    | fakeredis / aiosqlite       | < 60 s       |
+| `integration`  | use cases assembled with fakes                 | none (in-process fakes)     | < 4 min      |
+| `smoke`        | boot invariants, import-linter, budgets        | none                        | < 30 s       |
+| `e2e`          | whole stack from webhook to side-effect        | none (in-process fakes)     | < 2 min      |
+| `real_service` | postgres / redis / github cassettes / smee     | env-driven, opt-in locally  | < 8 min      |
+
+## Where do I add a new test?
+
+```dot
+digraph picker {
+    Start [shape=diamond, label="Does it call the LLM\nfor behaviour?"];
+    Eval [label="evals/  (PRD §8.3)"];
+    Pure [shape=diamond, label="Pure function\nonly?"];
+    Unit [label="tests/unit/"];
+    Port [shape=diamond, label="Testing a Port\nshape?"];
+    Contract [label="tests/contract/"];
+    Multi [shape=diamond, label="Multiple components\ntogether?"];
+    Integration [label="tests/integration/"];
+    Stack [shape=diamond, label="Webhook -> side-effect?"];
+    E2E [label="tests/e2e/"];
+    Real [label="tests/real_service/"];
+
+    Start -> Eval [label="yes"];
+    Start -> Pure [label="no"];
+    Pure -> Unit [label="yes"];
+    Pure -> Port [label="no"];
+    Port -> Contract [label="yes"];
+    Port -> Multi [label="no"];
+    Multi -> Integration [label="yes"];
+    Multi -> Stack [label="no"];
+    Stack -> E2E [label="yes"];
+    Stack -> Real [label="no, real svc"];
+}
+```
+
+## Common commands
+
+| Need to ...                                  | Run                                |
+| -------------------------------------------- | ---------------------------------- |
+| Local fast loop (every commit)               | `make check` (= fmt + lint + unit+contract+smoke) |
+| Single layer                                 | `make test-unit` etc.              |
+| Whole local pyramid                          | `make test-unit test-contract test-integration test-smoke test-e2e` |
+| Real services (need env)                     | `make test-real-service`           |
+| Re-record GitHub cassettes                   | `OPENBOT_VCR_MODE=once make test-real-service` |
+
+## Real-service env vars
+
+`tests/real_service/` modules call `pytest.skip(allow_module_level=True)`
+when their env var is missing, so the layer is no-op locally unless
+you opt in:
+
+| Var                            | Purpose                            |
+| ------------------------------ | ---------------------------------- |
+| `OPENBOT_TEST_POSTGRES_URL`    | postgres real-service tests       |
+| `OPENBOT_TEST_REDIS_URL`       | redis real-service tests          |
+| `OPENBOT_TEST_GITHUB_REPO`     | GitHub cassette tests             |
+| `OPENBOT_TEST_GITHUB_PR`       | GitHub PR number for cassette     |
+| `OPENBOT_TEST_SMEE_PAYLOAD`    | path to a captured webhook payload |
+| `OPENBOT_VCR_MODE`             | `none` (default), `once`, `new_episodes` |
+
+## What NOT to put in tests/
+
+- LLM behaviour assertions ("does the model answer correctly?") —
+  those belong in `evals/` per PRD §8.3.
+- Real GitHub PR creation. Reads via cassette; writes only in eval
+  / production.
+- Anything that requires Docker daemon. `tests/real_service/` reads
+  service URLs from env; CI provides them via Actions service
+  containers.
+
+## Adding a new Port
+
+When you add a new file under `openbot/application/ports/`:
+
+1. Add a fake under `openbot/testing/fakes/<port>.py` with a module-level
+   `_PROTOCOL_CHECK: Final[YourPort] = YourFake()` to lock the type.
+2. Add a contract test under `tests/contract/test_<port>_contract.py`
+   that runs against both the fake and an in-process real impl.
+3. The smoke layer's `test_contract_coverage.py` will fail if you forget.
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add docs/testing/README.md
+git commit -m "docs(testing): six-layer system overview"
+```
+
+### Task 9.4: CLAUDE.md verification section
+
+**Files:**
+- Modify: `CLAUDE.md`
+
+The project-level `CLAUDE.md` tells future agentic workers how to
+verify a change. It currently says `make check` runs unit tests; we
+need to teach it the layered model so agents pick the right command.
+
+- [ ] **Step 1: Update the "Verification commands" block in `CLAUDE.md`**
+
+Replace the existing block with:
+
+```markdown
+## Verification commands
+
+After any Python change:
+
+```bash
+make check   # fmt + lint + unit + contract + smoke (the local fast loop)
+```
+
+For deeper validation:
+
+```bash
+make test-integration   # Layer 3 — assembled use cases with fakes
+make test-e2e           # Layer 5 — whole stack with fakes
+make test-real-service  # Layer 6 — opt-in via OPENBOT_TEST_* env vars
+```
+
+See [`docs/testing/README.md`](./docs/testing/README.md) for the
+six-layer model and where to put new tests.
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add CLAUDE.md
+git commit -m "docs(claude): point verification at layered tests"
+```
+
+## Phase 10 — Final acceptance verification
+
+This phase is the runbook for confirming the rebuild meets the spec
+acceptance checklist (§12.4). Each step runs a known command and
+asserts the documented expected output. If any step fails, do NOT
+mark the migration complete — go back and fix the failing layer.
+
+### Task 10.1: Spec §12.4 acceptance checklist
+
+**Files:**
+- (verification only)
+
+- [ ] **Step 1: Layer-by-layer green run**
+
+Run each layer and confirm green:
+
+```bash
+uv run pytest tests/unit -q -n auto
+uv run pytest tests/contract -q -n auto
+uv run pytest tests/integration -q
+uv run pytest tests/smoke -q
+uv run pytest tests/e2e -q
+```
+
+Expected: every layer all-pass.
+
+- [ ] **Step 2: Aggregate budget**
+
+Run: `time uv run pytest tests/unit tests/contract tests/smoke -q -n auto`
+Expected: real time under **2 minutes** on a laptop.
+
+Run: `time uv run pytest tests/integration -q`
+Expected: real time under **4 minutes**.
+
+Run: `time uv run pytest tests/e2e -q`
+Expected: real time under **2 minutes**.
+
+- [ ] **Step 3: import-linter green**
+
+Run: `uv run lint-imports`
+Expected: `Contracts: 3 kept, 0 broken.`
+
+- [ ] **Step 4: Coverage invariant**
+
+Run: `uv run pytest tests/smoke/test_contract_coverage.py -v`
+Expected: 2 PASSED — every Port has a contract test file.
+
+- [ ] **Step 5: Cassette scan green**
+
+Run: `python scripts/check-cassettes.py`
+Expected: exit 0; no findings.
+
+- [ ] **Step 6: pre-commit green on a synthetic edit**
+
+```bash
+echo "# touch" >> openbot/__init__.py
+pre-commit run --files openbot/__init__.py
+git checkout -- openbot/__init__.py
+```
+
+Expected: every hook passes.
+
+- [ ] **Step 7: Real-service smoke (with env)**
+
+If you have local Postgres + Redis running:
+
+```bash
+OPENBOT_TEST_POSTGRES_URL=postgresql+asyncpg://... \
+OPENBOT_TEST_REDIS_URL=redis://localhost:6379/15 \
+make test-real-service
+```
+
+Expected: postgres + redis tests pass; github tests skip (no token).
+
+### Task 10.2: PR + rollback safety
+
+**Files:**
+- (verification only)
+
+- [ ] **Step 1: Confirm rollback tag exists**
+
+Run: `git tag --list 'pre-test-rebuild'`
+Expected: the tag is present (set in Phase 0).
+
+If anything in production breaks after merge, recovery is one
+command: `git revert --no-edit pre-test-rebuild..HEAD -- tests/ openbot/testing/`.
+
+- [ ] **Step 2: Full diff review**
+
+Run: `git diff --stat pre-test-rebuild..HEAD | tail -5`
+Expected: a sane number of insertions / deletions; no surprise files
+outside the expected paths (`tests/`, `openbot/testing/`,
+`.github/workflows/`, `Makefile`, `pyproject.toml`,
+`.pre-commit-config.yaml`, `CLAUDE.md`, `docs/testing/`,
+`scripts/check-cassettes.py`).
+
+- [ ] **Step 3: Push branch and open PR**
+
+```bash
+git push -u origin feat/tests-rebuild
+gh pr create --title "feat(tests): rebuild test suite into 6-layer pyramid" \
+             --body-file docs/superpowers/specs/2026-05-24-tests-rebuild-design.md
+```
+
+PR description should reference:
+  - the spec at `docs/superpowers/specs/2026-05-24-tests-rebuild-design.md`
+  - the plan at `docs/superpowers/plans/2026-05-24-tests-rebuild.md`
+  - the rollback tag `pre-test-rebuild`
+
+- [ ] **Step 4: Wait for CI**
+
+PR-fast workflow runs on the PR. Expected: green within 5 minutes.
+
+After merge, push-full workflow runs on `main`. Expected: green
+within 12 minutes.
+
+Nightly workflow runs at 06:00 UTC the next day. Expected: green.
+
+### Task 10.3: Archive plan + spec
+
+**Files:**
+- Move: `docs/superpowers/plans/2026-05-24-tests-rebuild.md` → `docs/_archive/superpowers/`
+- Move: `docs/superpowers/specs/2026-05-24-tests-rebuild-design.md` → `docs/_archive/superpowers/`
+
+This step is required by the user's CLAUDE.md memory rule:
+"Whenever a slice/feature is implemented and committed, immediately
+archive completed plans/specs to `docs/_archive/superpowers/`."
+
+- [ ] **Step 1: Move both files**
+
+```bash
+mkdir -p docs/_archive/superpowers
+git mv docs/superpowers/plans/2026-05-24-tests-rebuild.md docs/_archive/superpowers/
+git mv docs/superpowers/specs/2026-05-24-tests-rebuild-design.md docs/_archive/superpowers/
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git commit -m "docs(archive): move tests-rebuild plan + spec after merge"
+```
+
+- [ ] **Step 3: Confirm `docs/superpowers/plans/` is clean**
+
+Run: `ls docs/superpowers/plans/ docs/superpowers/specs/`
+Expected: no `2026-05-24-tests-rebuild*` files.
