@@ -59,6 +59,14 @@ def _isolate_openbot_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Ite
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_BASE_URL",
         "OPENAI_API_KEY",
+        # Langfuse — strip so @observe / CallbackHandler don't submit unit-test
+        # traces to the real Langfuse project. Mirrors the LangSmith scrub above.
+        # Doppler dev config injects these into the shell; without stripping they
+        # leak into pytest worker processes and pollute production trace data.
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_BASE_URL",
+        "LANGFUSE_HOST",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("LANGSMITH_TRACING", "false")

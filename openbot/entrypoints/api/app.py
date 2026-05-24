@@ -196,6 +196,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await redis_client.aclose()
         if db_engine is not None:
             await db_engine.dispose()
+        # Flush buffered Langfuse trace events before the ASGI app shuts down.
+        # Same rationale as the worker shutdown — prevents trace loss on SIGTERM.
+        try:
+            from langfuse import get_client as _get_lf_client
+
+            _get_lf_client().shutdown()
+        except Exception:
+            _logger.debug("langfuse_shutdown_failed", exc_info=True)
 
 
 app = FastAPI(
