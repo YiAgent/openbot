@@ -432,22 +432,20 @@ async def test_on_task_end_writes_aggregate_metrics(monkeypatch) -> None:
     session.project_id = "proj-agg"
     hook._sessions["e2"] = session
 
-    # Build a fake TaskEnd with results
+    # Build a fake TaskEnd with results — scores is list[EvalScore]-shaped
     metric_val = MagicMock()
     metric_val.value = 0.75
 
-    scorer_metrics = MagicMock()
-    scorer_metrics.metrics = {"mean": metric_val}
+    eval_score = MagicMock()
+    eval_score.scorer = "my_scorer"
+    eval_score.metrics = {"mean": metric_val}
 
     results = MagicMock()
-    results.scores = {"my_scorer": scorer_metrics}
-
-    stats = MagicMock()
-    stats.completed_samples = 10
+    results.scores = [eval_score]
+    results.completed_samples = 10
 
     log = MagicMock()
     log.results = results
-    log.stats = stats
 
     end_event = MagicMock()
     end_event.eval_id = "e2"
