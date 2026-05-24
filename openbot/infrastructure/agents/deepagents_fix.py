@@ -74,11 +74,14 @@ dialogue, or markdown prose outside the schema.
 to ~2000 chars; the use case will truncate further if needed for GitHub).
 """
 
-# recursion_limit=60: fix loops with 20 tool calls visit ~50 LangGraph nodes
-# (ToolCall + ToolMessage + alternating LLM nodes). 60 gives headroom.
+# recursion_limit=200: fix loops with 20 tool calls visit ~50 LangGraph nodes
+# (ToolCall + ToolMessage + alternating LLM nodes). GLM-5.1 takes more internal
+# steps than the previous model, so 60 triggers GraphRecursionError. 200 gives
+# ample headroom for the larger tool budget while model_call_limit=20 still
+# bounds runaway loops before the wall_seconds ceiling fires.
 # tool_call_limit=20: matches retired ToolBudget value; enforced by middleware.
 _FIX_LIMITS = AgentRunLimits(
-    recursion_limit=60,
+    recursion_limit=200,
     tool_call_limit=20,
     model_call_limit=20,
     wall_seconds=1800,  # 30-minute hard ceiling for fix loops
