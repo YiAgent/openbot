@@ -187,8 +187,10 @@ class DaytonaSandboxAdapter(SandboxPort):
         params = daytona_mod.CreateSandboxFromImageParams(image=_DEFAULT_IMAGE)
         sandbox = await asyncio.to_thread(client.create, params)
         # Ensure git is present and the workspace exists.
-        await asyncio.to_thread(sandbox.process.exec, _INSTALL_GIT_SCRIPT, 60)
-        await asyncio.to_thread(sandbox.process.exec, f"mkdir -p {shlex.quote(_WORKSPACE)}", 10)
+        await asyncio.to_thread(sandbox.process.exec, _INSTALL_GIT_SCRIPT, timeout=60)
+        await asyncio.to_thread(
+            sandbox.process.exec, f"mkdir -p {shlex.quote(_WORKSPACE)}", timeout=10
+        )
         return cls(_client=client, _sandbox=sandbox)
 
     @classmethod
@@ -232,7 +234,7 @@ class DaytonaSandboxAdapter(SandboxPort):
             strategy=strategy,
         )
         # 5 minute timeout — generous for repos up to a few hundred MB.
-        response = await asyncio.to_thread(self._sandbox.process.exec, clone_cmd, 300)
+        response = await asyncio.to_thread(self._sandbox.process.exec, clone_cmd, timeout=300)
         if response.exit_code not in (0, None):
             safe_output = _redact_tokens(response.result or "")
             raise RuntimeError(
@@ -241,7 +243,7 @@ class DaytonaSandboxAdapter(SandboxPort):
 
     async def git_diff(self) -> str:
         diff_cmd = f"cd {shlex.quote(self.workspace)} && git diff"
-        response = await asyncio.to_thread(self._sandbox.process.exec, diff_cmd, 30)
+        response = await asyncio.to_thread(self._sandbox.process.exec, diff_cmd, timeout=30)
         return response.result or ""
 
     async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
@@ -251,7 +253,7 @@ class DaytonaSandboxAdapter(SandboxPort):
         # expired by the time we push, so we rewrite it with the *fresh*
         # token before pushing.
         get_url = f"cd {shlex.quote(self.workspace)} && git remote get-url origin"
-        url_resp = await asyncio.to_thread(self._sandbox.process.exec, get_url, 10)
+        url_resp = await asyncio.to_thread(self._sandbox.process.exec, get_url, timeout=10)
         if url_resp.exit_code not in (0, None):
             raise RuntimeError(f"git remote get-url failed: {url_resp.result!r}")
         old_url = (url_resp.result or "").strip()
@@ -269,7 +271,7 @@ class DaytonaSandboxAdapter(SandboxPort):
             f"git commit -m {shlex.quote(message)} && "
             f"git push {shlex.quote(new_url)} HEAD:{shlex.quote(branch_ref)}"
         )
-        push_resp = await asyncio.to_thread(self._sandbox.process.exec, push_script, 120)
+        push_resp = await asyncio.to_thread(self._sandbox.process.exec, push_script, timeout=120)
         if push_resp.exit_code not in (0, None):
             safe_output = _redact_tokens(push_resp.result or "")
             raise RuntimeError(
@@ -302,7 +304,7 @@ class DaytonaSandboxAdapter(SandboxPort):
             else self.workspace
         )
         cmd = f"cd {shlex.quote(target)} && find . -type f | head -n {int(max)}"
-        response = await asyncio.to_thread(self._sandbox.process.exec, cmd, 15)
+        response = await asyncio.to_thread(self._sandbox.process.exec, cmd, timeout=15)
         if response.exit_code not in (0, None):
             return []
         return [line for line in (response.result or "").splitlines() if line.strip()]
@@ -325,7 +327,7 @@ class DaytonaSandboxAdapter(SandboxPort):
         # injection-safe even when individual args contain spaces or quotes.
         joined = " ".join(shlex.quote(a) for a in command)
         cmd = f"cd {shlex.quote(self.workspace)} && {env_prefix}{joined}"
-        response = await asyncio.to_thread(self._sandbox.process.exec, cmd, timeout_seconds)
+        response = await asyncio.to_thread(self._sandbox.process.exec, cmd, timeout=timeout_seconds)
         extras: dict[str, Any] = getattr(response, "additional_properties", {}) or {}
         exit_code = (
             response.exit_code if response.exit_code is not None else int(extras.get("code") or 0)
