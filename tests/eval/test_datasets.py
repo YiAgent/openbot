@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from evals.runtime import datasets
+from evals.data import _samples as datasets
 
 
 def _example(**kwargs):  # type: ignore[no-untyped-def]

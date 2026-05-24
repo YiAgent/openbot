@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 
-from evals.runtime.predictions import empty_swt_prediction
+from evals.data._predictions import empty_swt_prediction
 
 logger = logging.getLogger(__name__)
 

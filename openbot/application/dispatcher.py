@@ -20,6 +20,7 @@ then the fix use case posts a graceful "sandbox not configured" comment.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 import sys as _sys
@@ -510,29 +511,61 @@ async def execute_handler(
                 )
             except Exception:
                 _logger.exception("check_run_update_failed_on_success")
-    except Exception:
-        _logger.exception(
-            "workflow_handler_crashed",
-            extra={
-                "delivery_id": event.delivery_id,
-                "repo": event.repo,
-                "feature": dispatch.feature.value,
-            },
-        )
+    except BaseException as exc:
+        # ``BaseException`` (not ``Exception``) so ``asyncio.CancelledError``
+        # — which is a ``BaseException`` since Python 3.8 — also lands here.
+        # Without this branch a cancelled handler skips the PATCH and the
+        # GitHub UI shows the "OpenBot Analysis" check stuck in_progress
+        # forever.
+        is_cancelled = isinstance(exc, asyncio.CancelledError)
+        if is_cancelled:
+            _logger.info(
+                "workflow_handler_cancelled",
+                extra={
+                    "delivery_id": event.delivery_id,
+                    "repo": event.repo,
+                    "feature": dispatch.feature.value,
+                },
+            )
+        else:
+            _logger.exception(
+                "workflow_handler_crashed",
+                extra={
+                    "delivery_id": event.delivery_id,
+                    "repo": event.repo,
+                    "feature": dispatch.feature.value,
+                },
+            )
         if check_run_id:
             try:
+                if is_cancelled:
+                    conclusion = "cancelled"
+                    title = "Analysis Cancelled"
+                    summary = (
+                        f"Workflow `{dispatch.feature.value}` was cancelled "
+                        "(superseded, shut down, or timed out)."
+                    )
+                else:
+                    conclusion = "failure"
+                    title = "Handler Crash"
+                    summary = f"Handler `{dispatch.feature.value}` raised unexpectedly."
                 await adapter.update_check_run(
                     event,
                     check_run_id,
                     status="completed",
-                    conclusion="failure",
-                    output={
-                        "title": "Handler Crash",
-                        "summary": f"Handler `{dispatch.feature.value}` raised unexpectedly.",
-                    },
+                    conclusion=conclusion,
+                    output={"title": title, "summary": summary},
                 )
             except Exception:
                 _logger.exception("check_run_update_failed_on_handler_crash")
+        # ``Exception`` keeps the historical fail-soft contract (the
+        # worker / decide_and_enqueue layers expect ``execute_handler``
+        # to never raise out for normal handler bugs).
+        # ``CancelledError`` (and any other ``BaseException``) MUST
+        # propagate — the outer cancel scope, ``asyncio.shield``, or
+        # ``KeyboardInterrupt`` handler depends on it.
+        if not isinstance(exc, Exception):
+            raise
 
 
 # Late binding: ``openbot.dispatcher.classifier`` indirectly re-imports

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 
-from evals.runtime.predictions import SweBenchPrediction, empty_swe_prediction
+from evals.data._predictions import SweBenchPrediction, empty_swe_prediction
 from openbot.application.sandbox_factory_deps import build_sandbox_factory
 from openbot.core.settings import Settings
 from openbot.evaluation import run_fix_sample
