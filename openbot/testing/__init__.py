@@ -12,6 +12,6 @@ The `evals/` tree IS allowed to import from here.
 
 from __future__ import annotations
 
-# Re-exports populated as fakes/builders/inmemory land. Keep this list
-# sorted; CI doesn't enforce order but reviewers do.
-__all__: list[str] = []
+from openbot.testing.fakes import EnqueueRecord, FakeQueue
+
+__all__ = ["EnqueueRecord", "FakeQueue"]

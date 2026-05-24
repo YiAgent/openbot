@@ -8,4 +8,6 @@ Failure injection is explicit (constructor kwargs), never via env vars.
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from openbot.testing.fakes.queue import EnqueueRecord, FakeQueue
+
+__all__ = ["EnqueueRecord", "FakeQueue"]
