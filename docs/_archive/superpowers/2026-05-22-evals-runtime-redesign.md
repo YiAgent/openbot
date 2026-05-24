@@ -1,7 +1,8 @@
 # OpenBot Evals Runtime Redesign — use production agents and harness
 
-**Status:** design. Awaiting implementation plan.
+**Status:** in-progress. Preliminary cleanup landed; structural refactor pending.
 **Date:** 2026-05-22
+**Updated:** 2026-05-23
 **Branch (proposed):** `refactor/evals-runtime-openbot-harness`
 **Related specs:** `2026-05-22-v0-1-product-closure-design.md`, `2026-05-21-unified-sandbox-entry-design.md`, `2026-05-22-deepagents-runtime-design.md`.
 
@@ -53,6 +54,31 @@ Target state:
 
 ---
 
+## What has already landed
+
+Commit `8190f18` (`refactor(evals): decouple agents from inspect_ai + consolidate files`)
+completed a preliminary clean-up inside `evals/agents/`:
+
+| Done | Detail |
+|---|---|
+| ✅ Merged convergence + finalizer | `convergence_middleware.py` + `structured_finalizer.py` → `agents/middleware.py` |
+| ✅ Consolidated LangSmith path | `agents/langsmith.py` moved to `inspect/langsmith.py`; all callers updated |
+| ✅ Deleted 6 obsolete files | `agents/langsmith_feedback.py` and 5 others removed |
+| ✅ Stripped noisy docstrings | Solver, task, and agent module comments trimmed |
+
+**What this did NOT do (the core structural refactor is still pending):**
+
+- `evals/agents/` still exists with `baseline.py`, `chat.py`, `fix.py`, `middleware.py`, `review.py`, `test_generation.py`
+- `evals/sandboxes/` still exists (daytona, docker, modal backends intact)
+- `evals/common/` and `evals/inspect/` are still separate directories (not merged to `runtime/`)
+- `openbot/evaluation/` facade does not exist
+- `sandbox_factory` is not wired through the worker — `execute_handler` receives `None`
+- `evals/common/config.py` still owns all `OPENBOT_DEEPAGENTS_*` env vars
+- Tasks still use verbose names (`fix_swe_bench_verified.py`, `chat_swe_qa_pro.py`)
+- Solvers still use benchmark-coupled names (`swe_fix.py`, `swe_qa.py`, `swe_test.py`)
+
+---
+
 ## Current problem
 
 The current eval tree mixes three responsibilities:
@@ -61,15 +87,16 @@ The current eval tree mixes three responsibilities:
 2. OpenBot-like agent implementation.
 3. Sandbox / repository setup.
 
-The problematic areas are:
+The problematic areas are (as of 2026-05-23, post 8190f18 cleanup):
 
 | Current area | Problem |
 |---|---|
-| `evals/agents/*` | Defines eval-only prompts, model resolver, middleware, structured finalizer, and DeepAgents factories. This is not the product agent. |
-| `evals/sandboxes/*` | Owns Docker/Modal/Daytona sandbox and clone logic. This bypasses OpenBot's unified sandbox entry. |
-| `evals/common/*` and `evals/inspect/*` | Artificial split; both are eval runtime support code. |
-| `evals/solvers/swe_fix.py`, `swe_test.py`, `swe_qa.py` | Names mix benchmark, capability, and implementation detail. |
-| `deepagents_baseline_*` task/solver identifiers | Encode an obsolete implementation strategy into public eval surfaces. |
+| `evals/agents/` | Still defines eval-only prompts, model resolver (`baseline.py`), middleware (`middleware.py`), and DeepAgents agent builders (`chat.py`, `fix.py`, `review.py`, `test_generation.py`). This is not the product agent. The 8190f18 cleanup consolidated files within this directory but did not remove it. |
+| `evals/sandboxes/` | Unchanged — still owns Docker/Modal/Daytona sandbox and repo-clone logic (`daytona_backend.py`, `docker_backend.py`, `modal_backend.py`, `repo_setup.py`, `factory.py`). Bypasses OpenBot's unified sandbox entry. |
+| `evals/common/` and `evals/inspect/` | Still separate directories. `evals/inspect/langsmith.py` now exists (moved from `agents/`); both directories remain as-is, not merged to `runtime/`. |
+| `evals/solvers/swe_fix.py`, `swe_test.py`, `swe_qa.py` | Names unchanged — still benchmark-coupled. |
+| `evals/common/config.py` | Still owns all `OPENBOT_DEEPAGENTS_*` and `OPENBOT_SANDBOX_BACKEND` env vars that belong in OpenBot product config. |
+| `openbot/` worker + dispatcher | `execute_handler` accepts `sandbox_factory` kwarg but the worker always passes `None`. `build_sandbox_factory()` helper does not exist in `openbot/core/dependencies.py`. |
 
 The result is that a passing eval can still leave the production OpenBot path
 broken, especially around `resolve_checkout`, `sandbox_factory`, `sandbox.clone`,
@@ -420,14 +447,16 @@ openbot/evaluation/
 
 ## Move / delete map
 
-### Delete
+Status legend: ✅ done · ⏳ pending
+
+### Delete (both ⏳ pending)
 
 ```text
-evals/agents/
+evals/agents/         # 8190f18 pruned internals but did not remove the directory
 evals/sandboxes/
 ```
 
-### Merge
+### Merge (⏳ all pending)
 
 ```text
 evals/common/config.py              -> evals/runtime/config.py
@@ -435,31 +464,32 @@ evals/common/datasets.py            -> evals/runtime/datasets.py
 evals/common/prediction_export.py   -> evals/runtime/prediction_export.py
 evals/common/predictions.py         -> evals/runtime/predictions.py
 evals/inspect/hf_datasets.py        -> evals/runtime/hf_datasets.py
-evals/inspect/langsmith.py          -> evals/runtime/langsmith.py
+evals/inspect/langsmith.py          -> evals/runtime/langsmith.py    # ✅ langsmith.py already at inspect/; just needs dir rename
 evals/inspect/task_runtime.py       -> evals/runtime/environment.py
 ```
 
-### Delete if no remaining import after solver rewrite
+### Delete if no remaining import after solver rewrite (⏳ pending)
 
+Current status of these files: still in use by eval-only agent layer.
 ```text
-evals/common/messages.py
-evals/common/termination.py
-evals/common/usage.py
+evals/common/messages.py    # used by agents/
+evals/common/termination.py # used by agents/middleware.py
+evals/common/usage.py       # used by solvers via agents/
 ```
 
-### Rename tasks
+### Rename tasks (⏳ all pending)
 
 ```text
 evals/tasks/fix_swe_bench_verified.py   -> evals/tasks/fix_swe_bench.py
 evals/tasks/chat_swe_qa_pro.py          -> evals/tasks/chat_swe_qa.py
 evals/tasks/test_swt_bench_verified.py  -> evals/tasks/test_swt_bench.py
-evals/tasks/review_martian.py           -> evals/tasks/review_martian.py
+evals/tasks/review_martian.py           -> evals/tasks/review_martian.py  (no change)
 ```
 
-### Rename solvers
+### Rename + rewrite solvers (⏳ all pending)
 
 ```text
-evals/solvers/review.py    -> evals/solvers/review.py
+evals/solvers/review.py    -> evals/solvers/review.py         (no rename; full rewrite)
 evals/solvers/swe_fix.py   -> evals/solvers/fix.py
 evals/solvers/swe_qa.py    -> evals/solvers/chat.py
 evals/solvers/swe_test.py  -> evals/solvers/test_generation.py
@@ -467,6 +497,16 @@ evals/solvers/swe_test.py  -> evals/solvers/test_generation.py
 
 All renamed solver files must be rewritten as thin OpenBot facade adapters, not
 mechanically moved with their old implementation.
+
+### New files to create (⏳ all pending)
+
+```text
+openbot/evaluation/__init__.py
+openbot/evaluation/adapters.py
+openbot/evaluation/results.py
+openbot/evaluation/runner.py
+openbot/evaluation/samples.py
+```
 
 ---
 
@@ -544,16 +584,31 @@ unsupported_reason = "not_implemented"
 
 ## Test updates
 
-Delete tests that validate the removed eval-only agent/sandbox layer:
+### ✅ Already deleted (landed in 8190f18)
+
+```text
+tests/eval/test_convergence_middleware.py   # deleted
+tests/eval/test_structured_finalizer.py    # deleted
+```
+
+### ⏳ Still present — delete when agents/sandboxes layer is removed
+
+These tests validate the eval-only agent/sandbox layer that will be deleted:
 
 ```text
 tests/eval/test_agents_layer.py
 tests/eval/test_deepagents_budgets.py
 tests/eval/test_deepagents_resilience.py
-tests/eval/test_convergence_middleware.py
-tests/eval/test_structured_finalizer.py
 tests/eval/test_docker_backend.py
 tests/eval/test_sandbox_factory.py
+```
+
+### ⏳ Currently active tests — will need revision or replacement
+
+```text
+tests/eval/test_review_solver.py         # currently tests evals.agents.review path
+tests/eval/test_review_solver_usage.py   # currently tests evals.agents usage tracking
+tests/eval/test_swe_solver_contracts.py  # currently tests evals.sandboxes contracts
 ```
 
 Add or rewrite tests around:
@@ -582,16 +637,31 @@ Test intent:
 
 ## Implementation order
 
-1. Add product-side `build_sandbox_factory(...)` and wire it through the worker.
-2. Add `openbot/evaluation` sample/result/runner facade.
-3. Merge `evals/common` and `evals/inspect` into `evals/runtime` with import-only
-   changes.
-4. Rename task and solver files to the stable naming scheme.
-5. Rewrite solvers to call `openbot.evaluation`.
-6. Delete `evals/agents` and `evals/sandboxes`.
-7. Remove eval-owned model/sandbox config.
-8. Update README, Makefile targets, and tests.
-9. Run unit tests and one smoke sample per supported eval surface.
+Status legend: ✅ done · ⏳ pending
+
+**Preliminary cleanup (✅ done in 8190f18)**
+- Merged `convergence_middleware.py` + `structured_finalizer.py` → `agents/middleware.py`
+- Redirected all callers from `agents/langsmith` → `inspect/langsmith`
+- Deleted 6 obsolete files; stripped verbose module docstrings
+
+**Remaining structural work (⏳ all pending):**
+
+1. ⏳ Add product-side `build_sandbox_factory(settings)` in
+   `openbot/core/dependencies.py`; wire it through `consume_loop` →
+   `execute_handler` so the worker no longer passes `None`.
+2. ⏳ Add `openbot/evaluation/` facade: `samples.py`, `results.py`,
+   `runner.py`, `adapters.py`.
+3. ⏳ Merge `evals/common` and `evals/inspect` into `evals/runtime`
+   (import-redirects only; no logic change).
+4. ⏳ Rename task and solver files to stable naming scheme.
+5. ⏳ Rewrite solvers to call `openbot.evaluation` facade; remove all
+   `evals.agents.*` imports from solvers.
+6. ⏳ Delete `evals/agents/` and `evals/sandboxes/`.
+7. ⏳ Remove `OPENBOT_DEEPAGENTS_*` and `OPENBOT_SANDBOX_BACKEND` from
+   `evals/common/config.py`.
+8. ⏳ Update README, Makefile targets, and tests (delete obsolete test
+   files; add new contract tests).
+9. ⏳ Run unit tests and one smoke sample per supported eval surface.
 
 ---
 
