@@ -24,6 +24,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from openbot import __version__
+from openbot.application.sandbox_factory_deps import build_sandbox_factory
 from openbot.core.logging import configure_root_logger
 from openbot.core.settings import Settings, get_settings
 from openbot.infrastructure.adapters.github import GitHubAdapter
@@ -122,6 +123,7 @@ async def _main() -> int:
             # spam the log. The Event is the single source of truth.
             loop.add_signal_handler(sig, shutdown.set)
 
+        sandbox_factory = build_sandbox_factory(settings)
         consumers = [
             asyncio.create_task(
                 consume_loop(
@@ -131,6 +133,7 @@ async def _main() -> int:
                     consumer_name=f"consumer-{i}",
                     shutdown=shutdown,
                     agent_checkpointer=cp,
+                    sandbox_factory=sandbox_factory,
                 ),
                 name=f"openbot-consumer-{i}",
             )
