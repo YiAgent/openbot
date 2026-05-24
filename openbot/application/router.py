@@ -248,6 +248,20 @@ def dispatch_for(event: UnifiedEvent) -> Dispatch | None:
             sandbox_policy=SandboxPolicy.NO_SANDBOX,
         )
 
+    if event.kind is EventKind.ISSUE_CLOSED:
+        # Route close events so the state machine can transition to CLOSED and
+        # send a cancellation signal to any in-progress triage/fix run (PRD §4.7).
+        # The triage handler no-ops for non-triage event kinds — the only work
+        # that matters happens in ingest_webhook (state machine + cancel signal).
+        if event.issue_number is None or event.installation_id is None:
+            return None
+        return Dispatch(
+            Feature.TRIAGE,
+            _resolve_handler(Feature.TRIAGE),
+            task_id,
+            sandbox_policy=SandboxPolicy.NO_SANDBOX,
+        )
+
     return None
 
 

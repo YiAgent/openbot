@@ -343,3 +343,21 @@ def test_dispatch_marks_pr_labeling_as_no_sandbox(kind: EventKind) -> None:
     d = dispatch_for(_event(kind=kind, issue_number=None, pr_number=42))
     assert d is not None
     assert d.sandbox_policy is SandboxPolicy.NO_SANDBOX
+
+
+def test_dispatch_routes_issue_closed_to_triage_no_sandbox() -> None:
+    """ISSUE_CLOSED must reach the router so the state machine can send a
+    cancellation signal and transition the DB row to State.CLOSED (Gap 2 fix).
+    The triage handler no-ops for ISSUE_CLOSED; only the state machine logic
+    in ingest_webhook matters.
+    """
+    d = dispatch_for(_event(kind=EventKind.ISSUE_CLOSED))
+    assert d is not None
+    assert d.feature is Feature.TRIAGE
+    assert d.sandbox_policy is SandboxPolicy.NO_SANDBOX
+
+
+def test_dispatch_issue_closed_without_issue_number_ignored() -> None:
+    """Close events missing issue_number must be dropped (same guard as open)."""
+    d = dispatch_for(_event(kind=EventKind.ISSUE_CLOSED, issue_number=None))
+    assert d is None

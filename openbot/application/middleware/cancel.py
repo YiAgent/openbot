@@ -63,9 +63,12 @@ _COMMENT_MAX_CHARS: Final = 4096
 # Anchored + length-bounded + character-class compile = ReDoS-safe.
 # `re.IGNORECASE` matches STOP / Stop / stop equally; `re.UNICODE`
 # (the default in Python 3) is needed so the CJK keywords match too.
-# We compile once with `<keywords>` filled at first use to honor any
-# user override from config.cancel.comment_keywords.
-_MENTION_RE: Final = re.compile(r"^@openbot\s+(.{1,256})\s*$", re.IGNORECASE | re.DOTALL)
+# Matches both @openbot and @yibots so cancellation works regardless of
+# which bot handle the App was installed under — must stay in sync with
+# the chat-mention prefixes in router.py and chat_parser.py.
+_MENTION_RE: Final = re.compile(
+    r"^@(?:openbot|yibots)(?:\[bot\])?\s+(.{1,256})\s*$", re.IGNORECASE | re.DOTALL
+)
 
 
 # ───────────────────────── kill switch ─────────────────────────

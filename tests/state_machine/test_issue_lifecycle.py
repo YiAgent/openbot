@@ -164,7 +164,13 @@ async def test_opened_twice_second_ignored_already_running(sm: SMHarness) -> Non
 
 
 async def test_unrelated_label_ignored(sm: SMHarness) -> None:
-    """I-09: issues.labeled maps to UNKNOWN kind → router returns None → ignored."""
+    """I-09: issues.labeled with no label payload → state machine returns IGNORE.
+
+    The router dispatches ISSUE_LABELED to TRIAGE so the state machine can
+    detect the cancel-openbot label. When the payload has no "label" key (or
+    carries any label other than "cancel-openbot") the state machine returns
+    IGNORE and ingest_webhook short-circuits without enqueuing a task.
+    """
     body = issue_body("labeled", number=42)
     resp = await sm.client.post(
         "/webhook/github",
@@ -213,6 +219,62 @@ async def test_duplicate_delivery_deduped(sm: SMHarness) -> None:
     assert resp2.json()["status"] == "duplicate"
     # Queue must NOT have grown.
     assert await sm.queue_len() == 1
+
+
+# ── I-04: issues.closed while running → CANCEL, DB → CLOSED ──────────────
+
+
+async def test_closed_while_running_sends_cancel(sm: SMHarness) -> None:
+    """I-04: issues.closed while triage is RUNNING → SM CANCEL, DB → CLOSED.
+
+    The router now dispatches ISSUE_CLOSED so the state machine can:
+      1. Send a cancellation signal to the in-flight run (ingest_webhook).
+      2. Transition the DB row to State.CLOSED.
+
+    The triage handler no-ops for ISSUE_CLOSED (not in _TRIAGE_KINDS), so no
+    extra reply is posted — only the cancellation machinery fires.
+    """
+    # First: start a triage run.
+    body1 = issue_body("opened", number=42)
+    await sm.client.post(
+        "/webhook/github",
+        content=body1,
+        headers=sign(body1, event="issues", delivery="d-04-open"),
+    )
+    assert await sm.db_state(_ISSUE_RK) == State.RUNNING
+    run_id = await sm.db_run_id(_ISSUE_RK)
+    assert run_id is not None
+
+    # Second: close the issue → should CANCEL the run.
+    body2 = issue_body("closed", number=42)
+    resp = await sm.client.post(
+        "/webhook/github",
+        content=body2,
+        headers=sign(body2, event="issues", delivery="d-04-close"),
+    )
+
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["status"] == "accepted"
+    assert data["feature"] == "triage"
+    # DB must now reflect CLOSED state.
+    assert await sm.db_state(_ISSUE_RK) == State.CLOSED
+    # Cancellation flag set on the prior run.
+    assert await sm.cancel_flag(run_id) is True
+
+
+async def test_closed_when_idle_is_ignored(sm: SMHarness) -> None:
+    """I-04 (idle): issues.closed on an idle issue → state machine IGNORE → no enqueue."""
+    body = issue_body("closed", number=42)
+    resp = await sm.client.post(
+        "/webhook/github",
+        content=body,
+        headers=sign(body, event="issues", delivery="d-04-idle"),
+    )
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "ignored"
+    assert await sm.queue_len() == 0
 
 
 # ── M-31: bot actor → router drops before state machine ───────────────────

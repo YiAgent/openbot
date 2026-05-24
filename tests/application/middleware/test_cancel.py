@@ -104,6 +104,10 @@ async def test_cancel_label_proceeds_when_no_issue_or_pr() -> None:
         ("@openbot 停", True),
         ("@openbot 取消", True),
         ("@openbot Stop everything", True),  # case-insensitive on keyword
+        # @yibots handle must also trigger cancel (Bug 4 fix).
+        ("@yibots stop", True),
+        ("@yibots cancel", True),
+        ("@yibots[bot] stop", True),  # with [bot] suffix
         ("@openbot help me", False),  # different command word
         ("hello @openbot stop", False),  # not at start of message
         ("@openbot-dev stop", False),  # different bot login
