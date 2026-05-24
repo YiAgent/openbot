@@ -77,7 +77,11 @@ prose outside the schema.
 """
 
 _REVIEW_LIMITS = AgentRunLimits(
-    recursion_limit=25,
+    # 50 gives headroom for LangGraph's per-node step counting (each
+    # model-call + router + tool-exec ≈ 3-4 steps), so middleware limits
+    # (tool_call_limit / model_call_limit) terminate cleanly before the
+    # recursion ceiling is hit.
+    recursion_limit=50,
     tool_call_limit=5,  # matches retired ToolBudget value
     model_call_limit=10,
     model_timeout_s=120,
