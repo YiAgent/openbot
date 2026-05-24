@@ -9,7 +9,6 @@ from typing import Any
 from inspect_ai.scorer import Scorer
 from pydantic import BaseModel
 
-from evals.agents.baseline import resolve_model
 from evals.common.config import get_eval_config
 from evals.common.prediction_export import prediction_exporter
 from evals.inspect.langsmith import LangSmithExperiment
@@ -33,8 +32,18 @@ def git_sha() -> str:
 
 
 def resolve_model_label() -> str:
-    """Best-effort model label for task and experiment metadata."""
-    return resolve_model()
+    """Best-effort model label for task and experiment metadata.
+
+    Returns the OpenBot production model identifier. After the Phase 2 refactor,
+    the model is determined by ``openbot.core.settings`` — the label here is
+    metadata-only (LangSmith / export), not a routing decision.
+    """
+    try:
+        from openbot.core.settings import Settings
+
+        return Settings().model or "openbot"
+    except Exception:
+        return "openbot"
 
 
 def build_export_experiment(

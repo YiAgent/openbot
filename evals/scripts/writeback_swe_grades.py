@@ -23,7 +23,7 @@ Run::
     doppler run --project openbot --config dev -- \\
       uv run python -m evals.scripts.writeback_swe_grades \\
         --evaluation-result openbot-202605...<run_id>.<model>.json \\
-        --experiment-name fix_swe_bench_verified-deepagents_baseline-...
+        --experiment-name fix_swe_bench_verified-openbot_agent-...
 """
 
 from __future__ import annotations

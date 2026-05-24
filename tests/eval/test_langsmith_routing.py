@@ -1,4 +1,4 @@
-"""Unit tests for single-project trace routing in evals.agents.langsmith."""
+"""Unit tests for single-project trace routing in evals.inspect.langsmith."""
 
 from __future__ import annotations
 

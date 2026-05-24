@@ -32,11 +32,10 @@ Anywhere ``docker.from_env()`` may be called against a remote daemon::
 
     apply_ssh_patch()
 
-This module deliberately lives under :mod:`evals.common` rather than
-:mod:`evals.sandboxes` — the latter's ``__init__`` eagerly imports
-the docker/daytona/modal backend modules, which instantiate
+This module deliberately lives under :mod:`evals.common` as a standalone
+shim, separate from backend modules that might instantiate
 ``EvalSettings()`` at import time via :func:`get_eval_config`. That
-eager config load is fine for agent callers but a footgun for the
+eager config load is fine for production callers but a footgun for the
 vendored SWT-bench harness: importing the harness package would
 trigger pydantic-settings to read every ``OPENBOT_*`` (and worse,
 bare ``PREDICTIONS=…``) env var, which collides with Makefile

@@ -24,7 +24,7 @@ orchestration:
      top-level ``src``.
 
   2. ``__init__.py`` opens with
-       from evals.sandboxes.docker_ssh import apply_ssh_patch
+       from evals.common.docker_ssh import apply_ssh_patch
        apply_ssh_patch()
      so the harness can reach a remote Docker daemon via
      ``DOCKER_HOST=ssh://…`` on a macOS dev box without requiring

@@ -48,11 +48,14 @@ Rules:
 """
 
 _CHAT_LIMITS = AgentRunLimits(
-    # 30 gives headroom for LangGraph's per-node step counting (model,
-    # router, tool-exec ≈ 3 steps per iteration). model_call_limit=3 with
-    # 'continue' still needs ~9+ steps; 10 was too tight.
+    # 30 gives headroom for LangGraph's per-node step counting.
     recursion_limit=30,
-    model_call_limit=3,
+    # deepagents makes 3-5 internal model calls (planning + reasoning +
+    # final response). The old limit of 3 triggered ModelCallLimitMiddleware
+    # exit_behavior="end" with a synthetic "Model call limits exceeded" reply
+    # before the useful response was produced. 10 gives the framework room
+    # while still bounding runaway loops.
+    model_call_limit=10,
     model_timeout_s=60,
     max_output_tokens=4_096,
 )
