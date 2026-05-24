@@ -292,10 +292,11 @@ async def test_review_responder_passes_recursion_limit(monkeypatch) -> None:
         session_factory=None,  # type: ignore[arg-type]
     )
 
-    # Bumped from 25 → 50 so middleware limits (tool_call_limit / model_call_limit)
-    # have headroom to fire before LangGraph's per-node recursion ceiling is hit
-    # (each model-call + router + tool-exec ≈ 3-4 steps per iteration).
-    assert seen["config"]["recursion_limit"] == 50
+    # Bumped to 100 so middleware limits (tool_call_limit / model_call_limit)
+    # fire before the LangGraph recursion ceiling. Each LangGraph node (model,
+    # router, tool-exec) costs one step; 5 tool calls + post-budget model
+    # calls easily fit within 100 but not within the old default of 25.
+    assert seen["config"]["recursion_limit"] == 100
 
 
 async def test_review_responder_passes_checkpointer_and_thread_id(
