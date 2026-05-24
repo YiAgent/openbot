@@ -9,10 +9,6 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from evals.runtime.prediction_export import (
-    prediction_exporter,
-    predictions_path,
-)
 from evals.runtime.predictions import (
     SweBenchPrediction,
     SweQaProAnswer,
@@ -20,6 +16,8 @@ from evals.runtime.predictions import (
     SwtBenchPrediction,
     empty_swe_prediction,
     empty_swt_prediction,
+    prediction_exporter,
+    predictions_path,
 )
 
 
