@@ -71,6 +71,12 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
   to close concurrent double-registration window
 - `AsyncPostgresSaver` postgres URL dialect normalisation (postgres→postgresql+asyncpg)
 - Langfuse host resolution priority (`LANGFUSE_BASE_URL` before legacy `LANGFUSE_HOST`)
+- `cache_fake.py`: `InMemorySandboxCache.acquire()` now **consumes** the entry (removes from `_index`
+  under the lock) before releasing — prevents two concurrent callers from receiving the same live
+  `SandboxPort` object; matches `DaytonaSnapshotCache`'s fresh-workspace-per-acquire semantics
+- `cache_fake.py`: `_inject_token` now validates the HTTPS hostname against `_ALLOWED_CLONE_HOSTS`
+  (`{"github.com"}`) before injecting an installation token — prevents token leakage to non-GitHub
+  URLs; mirrors the allowlist guard in `DaytonaSandboxAdapter._inject_token`
 
 ### Removed
 
