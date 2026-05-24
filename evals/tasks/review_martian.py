@@ -4,7 +4,7 @@ Dataset lives in **LangSmith** (published by
 ``evals/scripts/build_review_martian_dataset.py``); this task pulls Examples via
 ``evals.common.datasets.langsmith_dataset``. There is no local JSONL — routing
 between the public / internal LangSmith projects is driven by the allowlist
-in ``evals.agents.langsmith`` (``configure_tracing_for_dataset``).
+in ``evals.inspect.langsmith`` (``configure_tracing_for_dataset``).
 
 Run::
 
@@ -35,7 +35,7 @@ from evals.scorers.review_judge import (
     judge_verdict as martian_judge_verdict,
 )
 from evals.scorers.review_overlap import Finding, JudgeVerdict, compute_review_overlap
-from evals.solvers.review import deepagents_baseline_review_solver
+from evals.solvers.review import openbot_review_solver
 
 JudgeFn = Callable[[Finding, Finding], JudgeVerdict]
 
@@ -98,9 +98,8 @@ def _build_task(
     # API key is absent.
     configure_tracing_for_dataset(dataset_version)
 
-    # solver_family is the LangSmith Experiment grouping key. Use the same
-    # deepagents_baseline vocabulary across all v0.1 task agents so the
-    # Experiments tab stays comparable across the 4 task families.
+    # solver_family is the LangSmith Experiment grouping key — keep consistent
+    # across all v0.1 task agents so the Experiments tab stays comparable.
     solver_family = solver_id
 
     # Surface this run as a LangSmith Experiment so review F1 shows up on the
@@ -124,9 +123,9 @@ def _build_task(
             feedback_config=catalog.unit_feedback_config,
         ),
         # No task-level sandbox: review is closed-form over the diff in
-        # ``state.input_text``. Patch/test tasks use Docker at the solver
-        # layer (see evals/sandboxes/docker_backend.py); review doesn't need
-        # repo access because the diff IS the input.
+        # ``state.input_text``. Fix/test tasks use a Daytona sandbox at the
+        # solver layer; review doesn't need repo access because the diff IS
+        # the input.
         metadata={
             "dataset_version": dataset_version,
             "solver_id": solver_id,
@@ -141,18 +140,18 @@ def _build_task(
 
 @task
 def review_martian_baseline_crb() -> Task:
-    """Deepagents baseline + verbatim Martian-CRB LLM judge.
+    """OpenBot review solver + verbatim Martian-CRB LLM judge.
 
-    Pair the durable ``deepagents_baseline`` review solver with the judge
-    surface from ``withmartian/code-review-benchmark`` (model
-    ``claude-opus-4-5``, temperature 0, max_tokens 512, prompt body byte-
-    identical to martian's ``step3_judge_comments.py``). Same judge powers
-    open-swe's reviewer baseline, so micro/macro P/R/F1 numbers are
-    directly comparable across the two projects.
+    Pairs the OpenBot review solver with the judge surface from
+    ``withmartian/code-review-benchmark`` (model ``claude-opus-4-5``,
+    temperature 0, max_tokens 512, prompt body byte-identical to martian's
+    ``step3_judge_comments.py``). Same judge powers open-swe's reviewer
+    baseline, so micro/macro P/R/F1 numbers are directly comparable across
+    the two projects.
     """
     return _build_task(
-        solver=deepagents_baseline_review_solver(),
-        solver_id="deepagents_baseline",
+        solver=openbot_review_solver(),
+        solver_id="openbot_agent",
         judge=martian_judge_verdict,
         judge_label="martian_crb_verbatim",
         judge_model_id=MARTIAN_JUDGE_MODEL_ID,

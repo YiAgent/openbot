@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import evals.runtime.environment as _env
 from evals.inspect import hf_datasets, task_runtime
 
 
@@ -74,12 +75,14 @@ def test_build_export_experiment_returns_wrapped_scorer(monkeypatch) -> None:  #
         calls["exporter"] = kwargs
         return ("exporter", kwargs)
 
-    monkeypatch.setattr(task_runtime, "LangSmithExperiment", _Experiment)
-    monkeypatch.setattr(task_runtime, "prediction_exporter", _exporter)
+    # build_export_experiment lives in evals.runtime.environment; patch there so
+    # the function's local references are replaced (task_runtime is a redirect stub).
+    monkeypatch.setattr(_env, "LangSmithExperiment", _Experiment)
+    monkeypatch.setattr(_env, "prediction_exporter", _exporter)
 
     result = task_runtime.build_export_experiment(
         dataset_version="fix_swe_bench_verified",
-        solver_family="deepagents_baseline",
+        solver_family="openbot_agent",
         model="anthropic:test",
         git_sha="abc",
         schema=SimpleNamespace,
@@ -89,7 +92,7 @@ def test_build_export_experiment_returns_wrapped_scorer(monkeypatch) -> None:  #
 
     assert calls["start"] == {
         "dataset_name": "fix_swe_bench_verified",
-        "solver_family": "deepagents_baseline",
+        "solver_family": "openbot_agent",
         "model": "anthropic:test",
         "git_sha": "abc",
     }

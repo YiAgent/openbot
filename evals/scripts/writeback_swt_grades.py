@@ -27,7 +27,7 @@ Run::
     doppler run --project openbot --config dev -- \\
       uv run python -m evals.scripts.writeback_swt_grades \\
         --evaluation-result evaluation_results/anthropic:glm-4.5-air.smoke-astropy-12907-v9-tcp.json \\
-        --experiment-name test_swt_bench_verified-deepagents_baseline-20260517-042351
+        --experiment-name test_swt_bench_verified-openbot_agent-20260517-042351
 
 If ``--experiment-name`` is omitted, the script derives it from the
 predictions filename stem encoded in the report's ``model_name_or_path``

@@ -223,17 +223,14 @@ class LangSmithExperiment:
         is missing — keeps unit tests / offline dev paths working without
         a hard dep on the network.
         """
-        # Lazy import to avoid a cycle — baseline pulls in
-        # langchain stacks we don't want loaded at module top in this file.
-        from evals.agents.baseline import display_model_name
-
         ts = dt.datetime.now(dt.UTC).strftime("%Y%m%d-%H%M%S")
         experiment_name = f"{dataset_name}-{solver_family}-{ts}"
         # ``model`` is stored on both the experiment-level metadata and the
         # per-sample run extras. Strip the LangChain ``provider:`` prefix at
         # the LangSmith boundary so dashboard readers see the actual model
         # served, not our internal routing label.
-        display_model = display_model_name(model) if model else model
+        # Strip provider prefix (e.g. "anthropic:claude-3") for human-readable metadata.
+        display_model = model.split(":", 1)[-1] if model and ":" in model else model
         extra_metadata = {
             "dataset_name": dataset_name,
             "solver_family": solver_family,
