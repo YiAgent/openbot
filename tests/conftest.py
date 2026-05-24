@@ -50,6 +50,15 @@ def _isolate_openbot_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Ite
         "LANGSMITH_PROJECT",
         "LANGCHAIN_PROJECT",
         "LANGSMITH_PROJECT_EVAL",
+        # LLM credentials — strip so tests don't accidentally call real APIs.
+        # These use standard SDK env-var names (not OPENBOT_ prefix) and leak
+        # from developer shells into test processes, bypassing the OPENBOT_*
+        # sweep above. The classifier and runtime read settings.anthropic_api_base
+        # (alias: ANTHROPIC_BASE_URL); without stripping this, tests that
+        # exercise classify_event hit the real proxy instead of the mock.
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
