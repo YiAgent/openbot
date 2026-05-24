@@ -5,8 +5,18 @@ frozen dataclasses. Returns deterministic stream IDs of the form
 `"0-<n>"` (mirrors Redis stream-ID shape so caller code parsing IDs
 keeps working).
 
-Failure injection: `fail_after=N` raises `fail_with` on the (N+1)th
-enqueue. Both default to "never fail".
+Failure injection: when ``fail_after=N`` is set, the fake raises
+``fail_with("FakeQueue: simulated failure")`` once the combined number
+of enqueue/enqueue_task_spec calls reaches ``N`` and on every call
+thereafter — sticky, not one-shot. ``fail_with`` MUST accept a single
+string message arg (true for ``RuntimeError``, ``ValueError``, etc.);
+custom exception types with multi-arg constructors will surface a
+``TypeError`` at injection time. Both default to "never fail".
+
+Pattern note for the other 11 fakes: this fake instantiates with no
+required args so ``_PROTOCOL_CHECK = FakeQueue()`` works at module
+import. Every fake in ``openbot.testing.fakes`` MUST keep an
+all-defaults constructor for the same reason.
 """
 
 from __future__ import annotations
@@ -71,6 +81,7 @@ class FakeQueue:
         resource_key: str | None = None,
         event_seq: int = 0,
     ) -> str:
+        """See :class:`openbot.application.ports.queue.QueuePort`."""
         self._maybe_fail()
         self._events.append(
             EnqueueRecord(
@@ -88,11 +99,15 @@ class FakeQueue:
         return self._next_stream_id()
 
     async def enqueue_task_spec(self, spec: TaskSpec) -> str:
+        """See :class:`openbot.application.ports.queue.QueuePort`."""
         self._maybe_fail()
         self._task_specs.append(spec)
         return self._next_stream_id()
 
     def _maybe_fail(self) -> None:
+        # Failure budget is shared across both methods — the count is the
+        # combined size of _events and _task_specs. Tests that exercise
+        # mixed enqueue paths only need to set fail_after once.
         used = len(self._events) + len(self._task_specs)
         if self.fail_after is not None and used >= self.fail_after:
             raise self.fail_with("FakeQueue: simulated failure")
