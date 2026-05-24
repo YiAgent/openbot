@@ -168,28 +168,28 @@ smoke: smoke-docker smoke-review smoke-fix smoke-test smoke-chat ## Run all impl
 smoke-docker: ## Verify DockerSandboxBackend end-to-end (local docker daemon, ~10 s, free)
 	cd .. && $(PY) python scripts/smoke_docker_backend.py
 
-smoke-review: ## Run review baseline smoke eval
-	$(call inspect_banner,review_martian_baseline_crb)
+smoke-review: ## Run OpenBot review eval (martian-CRB judge)
+	$(call inspect_banner,review_martian_openbot)
 	cd .. && $(DOPPLER) $(INSPECT) eval \
-		'evals/tasks/review_martian.py@review_martian_baseline_crb' \
+		'evals/tasks/review_martian.py@review_martian_openbot' \
 		--limit $(LIMIT) $(INSPECT_FLAGS)
 
-smoke-fix: ## Run SWE-bench fix baseline smoke eval
-	$(call inspect_banner,fix_swe_bench_verified_deepagents)
+smoke-fix: ## Run SWE-bench Verified fix eval
+	$(call inspect_banner,fix_swe_bench)
 	cd .. && $(DOPPLER) $(INSPECT) eval \
-		'evals/tasks/fix_swe_bench_verified.py@fix_swe_bench_verified_deepagents' \
+		'evals/tasks/fix_swe_bench.py@fix_swe_bench' \
 		--limit $(LIMIT) $(INSPECT_FLAGS)
 
-smoke-test: ## Run SWT-Bench test-generation baseline smoke eval
-	$(call inspect_banner,test_swt_bench_verified_deepagents)
+smoke-test: ## Run SWT-Bench Verified test-generation eval
+	$(call inspect_banner,test_swt_bench)
 	cd .. && $(DOPPLER) $(INSPECT) eval \
-		'evals/tasks/test_swt_bench_verified.py@test_swt_bench_verified_deepagents' \
+		'evals/tasks/test_swt_bench.py@test_swt_bench' \
 		--limit $(LIMIT) $(INSPECT_FLAGS)
 
-smoke-chat: ## Run SWE-QA-Pro chat "+Agent" smoke eval — paper Table 2 right column (Docker sandbox + repo clone + read tools)
-	$(call inspect_banner,chat_swe_qa_pro_openbot)
+smoke-chat: ## Run SWE-QA-Pro chat eval
+	$(call inspect_banner,chat_swe_qa)
 	cd .. && $(DOPPLER) $(INSPECT) eval \
-		'evals/tasks/chat_swe_qa_pro.py@chat_swe_qa_pro_openbot' \
+		'evals/tasks/chat_swe_qa.py@chat_swe_qa' \
 		--limit $(LIMIT) $(INSPECT_FLAGS)
 
 # ─── End-to-end SWT pipeline (smoke → grade → writeback) ────────
