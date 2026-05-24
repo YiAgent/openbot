@@ -61,6 +61,7 @@ Langfuse
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -296,4 +297,64 @@ def get_langfuse_handler(
     return CallbackHandler(trace_context=trace_context)
 
 
-__all__ = ["get_langfuse_handler", "init_langfuse", "init_langsmith", "init_sentry"]
+def create_langfuse_root_span(
+    *,
+    name: str,
+    run_id: str,
+    metadata: dict[str, Any] | None = None,
+) -> contextlib.AbstractContextManager[object] | None:
+    """Create a root Langfuse span to unify all operations in one trace.
+
+    This returns a sync context manager that should wrap the agent invocation.
+    All LangChain/LangGraph operations within this context will become
+    child spans of this root span, resulting in a single unified trace
+    instead of many scattered traces.
+
+    Returns ``None`` when Langfuse is not configured.
+
+    Usage::
+
+        with create_langfuse_root_span(name="fix-issue", run_id=..., metadata=...) as root:
+            if root is not None:
+                root.span.update(input=...)
+            result = await agent.ainvoke(...)
+            if root is not None:
+                root.span.update(output=...)
+    """
+    import os
+
+    try:
+        from langfuse import Langfuse
+    except ImportError:
+        return None
+
+    if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
+        return None
+
+    lf = Langfuse()
+
+    # Create a deterministic trace_id from run_id
+    trace_id = Langfuse.create_trace_id(seed=run_id)
+
+    @contextlib.contextmanager
+    def _root_span_context():
+        """Context manager that creates a root span and yields it."""
+        root_span = lf.start_as_current_observation(
+            name=name,
+            as_type="agent",
+            trace_context={"trace_id": trace_id},
+            metadata=metadata,
+        )
+        with root_span as span:
+            yield span
+
+    return _root_span_context()
+
+
+__all__ = [
+    "create_langfuse_root_span",
+    "get_langfuse_handler",
+    "init_langfuse",
+    "init_langsmith",
+    "init_sentry",
+]
