@@ -151,9 +151,7 @@ async def maybe_run_triage(ctx: PreflightContext) -> None:
     from openbot.dispatcher.classifier import TriageClassifierOutput
 
     classifier: TriageClassifierOutput | None = (
-        ctx.classifier_output
-        if isinstance(ctx.classifier_output, TriageClassifierOutput)
-        else None
+        ctx.classifier_output if isinstance(ctx.classifier_output, TriageClassifierOutput) else None
     )
 
     if classifier is not None:
@@ -162,7 +160,9 @@ async def maybe_run_triage(ctx: PreflightContext) -> None:
         message = _ACK_WITH_LABEL_TEMPLATE.format(
             actor=event.actor or "there",
             type_label=type_label or classifier.type,
-            priority=priority_label.replace("priority:", "") if priority_label else classifier.severity_guess,
+            priority=priority_label.replace("priority:", "")
+            if priority_label
+            else classifier.severity_guess,
         )
     else:
         message = _ACK_TEMPLATE.format(actor=event.actor or "there")
