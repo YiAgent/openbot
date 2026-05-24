@@ -26,8 +26,8 @@ from __future__ import annotations
 from inspect_ai import Task, task
 
 from evals.runtime.config import get_eval_config
+from evals.runtime.datasets import load_issue_dataset
 from evals.runtime.environment import build_export_experiment, git_sha, resolve_model_label
-from evals.runtime.hf_datasets import load_issue_dataset
 from evals.runtime.langsmith import configure_tracing_for_dataset
 from evals.runtime.predictions import SweBenchPrediction
 from evals.solvers.fix import openbot_fix_solver
