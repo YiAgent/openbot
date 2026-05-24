@@ -10,7 +10,9 @@ from __future__ import annotations
 import pytest
 
 from openbot.infrastructure.llm.sanitize import (
+    SYSTEM_PROMPT_PREAMBLE,
     UserInputSource,
+    sanitize_user_text,
     wrap_user_input,
 )
 
@@ -105,3 +107,70 @@ class TestAllSources:
         out = wrap_user_input("test", source=source)
         assert f'source="{source.value}"' in out
         assert out.endswith("</user_input>")
+
+
+# ── sanitize_user_text — secret redaction ─────────────────────────────────────
+
+
+_GH_TOKEN = "ghs_" + "A" * 36
+_GH_PAT = "ghp_" + "B" * 40
+_GH_OAUTH = "gho_" + "C" * 36
+_AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
+_AWS_TEMP = "ASIAXXXXXXXXXXXXXXXXXXX"
+_PEM_RSA = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
+_PEM_GENERIC = "-----BEGIN PRIVATE KEY-----\nXXXX\n-----END PRIVATE KEY-----"
+_PEM_EC = "-----BEGIN EC PRIVATE KEY-----\nXXXX\n-----END EC PRIVATE KEY-----"
+_PEM_FAKE = "<FAKE_RSA_PRIVATE_KEY_FOR_TEST>"
+
+
+@pytest.mark.unit
+class TestSanitizeUserText:
+    @pytest.mark.parametrize(
+        "raw, redact_tag, absent_fragment",
+        [
+            (_GH_TOKEN, "[REDACTED:GH_TOKEN]", "ghs_"),
+            (_GH_PAT, "[REDACTED:GH_TOKEN]", "ghp_"),
+            (_GH_OAUTH, "[REDACTED:GH_TOKEN]", "gho_"),
+            (f"key={_AWS_KEY}", "[REDACTED:AWS_KEY]", "AKIA"),
+            (f"tmp={_AWS_TEMP}", "[REDACTED:AWS_KEY]", "ASIA"),
+            (_PEM_RSA, "[REDACTED:PEM]", "PRIVATE KEY"),
+            (_PEM_GENERIC, "[REDACTED:PEM]", "PRIVATE KEY"),
+            (_PEM_EC, "[REDACTED:PEM]", "EC PRIVATE KEY"),
+            (f"key: {_PEM_FAKE}", "[REDACTED:PEM]", "<FAKE_RSA_PRIVATE_KEY_FOR_TEST>"),
+        ],
+    )
+    def test_redacts_secret(self, raw: str, redact_tag: str, absent_fragment: str) -> None:
+        result = sanitize_user_text(raw)
+        assert redact_tag in result
+        assert absent_fragment not in result
+
+    def test_passthrough_for_clean_text(self) -> None:
+        clean = "This is a normal comment with no secrets."
+        assert sanitize_user_text(clean) == clean
+
+    def test_multiple_secrets_all_redacted(self) -> None:
+        text = f"token: {_GH_TOKEN}\naws: {_AWS_KEY}\n{_PEM_RSA}"
+        result = sanitize_user_text(text)
+        assert "[REDACTED:GH_TOKEN]" in result
+        assert "[REDACTED:AWS_KEY]" in result
+        assert "[REDACTED:PEM]" in result
+
+    def test_never_raises_on_edge_cases(self) -> None:
+        for value in ["", "   ", "normal text"]:
+            sanitize_user_text(value)  # must not raise
+
+
+# ── SYSTEM_PROMPT_PREAMBLE ────────────────────────────────────────────────────
+
+
+@pytest.mark.unit
+class TestSystemPromptPreamble:
+    def test_is_non_empty_string(self) -> None:
+        assert isinstance(SYSTEM_PROMPT_PREAMBLE, str)
+        assert len(SYSTEM_PROMPT_PREAMBLE) > 100
+
+    def test_mentions_user_input_tag(self) -> None:
+        assert "user_input" in SYSTEM_PROMPT_PREAMBLE
+
+    def test_instructs_treat_as_data(self) -> None:
+        assert "DATA" in SYSTEM_PROMPT_PREAMBLE
