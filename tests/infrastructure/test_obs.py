@@ -374,19 +374,24 @@ def test_get_langfuse_handler_returns_distinct_instances(monkeypatch) -> None:  
     assert h1 is not h2
 
 
-def test_get_langfuse_handler_no_forced_trace_id(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Handler must be constructed without a ``trace_context`` trace_id.
+def test_get_langfuse_handler_uses_fresh_trace_id(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Handler must be constructed with a *fresh random UUID* trace_context.
 
-    The old implementation used ``Langfuse.create_trace_id(seed=run_id)``
-    to force a deterministic trace_id.  When the same sample_id was reused
-    across eval runs, all observations merged into one Langfuse trace —
-    making it impossible to distinguish separate eval runs.
+    Without ``trace_context``, each LangGraph sub-operation (LLM call, tool
+    call) creates its own Langfuse root trace instead of nesting under the
+    agent trace — GENERATION and TOOL spans scatter across dozens of
+    disconnected traces with ``Session: None``.
 
-    The fix: no ``trace_context`` is passed; Langfuse assigns a fresh UUID
-    per invocation.  Trace name and session grouping travel via LangChain
-    RunnableConfig metadata keys (``langfuse_trace_name`` /
-    ``langfuse_session_id``), which the CallbackHandler reads automatically.
+    The fix: pass ``trace_context={"trace_id": str(uuid.uuid4())}`` so all
+    LangGraph sub-spans share one trace_id.  The UUID must be random (never
+    seeded from a fixed input) so repeated eval runs of the same sample each
+    produce a distinct, non-overlapping trace.
+
+    Trace name and session grouping still travel via LangChain RunnableConfig
+    metadata keys (``langfuse_trace_name`` / ``langfuse_session_id``).
     """
+    import re
+
     captured_kwargs: list[dict] = []
 
     class _CapturingHandler:
@@ -401,9 +406,47 @@ def test_get_langfuse_handler_no_forced_trace_id(monkeypatch) -> None:  # type: 
 
     assert len(captured_kwargs) == 1
     kwargs = captured_kwargs[0]
-    # Must not inject a forced trace_id — fresh UUID is assigned by Langfuse.
-    assert "trace_context" not in kwargs or kwargs.get("trace_context") is None, (
-        "get_langfuse_handler() must not pass trace_context to CallbackHandler; "
-        "deterministic trace_id causes eval re-runs of the same sample to merge traces."
+    # Must pass a trace_context with a valid UUID so LangGraph sub-spans
+    # (LLM calls, tool calls) nest under the same root trace.
+    assert "trace_context" in kwargs, (
+        "get_langfuse_handler() must pass trace_context to keep LangGraph "
+        "sub-operations nested under the agent trace rather than floating as "
+        "separate root traces."
+    )
+    trace_id = (kwargs["trace_context"] or {}).get("trace_id", "")
+    # Langfuse SDK parses trace_id with int(trace_id, 16), so it must be a
+    # 32-char hex string WITHOUT dashes (uuid.hex format, not str(uuid)).
+    hex_re = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
+    assert hex_re.match(trace_id), (
+        f"trace_context.trace_id must be a 32-char hex string (uuid.hex), got: {trace_id!r}"
+    )
+
+
+def test_get_langfuse_handler_fresh_trace_ids_differ(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Two consecutive calls must produce *different* trace_ids.
+
+    This guarantees that separate eval runs of the same sample each get
+    their own distinct trace — not the deterministic hash that caused
+    cross-run trace merging in the old implementation.
+    """
+    captured_kwargs: list[dict] = []
+
+    class _CapturingHandler:
+        def __init__(self, **kwargs: object) -> None:
+            captured_kwargs.append(dict(kwargs))
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
+    _fake_langfuse_module(monkeypatch, fake_handler_cls=_CapturingHandler)
+
+    get_langfuse_handler()
+    get_langfuse_handler()
+
+    assert len(captured_kwargs) == 2
+    id1 = (captured_kwargs[0].get("trace_context") or {}).get("trace_id")
+    id2 = (captured_kwargs[1].get("trace_context") or {}).get("trace_id")
+    assert id1 != id2, (
+        "get_langfuse_handler() must generate a fresh UUID on each call; "
+        "a fixed/seeded trace_id would merge eval re-runs into one Langfuse trace."
     )
 >>>>>>> a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
