@@ -146,3 +146,38 @@ def test_chat_build_task_raises_without_scorer(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(c, "load_for_inspect", MagicMock(return_value=MagicMock()))
     with pytest.raises(ValueError, match="scorer"):
         c.build_task(solver=MagicMock())
+
+
+# ---------------------------------------------------------------------------
+# Task 7: FixDataset
+# ---------------------------------------------------------------------------
+
+
+def test_fix_attrs() -> None:
+    from evals.data.fix import FixDataset
+
+    assert FixDataset.suite == "fix"
+    assert FixDataset.feedback_key == "swe_bench_pass_at_1"
+
+
+def test_fix_classify() -> None:
+    from evals.data.fix import FixDataset
+
+    report = {"resolved": ["a"], "unresolved": ["b"], "error": ["c"]}
+    scores = {iid: score for iid, score, _ in FixDataset.classify(report)}
+    assert scores == {"a": 1.0, "b": 0.0, "c": 0.0}
+
+
+def test_fix_build_task_no_langsmith(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+
+    from inspect_ai.dataset import MemoryDataset, Sample
+
+    from evals.data.fix import FixDataset
+
+    f = FixDataset()
+    fake_dataset = MemoryDataset(samples=[Sample(id="x", input="y")], name="fake")
+    monkeypatch.setattr(f, "load_for_inspect", MagicMock(return_value=fake_dataset))
+    task = f.build_task(solver=MagicMock())
+    for v in (task.metadata or {}).values():
+        assert not hasattr(v, "create_run"), "LangSmith object in Task metadata"
