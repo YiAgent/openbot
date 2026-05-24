@@ -181,3 +181,38 @@ def test_fix_build_task_no_langsmith(monkeypatch: pytest.MonkeyPatch) -> None:
     task = f.build_task(solver=MagicMock())
     for v in (task.metadata or {}).values():
         assert not hasattr(v, "create_run"), "LangSmith object in Task metadata"
+
+
+# ---------------------------------------------------------------------------
+# Task 8: SwtDataset
+# ---------------------------------------------------------------------------
+
+
+def test_swt_attrs() -> None:
+    from evals.data.swt import SwtDataset
+
+    assert SwtDataset.suite == "swt"
+    assert SwtDataset.feedback_key == "swt_bench_pass_at_1"
+
+
+def test_swt_classify() -> None:
+    from evals.data.swt import SwtDataset
+
+    report = {"resolved": ["a"], "unresolved": ["b"], "error": ["c"]}
+    scores = {iid: score for iid, score, _ in SwtDataset.classify(report)}
+    assert scores == {"a": 1.0, "b": 0.0, "c": 0.0}
+
+
+def test_swt_build_task_no_langsmith(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+
+    from inspect_ai.dataset import MemoryDataset, Sample
+
+    from evals.data.swt import SwtDataset
+
+    s = SwtDataset()
+    fake_dataset = MemoryDataset(samples=[Sample(id="x", input="y")], name="fake")
+    monkeypatch.setattr(s, "load_for_inspect", MagicMock(return_value=fake_dataset))
+    task = s.build_task(solver=MagicMock())
+    for v in (task.metadata or {}).values():
+        assert not hasattr(v, "create_run"), "LangSmith object in Task metadata"

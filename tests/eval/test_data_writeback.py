@@ -9,8 +9,7 @@ import pytest
 
 from evals.data._writeback import run_writeback
 
-pytestmark = pytest.mark.skip(reason="enabled in Task 9")
-# Tests are pre-written; remove the skip marker in Task 9 Step 3.
+pytestmark = pytest.mark.skip(reason="enabled in Task 10 when DATASETS singleton wired")
 
 
 @pytest.fixture(params=["fix", "swt"])
