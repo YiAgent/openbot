@@ -101,7 +101,12 @@ def _build_standard_middleware(limits: AgentRunLimits) -> list[AgentMiddleware]:
             stack.append(
                 ToolCallLimitMiddleware(
                     thread_limit=limits.tool_call_limit,
-                    exit_behavior="continue",
+                    # "end" terminates the graph immediately when the tool
+                    # budget is exhausted, preventing the model from cycling
+                    # through blocked-tool responses and hitting the LangGraph
+                    # recursion limit prematurely (each router/tool node costs
+                    # a recursion step, so "continue" burns the budget fast).
+                    exit_behavior="end",
                 )
             )
         if limits.model_call_limit is not None:
