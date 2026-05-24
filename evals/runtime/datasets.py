@@ -1,17 +1,22 @@
-"""LangSmith-backed dataset loader for Inspect AI tasks.
+"""Dataset loaders for Inspect AI tasks.
 
-Source of truth for eval datasets is LangSmith (mirrored from upstream
-benchmarks via ``evals/scripts/build_*_dataset.py``). This helper
-materializes a LangSmith ``Dataset`` into an Inspect ``MemoryDataset`` so
-``Task`` plumbing keeps working without any local ``.jsonl`` checked in.
+Two sources, two shapes:
 
-Each task family has a different example shape (review uses
+- **LangSmith** is the source of truth for eval datasets, mirrored from
+  upstream benchmarks via ``evals/scripts/build_*_dataset.py``. We
+  materialize a LangSmith ``Dataset`` into an Inspect ``MemoryDataset`` so
+  ``Task`` plumbing keeps working without any local ``.jsonl`` checked in.
+- **HuggingFace** loaders cover SWE/SWT-bench-style "issue rows" where
+  the upstream dataset is the canonical artifact and LangSmith mirroring
+  isn't necessary.
+
+Each LangSmith task family has a different example shape (review uses
 ``inputs.diff`` / ``outputs.golden_findings``; chat uses
 ``inputs.question`` / ``outputs.answer``), so callers pass a ``converter``
-to translate LangSmith ``Example`` → Inspect ``Sample``. Two ready-made
+to translate LangSmith ``Example`` → Inspect ``Sample``. Three ready-made
 converters live below.
 
-Why hard-fail when the dataset isn't on LangSmith yet? Because the
+Why hard-fail when a LangSmith dataset isn't published yet? Because the
 alternative — silently falling back to a local file — is exactly the
 duplication the move to LangSmith is meant to remove. The matching
 ``build_*_dataset.py`` is the only place that produces one.
@@ -23,6 +28,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+from datasets import load_dataset
 from inspect_ai.dataset import MemoryDataset, Sample
 
 ExampleConverter = Callable[[Any], Sample]
@@ -149,3 +155,37 @@ def langsmith_dataset(
     # `--limit N` selection across runs.
     samples.sort(key=lambda s: str(s.id))
     return MemoryDataset(samples=samples, name=dataset_version, location=f"langsmith://{ds.id}")
+
+
+# ─── HuggingFace loaders ────────────────────────────────────────────────────
+
+
+def issue_row_to_sample(row: dict[str, Any]) -> Sample:
+    """Convert a SWE/SWT-style issue row into the solver-facing sample shape."""
+    return Sample(
+        id=str(row["instance_id"]),
+        input=str(row.get("problem_statement", "")),
+        target="",
+        metadata={
+            "repo": str(row.get("repo", "")),
+            "base_commit": str(row.get("base_commit", "")),
+            "version": str(row.get("version", "")),
+        },
+    )
+
+
+def load_issue_dataset(
+    *,
+    dataset_name: str,
+    dataset_version: str,
+    split: str = "test",
+) -> MemoryDataset:
+    """Load and sort a HuggingFace issue dataset for deterministic Inspect runs."""
+    rows = load_dataset(dataset_name, split=split)
+    samples = [issue_row_to_sample(dict(row)) for row in rows]
+    samples.sort(key=lambda sample: str(sample.id))
+    return MemoryDataset(
+        samples=samples,
+        name=dataset_version,
+        location=f"huggingface://{dataset_name}",
+    )
