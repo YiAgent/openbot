@@ -25,6 +25,7 @@ raises out of this function — every failure becomes a comment.
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from openbot.application.state.cancellation import checkpoint
@@ -146,6 +147,8 @@ async def _generate_fix_outcome(
     issue: dict[str, Any],
     run_id: str | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
+    per_task_cap_usd: Decimal,
+    session_factory: Any,
 ) -> FixOutcome:
     """Module-level seam — E2E tests monkeypatch this to skip DeepAgents.
 
@@ -162,6 +165,8 @@ async def _generate_fix_outcome(
         issue=issue,
         run_id=run_id,
         checkpointer=checkpointer,
+        per_task_cap_usd=per_task_cap_usd,
+        session_factory=session_factory,
     )
 
 
@@ -228,6 +233,8 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
                     issue=issue,
                     run_id=run_id,
                     checkpointer=checkpointer,
+                    per_task_cap_usd=ctx.config.budget.per_task_cap_usd,
+                    session_factory=ctx.session_factory,
                 )
             except Exception:
                 _logger.exception("fix_agent_failed", extra=_log_extra(event))

@@ -197,7 +197,17 @@ async def test_fix_uses_sandbox_handle_from_context(monkeypatch):
     sandbox = FakeSandboxLifecycle()
     adapter = _adapter()
 
-    async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
+    async def fake_generate(
+        *,
+        sandbox,
+        event,
+        adapter,
+        issue,
+        run_id=None,
+        checkpointer=None,
+        per_task_cap_usd=None,
+        session_factory=None,
+    ):
         return FixOutcome(attempt=_attempt(tests_passed=True))
 
     monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
@@ -246,7 +256,17 @@ async def test_audit_lifecycle_records_pr_url_on_success(monkeypatch):
 
     monkeypatch.setattr(fix_module, "audit_lifecycle", fake_audit_lifecycle)
 
-    async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
+    async def fake_generate(
+        *,
+        sandbox,
+        event,
+        adapter,
+        issue,
+        run_id=None,
+        checkpointer=None,
+        per_task_cap_usd=None,
+        session_factory=None,
+    ):
         return FixOutcome(attempt=_attempt(tests_passed=True))
 
     monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
@@ -266,7 +286,17 @@ async def test_comments_with_truncated_output_when_tests_failed(monkeypatch):
     adapter = _adapter()
     huge = "X" * 50_000
 
-    async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
+    async def fake_generate(
+        *,
+        sandbox,
+        event,
+        adapter,
+        issue,
+        run_id=None,
+        checkpointer=None,
+        per_task_cap_usd=None,
+        session_factory=None,
+    ):
         return FixOutcome(
             attempt=_attempt(tests_passed=False, test_output=huge),
         )
@@ -319,7 +349,17 @@ async def test_failure_in_stage_yields_tailored_comment(
         adapter_overrides["get_issue"] = AsyncMock(side_effect=RuntimeError("404"))
     elif stage == "agent":
 
-        async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
+        async def fake_generate(
+            *,
+            sandbox,
+            event,
+            adapter,
+            issue,
+            run_id=None,
+            checkpointer=None,
+            per_task_cap_usd=None,
+            session_factory=None,
+        ):
             raise RuntimeError("agent imploded")
 
         monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
@@ -341,7 +381,17 @@ async def test_failure_in_stage_yields_tailored_comment(
 
     if stage != "agent":
 
-        async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
+        async def fake_generate(
+            *,
+            sandbox,
+            event,
+            adapter,
+            issue,
+            run_id=None,
+            checkpointer=None,
+            per_task_cap_usd=None,
+            session_factory=None,
+        ):
             return FixOutcome(attempt=_attempt(tests_passed=True))
 
         monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
@@ -368,7 +418,15 @@ async def test_fix_passes_checkpointer_and_run_id_to_responder(monkeypatch) -> N
     captured: dict[str, Any] = {}
 
     async def fake_generate(
-        *, sandbox, event, adapter, issue, run_id=None, checkpointer=None
+        *,
+        sandbox,
+        event,
+        adapter,
+        issue,
+        run_id=None,
+        checkpointer=None,
+        per_task_cap_usd=None,
+        session_factory=None,
     ) -> FixOutcome:
         captured["run_id"] = run_id
         captured["checkpointer"] = checkpointer

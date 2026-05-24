@@ -12,7 +12,8 @@ handler runs, any cancel comment has already returned BLOCKED upstream.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 
 from openbot.application.state.cancellation import checkpoint
 from openbot.application.use_cases._lifecycle import audit_lifecycle
@@ -59,6 +60,8 @@ async def _generate_freeform_reply(
     run_id: str | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     adapter=None,
+    per_task_cap_usd: Decimal,
+    session_factory: Any,
 ) -> str:
     return await _RESPONDER.reply_for_event(
         event,
@@ -66,6 +69,8 @@ async def _generate_freeform_reply(
         run_id=run_id,
         checkpointer=checkpointer,
         adapter=adapter,
+        per_task_cap_usd=per_task_cap_usd,
+        session_factory=session_factory,
     )
 
 
@@ -120,6 +125,8 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
                 run_id=run_id,
                 checkpointer=checkpointer,
                 adapter=ctx.adapter,
+                per_task_cap_usd=ctx.config.budget.per_task_cap_usd,
+                session_factory=ctx.session_factory,
             )
         except Exception:
             _logger.exception(

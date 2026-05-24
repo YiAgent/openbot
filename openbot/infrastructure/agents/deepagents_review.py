@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool
@@ -146,6 +147,8 @@ class DeepAgentsReviewResponder:
         adapter: ChannelAdapterPort,
         run_id: str | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
+        per_task_cap_usd: Decimal,
+        session_factory: Any,
     ) -> ReviewFindings:
         if event.pr_number is None:
             raise ValueError("deepagents_review_requires_pr_number")
@@ -158,6 +161,10 @@ class DeepAgentsReviewResponder:
                 run_id=run_id,
                 checkpointer=checkpointer,
                 input={"diff": diff},
+                metadata={
+                    "per_task_cap_usd": per_task_cap_usd,
+                    "session_factory": session_factory,
+                },
             ),
         )
 
