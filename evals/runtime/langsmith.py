@@ -21,7 +21,7 @@ from inspect_ai.scorer import Metric, Score, Scorer, Target, mean, std
 from inspect_ai.scorer import scorer as scorer_decorator
 from inspect_ai.solver import TaskState
 
-from evals.common import config
+from evals.runtime import config
 
 logger = logging.getLogger(__name__)
 

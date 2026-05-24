@@ -5,7 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import evals.runtime.environment as _env
-from evals.inspect import hf_datasets, task_runtime
+from evals.runtime import environment as task_runtime
+from evals.runtime import hf_datasets
 
 
 def test_issue_row_to_sample_keeps_only_solver_metadata() -> None:

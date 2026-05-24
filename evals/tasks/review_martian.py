@@ -2,9 +2,9 @@
 
 Dataset lives in **LangSmith** (published by
 ``evals/scripts/build_review_martian_dataset.py``); this task pulls Examples via
-``evals.common.datasets.langsmith_dataset``. There is no local JSONL — routing
+``evals.runtime.datasets.langsmith_dataset``. There is no local JSONL — routing
 between the public / internal LangSmith projects is driven by the allowlist
-in ``evals.inspect.langsmith`` (``configure_tracing_for_dataset``).
+in ``evals.runtime.langsmith`` (``configure_tracing_for_dataset``).
 
 Run::
 
@@ -24,9 +24,9 @@ from inspect_ai import Task, task
 from inspect_ai.scorer import Score, Target, mean, scorer, stderr
 from inspect_ai.solver import Solver, TaskState
 
-from evals.common.config import get_eval_config
-from evals.common.datasets import langsmith_dataset
-from evals.inspect.langsmith import LangSmithExperiment, configure_tracing_for_dataset
+from evals.runtime.config import get_eval_config
+from evals.runtime.datasets import langsmith_dataset
+from evals.runtime.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.scorers.review_judge import (
     MARTIAN_JUDGE_MODEL_ID,
     MARTIAN_JUDGE_VERSION,

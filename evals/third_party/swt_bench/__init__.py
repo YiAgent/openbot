@@ -9,7 +9,7 @@ daemon via ``DOCKER_HOST=ssh://…`` (see CLAUDE.md / evals/sandboxes/
 docker_ssh.py for why this monkey-patch is necessary on macOS).
 """
 
-from evals.common.docker_ssh import apply_ssh_patch
+from evals.third_party.swt_bench._docker_ssh import apply_ssh_patch
 
 # Apply BEFORE any submodule imports docker, otherwise modules that
 # already captured a reference to docker.from_env will bypass the patch.

@@ -6,7 +6,7 @@ across 26 long-tail repositories; arXiv 2603.16124, ACL 2026).
 This script pins the upstream HF dataset to a specific commit (revision
 SHA) so two contributors get byte-identical examples. The dataset is
 published to LangSmith as ``chat_swe_qa_pro_v1``; the eval task pulls from
-there via :func:`evals.common.datasets.langsmith_dataset` instead of
+there via :func:`evals.runtime.datasets.langsmith_dataset` instead of
 loading from HF directly — same pattern as
 ``build_review_martian_dataset.py``.
 
@@ -32,7 +32,7 @@ import json
 import sys
 from typing import Any
 
-from evals.common.config import get_eval_config as _eval_cfg
+from evals.runtime.config import get_eval_config as _eval_cfg
 
 # Dataset identifiers from CatalogSettings — single source of truth.
 _DS_NAME = _eval_cfg().catalog.chat.dataset_version
@@ -104,7 +104,7 @@ def _sha256_of_samples(samples: list[dict[str, Any]]) -> str:
 def _row_to_example(row: dict[str, Any], sha256: str, revision: str) -> dict[str, Any]:
     """Build the LangSmith ``create_examples`` payload for one row.
 
-    Shape consumed by ``evals.common.datasets.qa_example_to_sample``:
+    Shape consumed by ``evals.runtime.datasets.qa_example_to_sample``:
       inputs   = {"id": str, "question": str, "metadata": {...}}
       outputs  = {"answer": str}
       metadata = inputs.metadata + {sample_id, dataset_version, sha256, ...}

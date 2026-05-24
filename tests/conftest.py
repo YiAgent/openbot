@@ -70,7 +70,7 @@ def _isolate_openbot_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Ite
     # to guarantee no cross-test pollution either direction. Mirrors
     # the openbot.core.settings.get_settings.cache_clear() pattern.
     try:
-        from evals.common.config import get_eval_config
+        from evals.runtime.config import get_eval_config
 
         get_eval_config.cache_clear()
         yield

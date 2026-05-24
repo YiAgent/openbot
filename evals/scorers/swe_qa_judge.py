@@ -38,9 +38,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from evals.common import config
-from evals.common.config import get_eval_config
-from evals.common.judge_client import get_judge_client, resolve_judge_model
+from evals.runtime import config
+from evals.runtime.config import get_eval_config
+from evals.scorers._judge_client import get_judge_client, resolve_judge_model
 
 # Paper Appendix D, in order.
 SWE_QA_DIMENSIONS: tuple[str, ...] = (
@@ -67,7 +67,7 @@ SWE_QA_JUDGE_MODEL_ID: str = resolve_judge_model(
     per_judge_env=config.SWE_QA_JUDGE_MODEL_ENV,
 )
 # Paper does not specify temperature / max_tokens. Use the deterministic
-# shared defaults from :mod:`evals.common.config` (matches every other
+# shared defaults from :mod:`evals.runtime.config` (matches every other
 # LLM-judge in this repo). Pinned via ``SWE_QA_JUDGE_VERSION`` — see the
 # locked-surface note in the module docstring.
 SWE_QA_JUDGE_TEMPERATURE: float = get_eval_config().judge.temperature
@@ -155,7 +155,7 @@ class SWEQAScorecard(BaseModel):
 
 
 def _get_client():  # type: ignore[no-untyped-def]
-    """Shared ``ChatAnthropic`` via :func:`evals.common.judge_client.get_judge_client`.
+    """Shared ``ChatAnthropic`` via :func:`evals.scorers._judge_client.get_judge_client`.
 
     Honors :data:`SWE_QA_JUDGE_MODEL_ID`. The shared helper strips
     ``anthropic:`` / ``anthropic/`` prefixes because this dev scorer is

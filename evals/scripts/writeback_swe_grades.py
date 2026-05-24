@@ -79,7 +79,7 @@ def _write_feedback(
     report_path: Path,
 ) -> None:
     """Attach swe_bench_pass_at_1 feedback to one prediction Run."""
-    from evals.inspect.langsmith import ensure_feedback_config
+    from evals.runtime.langsmith import ensure_feedback_config
 
     ensure_feedback_config(client, FEEDBACK_KEY, FEEDBACK_CONFIG)
     client.create_feedback(

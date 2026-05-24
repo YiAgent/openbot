@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from evals.common.config import get_eval_config
+from evals.runtime.config import get_eval_config
 
 
 def test_eval_config_owns_dataset_catalog() -> None:

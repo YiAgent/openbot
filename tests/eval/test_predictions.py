@@ -9,11 +9,11 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from evals.common.prediction_export import (
+from evals.runtime.prediction_export import (
     prediction_exporter,
     predictions_path,
 )
-from evals.common.predictions import (
+from evals.runtime.predictions import (
     SweBenchPrediction,
     SweQaProAnswer,
     SweQaProCitation,
