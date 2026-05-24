@@ -9,8 +9,6 @@ import pytest
 
 from evals.data._writeback import run_writeback
 
-pytestmark = pytest.mark.skip(reason="enabled in Task 10 when DATASETS singleton wired")
-
 
 @pytest.fixture(params=["fix", "swt"])
 def graded_suite(request):  # type: ignore[no-untyped-def]
