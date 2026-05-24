@@ -74,3 +74,52 @@ def test_writeback_default_raises() -> None:
     suite = _FakeSuite()
     with pytest.raises(NotImplementedError):
         suite.writeback_grades(report_path="x", experiment_name="e")
+
+
+# ---------------------------------------------------------------------------
+# Task 5: ReviewDataset
+# ---------------------------------------------------------------------------
+
+
+def test_review_attrs() -> None:
+    from evals.data.review import ReviewDataset
+
+    assert ReviewDataset.suite == "review"
+    assert ReviewDataset.dataset_version == "martian_2026w20"
+
+
+def test_review_build_task_raises_without_scorer(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+
+    from evals.data.review import ReviewDataset
+
+    r = ReviewDataset()
+    monkeypatch.setattr(r, "load_for_inspect", MagicMock(return_value=MagicMock()))
+    with pytest.raises(ValueError, match="scorer"):
+        r.build_task(solver=MagicMock())
+
+
+def test_review_build_task_has_no_langsmith_imports(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Task metadata must not contain langsmith experiment objects."""
+    from unittest.mock import MagicMock
+
+    from inspect_ai.dataset import MemoryDataset, Sample
+    from inspect_ai.scorer import mean, scorer
+
+    from evals.data.review import ReviewDataset
+
+    @scorer(metrics=[mean()])
+    def _noop_scorer():  # type: ignore[no-untyped-def]
+        async def _score(state, target):  # type: ignore[no-untyped-def]
+            from inspect_ai.scorer import Score
+
+            return Score(value=0)
+
+        return _score
+
+    r = ReviewDataset()
+    fake_dataset = MemoryDataset(samples=[Sample(id="x", input="y")], name="fake")
+    monkeypatch.setattr(r, "load_for_inspect", MagicMock(return_value=fake_dataset))
+    task = r.build_task(solver=MagicMock(), scorer=_noop_scorer())
+    for v in (task.metadata or {}).values():
+        assert not hasattr(v, "create_run"), "LangSmith object leaked into Task metadata"
