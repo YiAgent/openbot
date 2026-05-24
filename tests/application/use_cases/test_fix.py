@@ -110,6 +110,7 @@ def _adapter(**method_overrides: Any) -> MagicMock:
         return_value={"html_url": "https://github.com/o/r/pull/9"},
     )
     a.reply = AsyncMock(return_value={"id": 1})
+    a.update_comment = AsyncMock(return_value={"ok": True, "id": 1})
     for name, value in method_overrides.items():
         setattr(a, name, value)
     return a
@@ -226,8 +227,8 @@ async def test_fix_uses_sandbox_handle_from_context(monkeypatch):
     assert sandbox.pushed[0][0].startswith("openbot/fix-issue-7-")
     assert sandbox.pushed[0][2] == "tok123"
 
-    # Final comment carries the PR URL.
-    assert "https://github.com/o/r/pull/9" in adapter.reply.call_args.args[1]
+    # Final comment carries the PR URL — delivered via sticky update_comment.
+    assert "https://github.com/o/r/pull/9" in adapter.update_comment.call_args.args[2]
 
 
 @pytest.mark.asyncio
@@ -278,7 +279,8 @@ async def test_comments_with_truncated_output_when_tests_failed(monkeypatch):
 
     adapter.create_branch.assert_not_called()
     adapter.open_pull_request.assert_not_called()
-    posted = adapter.reply.call_args.args[1]
+    # Final message delivered via sticky update_comment (not reply).
+    posted = adapter.update_comment.call_args.args[2]
     assert "tests did not pass" in posted.lower()
     assert "truncated" in posted.lower()
     assert len(posted) < 10_000  # well under GitHub's 65k cap
@@ -353,7 +355,8 @@ async def test_failure_in_stage_yields_tailored_comment(
     if not expect_pr_attempt:
         adapter.open_pull_request.assert_not_called()
 
-    assert expected_phrase in adapter.reply.call_args.args[1].lower()
+    # Final error message delivered via sticky update_comment (not reply).
+    assert expected_phrase in adapter.update_comment.call_args.args[2].lower()
 
 
 # ---------- Checkpointer + cancellation ----------

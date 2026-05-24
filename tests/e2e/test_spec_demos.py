@@ -169,10 +169,11 @@ async def test_demo_03_bot_assigned_fix_opens_pr(
     assert "Closes #11" in pr["body"]
     assert pr["title"].startswith("[OpenBot]")
 
-    # The user-facing comment carries the PR URL.
-    assert len(webhook_harness.adapter.replies) == 1
-    _, number, body = webhook_harness.adapter.replies[0]
-    assert number == 11
+    # Sticky flow: reply() posts the thinking placeholder, then update_comment()
+    # delivers the final PR URL in-place.
+    assert len(webhook_harness.adapter.replies) == 1  # initial placeholder
+    assert len(webhook_harness.adapter.comment_updates) == 1
+    _, _comment_id, body = webhook_harness.adapter.comment_updates[0]
     assert "https://github.com/acme/test-repo/pull/" in body
 
 
@@ -197,9 +198,11 @@ async def test_demo_04_at_openbot_chat_ack(webhook_harness: WebhookHarness) -> N
     rows = await webhook_harness.audit_rows(delivery_id="d-chat-1")
     assert _phases(rows) == [WorkflowPhase.STARTED, WorkflowPhase.COMPLETED]
     assert all(row.workflow is Workflow.CHAT for row in rows)
-    assert len(webhook_harness.adapter.replies) == 1
-    _, number, body = webhook_harness.adapter.replies[0]
-    assert number == 5
+    # Sticky freeform flow: reply() posts the thinking placeholder, then
+    # update_comment() delivers the actual LLM response in-place.
+    assert len(webhook_harness.adapter.replies) == 1  # initial placeholder
+    assert len(webhook_harness.adapter.comment_updates) == 1
+    _, _comment_id, body = webhook_harness.adapter.comment_updates[0]
     assert body == "DeepAgents test reply: tell me about this repo"
 
 
@@ -529,10 +532,11 @@ async def test_demo_10_bot_assigned_fix_tests_failed_yields_comment(
     assert webhook_harness.adapter.branch_creates == []
     assert webhook_harness.adapter.pr_creates == []
 
-    # User got the tests-failed comment with the test output snippet.
-    assert len(webhook_harness.adapter.replies) == 1
-    _, number, body = webhook_harness.adapter.replies[0]
-    assert number == 22
+    # Sticky flow: reply() posts the thinking placeholder, then update_comment()
+    # delivers the tests-failed message with truncated output in-place.
+    assert len(webhook_harness.adapter.replies) == 1  # initial placeholder
+    assert len(webhook_harness.adapter.comment_updates) == 1
+    _, _comment_id, body = webhook_harness.adapter.comment_updates[0]
     assert "tests did not pass" in body.lower()
     assert "1 failed" in body
 

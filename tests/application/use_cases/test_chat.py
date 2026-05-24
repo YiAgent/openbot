@@ -80,8 +80,10 @@ async def test_freeform_chat_uses_deepagents_reply(monkeypatch) -> None:
 
     await maybe_run_chat(_ctx(adapter, _event(comment_body="@openbot summarize this thread")))
 
-    _, message = adapter.reply.await_args.args
-    assert message == "DeepAgents says hello."
+    # Freeform flow: reply() posts the thinking placeholder, then update_comment()
+    # delivers the final LLM response via sticky update.
+    adapter.reply.assert_awaited_once()  # thinking placeholder
+    assert adapter.update_comment.await_args.args[2] == "DeepAgents says hello."
 
 
 async def test_freeform_chat_falls_back_to_error_reply_when_agent_fails(
@@ -106,8 +108,10 @@ async def test_freeform_chat_falls_back_to_error_reply_when_agent_fails(
     with caplog.at_level(logging.ERROR, logger="openbot.application.use_cases.chat"):
         await maybe_run_chat(_ctx(adapter, _event(comment_body="@openbot summarize this thread")))
 
-    _, message = adapter.reply.await_args.args
-    assert "couldn't complete that request right now" in message
+    # Freeform error path: reply() posts thinking placeholder, update_comment()
+    # delivers the error template via sticky update.
+    adapter.reply.assert_awaited_once()  # thinking placeholder
+    assert "couldn't complete that request right now" in adapter.update_comment.await_args.args[2]
     assert any(r.message == "chat_agent_reply_failed" for r in caplog.records)
 
 
@@ -182,6 +186,9 @@ async def test_chat_cancellation_checkpoint_fires_after_llm(
             _ctx(adapter, _event(comment_body="@openbot explain this"), run_id="run-chat-2")
         )
 
-    # LLM ran first, then checkpoint raised — reply never called.
+    # Freeform sticky flow: reply() posts the thinking placeholder BEFORE the LLM
+    # call. Checkpoint fires after LLM, raising RunCancelledError before
+    # update_comment() is reached — so the final answer is never delivered.
     assert calls == ["llm", "checkpoint"]
-    adapter.reply.assert_not_awaited()
+    adapter.reply.assert_awaited_once()  # thinking placeholder was posted
+    adapter.update_comment.assert_not_awaited()  # final answer not posted
