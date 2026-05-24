@@ -98,6 +98,7 @@ async def _execute_task_spec(
     adapter: GitHubAdapter,
     session_factory: async_sessionmaker[AsyncSession] | None,
     agent_checkpointer: Any | None = None,
+    sandbox_factory: Any | None = None,
 ) -> None:
     """W1-W8: Process one TaskSpec v3 entry.
 
@@ -207,6 +208,7 @@ async def _execute_task_spec(
                 check_run_id=spec.check_run_id,
                 classifier_output=classifier_output,
                 agent_checkpointer=agent_checkpointer,
+                sandbox_factory=sandbox_factory,
             )
         except Exception:
             _logger.exception(
@@ -276,6 +278,7 @@ async def consume_loop(
     shutdown: asyncio.Event | None = None,
     read_block_ms: int = _READ_BLOCK_MS,
     agent_checkpointer: Any | None = None,
+    sandbox_factory: Any | None = None,
 ) -> None:
     """One async consumer. Run N copies concurrently for parallelism.
 
@@ -302,6 +305,7 @@ async def consume_loop(
                 session_factory=session_factory,
                 consumer_name=consumer_name,
                 agent_checkpointer=agent_checkpointer,
+                sandbox_factory=sandbox_factory,
             )
             await _read_and_dispatch(
                 redis=redis,
@@ -310,6 +314,7 @@ async def consume_loop(
                 consumer_name=consumer_name,
                 read_block_ms=read_block_ms,
                 agent_checkpointer=agent_checkpointer,
+                sandbox_factory=sandbox_factory,
             )
         except asyncio.CancelledError:
             raise
@@ -340,6 +345,7 @@ async def _read_and_dispatch(
     consumer_name: str,
     read_block_ms: int = _READ_BLOCK_MS,
     agent_checkpointer: Any | None = None,
+    sandbox_factory: Any | None = None,
 ) -> None:
     """One XREADGROUP round."""
     response = await redis.xreadgroup(
@@ -368,6 +374,7 @@ async def _read_and_dispatch(
                 entry_id=_as_str(entry_id),
                 fields=fields,
                 agent_checkpointer=agent_checkpointer,
+                sandbox_factory=sandbox_factory,
             )
 
 
@@ -378,6 +385,7 @@ async def _reclaim_abandoned(
     session_factory: async_sessionmaker[AsyncSession] | None,
     consumer_name: str,
     agent_checkpointer: Any | None = None,
+    sandbox_factory: Any | None = None,
 ) -> None:
     """XAUTOCLAIM idle entries from dead consumers."""
     try:
@@ -409,6 +417,7 @@ async def _reclaim_abandoned(
             entry_id=_as_str(entry_id),
             fields=fields,
             agent_checkpointer=agent_checkpointer,
+            sandbox_factory=sandbox_factory,
         )
 
 
@@ -420,6 +429,7 @@ async def _process_entry(
     entry_id: str,
     fields: dict,
     agent_checkpointer: Any | None = None,
+    sandbox_factory: Any | None = None,
 ) -> None:
     """Deserialize TaskSpec v3 → dispatch → ack/dlq one entry."""
     blob = _extract_payload_blob(fields)
@@ -439,6 +449,7 @@ async def _process_entry(
         adapter=adapter,
         session_factory=session_factory,
         agent_checkpointer=agent_checkpointer,
+        sandbox_factory=sandbox_factory,
     )
 
 
