@@ -58,9 +58,14 @@ async def _generate_freeform_reply(
     user_request: str,
     run_id: str | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
+    adapter=None,
 ) -> str:
     return await _RESPONDER.reply_for_event(
-        event, user_request=user_request, run_id=run_id, checkpointer=checkpointer
+        event,
+        user_request=user_request,
+        run_id=run_id,
+        checkpointer=checkpointer,
+        adapter=adapter,
     )
 
 
@@ -114,6 +119,7 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
                 user_request=command.body_after_mention,
                 run_id=run_id,
                 checkpointer=checkpointer,
+                adapter=ctx.adapter,
             )
         except Exception:
             _logger.exception(
