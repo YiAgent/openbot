@@ -158,52 +158,53 @@ There are three distinct LangSmith integrations in the current code:
    - `LANGSMITH_EVAL_PROJECT` is the single project override for eval agent and judge traces
 
 3. **Experiment / feedback projection**
-   - `evals.inspect.langsmith.LangSmithExperiment.wrap(...)` projects per-sample SWE-bench / SWT-Bench results into LangSmith Experiment projects
+   - `evals.runtime.langsmith.LangSmithExperiment.wrap(...)` projects per-sample SWE-bench / SWT-Bench results into LangSmith Experiment projects
    - `swe_qa_pro_judge_scorer()` attaches per-dimension feedback to the live LangSmith trace
 
 ## Directory map
 
 ```text
 evals/
-├── agents/
-│   ├── baseline.py                 # shared DeepAgents/LangChain/sandbox baseline
-│   ├── convergence_middleware.py   # shared agent loop convergence guards
-│   ├── structured_finalizer.py     # shared structured-output finalizer
-│   ├── langsmith.py                # trace routing + Inspect -> LangSmith Experiment bridge
-│   ├── langsmith_feedback.py       # shared Feedback config helper
-│   ├── review.py                   # preconfigured review agent
-│   ├── fix.py                      # preconfigured SWE-bench fix agent
-│   ├── test_generation.py          # preconfigured SWT-Bench test agent
-│   └── chat.py                     # preconfigured SWE-QA-Pro chat agent
-├── common/
-│   ├── datasets.py                  # LangSmith dataset -> Inspect MemoryDataset
-│   ├── prediction_export.py         # shared prediction export helpers
-│   ├── predictions.py               # structured prediction models
-│   ├── termination.py               # shared solver termination checks
-│   └── usage.py                     # provider usage aggregation
+├── runtime/                            # Inspect-side glue (was common/ + inspect/)
+│   ├── config.py                       # eval-only settings: judge model, paths, LS routing
+│   ├── datasets.py                     # LangSmith Example -> Inspect Sample
+│   ├── hf_datasets.py                  # HuggingFace row -> Inspect Sample
+│   ├── langsmith.py                    # trace routing + Inspect -> LangSmith Experiment bridge
+│   ├── environment.py                  # build_export_experiment / git_sha / model label
+│   ├── predictions.py                  # SweBenchPrediction / SwtBenchPrediction / SweQaProAnswer
+│   └── prediction_export.py            # @scorer that appends to predictions.jsonl
+├── solvers/                            # thin Inspect adapters calling openbot.evaluation
+│   ├── review.py                       # -> openbot.evaluation.run_review_sample
+│   ├── fix.py                          # -> openbot.evaluation.run_fix_sample
+│   ├── chat.py                         # -> openbot.evaluation.run_chat_sample
+│   └── test_generation.py              # stub: emits unsupported-capability prediction
+├── tasks/                              # Inspect AI @task definitions
+│   ├── review_martian.py
+│   ├── fix_swe_bench.py
+│   ├── test_swt_bench.py
+│   └── chat_swe_qa.py
 ├── scorers/
-│   ├── review_overlap.py            # review overlap math
-│   ├── swt_bench_scorer.py          # SWT-Bench Success metric
-│   └── swe_qa_pro.py                # SWE-QA-Pro judge wrapper
-├── solvers/
-│   ├── review.py                    # review baseline
-│   ├── swe_fix.py                   # SWE-bench fixing baseline
-│   ├── swe_test.py                  # SWT-Bench test-writing baseline
-│   └── swe_qa.py                    # SWE-QA-Pro agent-based solver
-├── sandboxes/
-│   ├── docker_backend.py            # Local Docker sandbox implementation
-│   └── repo_setup.py                # Clone / Checkout logic
+│   ├── review_overlap.py               # review overlap math
+│   ├── review_judge.py                 # Martian-CRB LLM-as-judge
+│   ├── swe_qa_judge.py                 # SWE-QA-Pro 5-dim judge
+│   ├── swe_qa_pro.py                   # @scorer wrapping the 5-dim judge
+│   └── _judge_client.py                # cached ChatAnthropic for judges
 ├── scripts/
 │   ├── build_review_martian_dataset.py
 │   ├── build_chat_swe_qa_pro_dataset.py
 │   ├── build_swe_bench_verified_dataset.py
-│   └── build_swt_bench_verified_dataset.py
-└── tasks/
-    ├── review_martian.py
-    ├── fix_swe_bench_verified.py
-    ├── test_swt_bench_verified.py
-    └── chat_swe_qa_pro.py
+│   ├── build_swt_bench_verified_dataset.py
+│   ├── writeback_swe_grades.py         # offline SWE-bench grade -> LangSmith
+│   └── writeback_swt_grades.py         # offline SWT-Bench grade -> LangSmith
+└── third_party/
+    └── swt_bench/                      # vendored SWT-Bench Docker harness
+        └── _docker_ssh.py               # macOS-friendly Docker-over-SSH shim
 ```
+
+The sandbox lifecycle (`DaytonaSandboxBackend`, `DockerSandboxBackend`,
+`ModalSandboxBackend`) is **not** an eval concern — it lives in
+`openbot/infrastructure/sandboxes/` and the eval solver receives one
+through the OpenBot product factory.
 
 ## Makefile entry points
 

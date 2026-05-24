@@ -7,7 +7,7 @@ Source of truth is **LangSmith**: this script pins the upstream commit,
 downloads each PR's golden comments + ``.diff``, then calls
 ``client.create_dataset`` + ``client.create_examples`` so the dataset
 lives in LangSmith. No local JSONL is written. Inspect tasks pull from
-LangSmith via ``evals.common.datasets.langsmith_dataset``.
+LangSmith via ``evals.runtime.datasets.langsmith_dataset``.
 
 The local manifest YAML is the only thing kept on disk — it carries the
 upstream commit, sha256 of the example payload, and license metadata.
@@ -37,7 +37,7 @@ import sys
 
 import httpx
 
-from evals.common.config import get_eval_config as _eval_cfg
+from evals.runtime.config import get_eval_config as _eval_cfg
 
 UPSTREAM_REPO = "withmartian/code-review-benchmark"
 UPSTREAM_COMMIT = "807d46980c3390efbe8324c0b7a05fe3aa60c455"  # 2026-05-01

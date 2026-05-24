@@ -1,7 +1,7 @@
 """Accumulate solver outputs into an official benchmark ``predictions.jsonl``.
 
 Inspect AI runs samples concurrently; each solver completes with a
-:class:`evals.common.predictions.SweBenchPrediction` (or
+:class:`evals.runtime.predictions.SweBenchPrediction` (or
 :class:`SwtBenchPrediction`) attached to ``state.metadata['prediction']``.
 This module ships a thin scorer that:
 
@@ -41,7 +41,7 @@ from inspect_ai.scorer import Score, Scorer, Target, mean, scorer
 from inspect_ai.solver import TaskState
 from pydantic import BaseModel, ValidationError
 
-from evals.common.config import get_eval_config
+from evals.runtime.config import get_eval_config
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +49,8 @@ logger = logging.getLogger(__name__)
 def _output_root() -> Path:
     """Resolve the directory where prediction JSONL files are written.
 
-    Reads :class:`~evals.common.config.PredictionsSettings.output_dir`
-    via :func:`~evals.common.config.get_eval_config` — pydantic-settings
+    Reads :class:`~evals.runtime.config.PredictionsSettings.output_dir`
+    via :func:`~evals.runtime.config.get_eval_config` — pydantic-settings
     binds ``OPENBOT_PREDICTIONS_DIR`` and validates the path.
     """
     return get_eval_config().predictions.output_dir

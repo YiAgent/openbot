@@ -19,7 +19,7 @@ recording a `docs/eval/judge-version-log.md` entry):
                     ``Severity:`` / ``Location:`` headers
 
 Model id (formerly hardcoded to ``claude-opus-4-5``) is now resolved via
-:func:`evals.common.judge_client.resolve_judge_model`, which reads
+:func:`evals.scorers._judge_client.resolve_judge_model`, which reads
 ``OPENBOT_REVIEW_JUDGE_MODEL_ID`` first, then the shared
 ``OPENBOT_JUDGE_MODEL_ID``, then a fallback. This is required because the
 configured Anthropic-compatible gateway (``ANTHROPIC_BASE_URL``) routinely
@@ -41,9 +41,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from evals.common import config
-from evals.common.config import get_eval_config
-from evals.common.judge_client import get_judge_client, resolve_judge_model
+from evals.runtime import config
+from evals.runtime.config import get_eval_config
+from evals.scorers._judge_client import get_judge_client, resolve_judge_model
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ MARTIAN_JUDGE_MODEL_ID: str = resolve_judge_model(
 )
 # Temperature + max_tokens are part of v4's locked surface (martian-CRB
 # contract). They happen to match the shared judge defaults in
-# :mod:`evals.common.config`; if those defaults ever drift, this constant
+# :mod:`evals.runtime.config`; if those defaults ever drift, this constant
 # must stay pinned to 0.0 / 4096 until ``MARTIAN_JUDGE_VERSION`` is bumped.
 # Upstream OpenAI call does not set ``max_tokens``; ``ChatAnthropic``
 # requires one, and 4096 is well above the short JSON verdict.
@@ -112,7 +112,7 @@ class MartianVerdict(BaseModel):
 
 
 def _get_client():  # type: ignore[no-untyped-def]
-    """Shared ``ChatAnthropic`` via :func:`evals.common.judge_client.get_judge_client`."""
+    """Shared ``ChatAnthropic`` via :func:`evals.scorers._judge_client.get_judge_client`."""
     return get_judge_client(
         model_id=MARTIAN_JUDGE_MODEL_ID,
         temperature=MARTIAN_JUDGE_TEMPERATURE,

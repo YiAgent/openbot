@@ -42,8 +42,8 @@ def test_judge_version_pin() -> None:
 
 def test_resolve_judge_model_prefers_per_judge_override(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Per-judge env var beats the shared default when both are set."""
-    from evals.common import config
-    from evals.common.judge_client import resolve_judge_model
+    from evals.runtime import config
+    from evals.scorers._judge_client import resolve_judge_model
 
     monkeypatch.setenv(config.JUDGE_MODEL_ENV, "shared-default")
     monkeypatch.setenv(config.REVIEW_JUDGE_MODEL_ENV, "per-judge-override")
@@ -52,8 +52,8 @@ def test_resolve_judge_model_prefers_per_judge_override(monkeypatch) -> None:  #
 
 def test_resolve_judge_model_falls_through_to_shared(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Without a per-judge override, the shared JUDGE_MODEL_ENV wins."""
-    from evals.common import config
-    from evals.common.judge_client import resolve_judge_model
+    from evals.runtime import config
+    from evals.scorers._judge_client import resolve_judge_model
 
     monkeypatch.setenv(config.JUDGE_MODEL_ENV, "anthropic:mimo-v2.5")
     monkeypatch.delenv(config.REVIEW_JUDGE_MODEL_ENV, raising=False)
@@ -62,8 +62,8 @@ def test_resolve_judge_model_falls_through_to_shared(monkeypatch) -> None:  # ty
 
 def test_resolve_judge_model_falls_back_to_hardcoded_default(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """No env vars → the hardcoded last-resort fallback keeps imports working."""
-    from evals.common import config
-    from evals.common.judge_client import resolve_judge_model
+    from evals.runtime import config
+    from evals.scorers._judge_client import resolve_judge_model
 
     monkeypatch.delenv(config.JUDGE_MODEL_ENV, raising=False)
     monkeypatch.delenv(config.REVIEW_JUDGE_MODEL_ENV, raising=False)
@@ -75,8 +75,8 @@ def test_resolve_judge_model_falls_back_to_hardcoded_default(monkeypatch) -> Non
 
 def test_resolve_judge_model_treats_empty_env_var_as_unset(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     """Empty-string env vars must NOT override — silent empties in Doppler are common."""
-    from evals.common import config
-    from evals.common.judge_client import resolve_judge_model
+    from evals.runtime import config
+    from evals.scorers._judge_client import resolve_judge_model
 
     monkeypatch.setenv(config.JUDGE_MODEL_ENV, "")
     monkeypatch.setenv(config.REVIEW_JUDGE_MODEL_ENV, "")

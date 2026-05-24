@@ -28,19 +28,19 @@ Usage
 -----
 Anywhere ``docker.from_env()`` may be called against a remote daemon::
 
-    from evals.common.docker_ssh import apply_ssh_patch
+    from evals.third_party.swt_bench._docker_ssh import apply_ssh_patch
 
     apply_ssh_patch()
 
-This module deliberately lives under :mod:`evals.common` as a standalone
-shim, separate from backend modules that might instantiate
+This module deliberately lives next to the vendored harness as a
+standalone shim, separate from backend modules that might instantiate
 ``EvalSettings()`` at import time via :func:`get_eval_config`. That
 eager config load is fine for production callers but a footgun for the
 vendored SWT-bench harness: importing the harness package would
 trigger pydantic-settings to read every ``OPENBOT_*`` (and worse,
 bare ``PREDICTIONS=…``) env var, which collides with Makefile
-variable names. ``evals.common.__init__`` is empty, so importing
-from here stays cheap and side-effect-free.
+variable names. This module has no module-level side effects, so
+importing from here stays cheap.
 
 Idempotent. Only patches when ``DOCKER_HOST`` starts with ``ssh://``;
 local ``unix://`` and ``tcp://`` setups pass through unchanged so this
