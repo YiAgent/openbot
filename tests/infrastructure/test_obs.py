@@ -1,27 +1,36 @@
-"""Sentry init contract tests.
+"""Observability init contract tests — Sentry + Langfuse.
 
-We don't validate Sentry SDK internals — those are upstream's job. We
-validate the two boundaries this codebase actually relies on:
-
+Sentry contracts:
   1. ``init_sentry`` with no DSN must be a silent no-op so local ``make
      dev`` and CI runs never need a Sentry project.
   2. ``init_sentry`` with a DSN must complete without raising, and must
      tag the hub with the component so a future webapp / worker error
      burst is distinguishable in the Sentry UI.
 
-We mock the SDK in test (2) because we don't want unit tests to attempt
-DNS / TLS to a real Sentry ingest endpoint.
+Langfuse ``get_langfuse_handler`` contracts:
+  3. Returns ``None`` when LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are absent
+     so callers that guard with ``[h for h in [...] if h is not None]`` behave
+     correctly in environments without Langfuse credentials.
+  4. Returns a ``CallbackHandler`` (truthy) when both keys are present.
+  5. Each call returns a **distinct** handler object — handlers must not be
+     shared across concurrent requests.
+  6. The handler has no forced ``trace_context`` trace_id — each invocation
+     gets a fresh trace so repeated eval runs of the same sample don't merge
+     into one Langfuse trace.
+
+We mock the SDKs where network calls would otherwise occur — unit tests
+must not attempt DNS / TLS to real ingest endpoints.
 """
 
 from __future__ import annotations
 
 import logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from sentry_sdk.integrations.logging import LoggingIntegration
 
 from openbot.core.settings import Settings
-from openbot.infrastructure.observability import init_sentry
+from openbot.infrastructure.observability import get_langfuse_handler, init_sentry
 
 
 def test_init_sentry_is_noop_without_dsn() -> None:
@@ -112,3 +121,99 @@ def test_init_sentry_logs_sentry_initialised(caplog) -> None:  # type: ignore[no
 
     messages = [r.message for r in caplog.records]
     assert "sentry_initialised" in messages
+
+
+# ---------------------------------------------------------------------------
+# get_langfuse_handler — Langfuse CallbackHandler factory
+# ---------------------------------------------------------------------------
+
+_FAKE_PK = "pk-lf-test-public-key"
+_FAKE_SK = "sk-lf-test-secret-key"
+
+
+class _FakeCallbackHandler:
+    """Stand-in for langfuse.langchain.CallbackHandler in unit tests."""
+
+    def __init__(self, **kwargs: object) -> None:
+        self.init_kwargs = kwargs
+
+
+def _fake_langfuse_module(monkeypatch, fake_handler_cls: type = _FakeCallbackHandler) -> None:  # type: ignore[no-untyped-def]
+    """Patch langfuse.langchain.CallbackHandler with *fake_handler_cls*."""
+    fake_module = MagicMock()
+    fake_module.CallbackHandler = fake_handler_cls
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "langfuse.langchain",
+        fake_module,
+    )
+
+
+def test_get_langfuse_handler_returns_none_without_keys(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """No credentials → must return None so callers don't attach a broken handler."""
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    _fake_langfuse_module(monkeypatch)
+    assert get_langfuse_handler() is None
+
+
+def test_get_langfuse_handler_returns_none_with_only_public_key(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Partial credentials (public key only) → must return None."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    _fake_langfuse_module(monkeypatch)
+    assert get_langfuse_handler() is None
+
+
+def test_get_langfuse_handler_returns_handler_with_both_keys(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Both credentials present → must return a CallbackHandler instance."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
+    _fake_langfuse_module(monkeypatch)
+    handler = get_langfuse_handler()
+    assert isinstance(handler, _FakeCallbackHandler)
+
+
+def test_get_langfuse_handler_returns_distinct_instances(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Each call must return a *new* handler so concurrent requests don't
+    share state (mixing spans from different agent runs)."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
+    _fake_langfuse_module(monkeypatch)
+    h1 = get_langfuse_handler()
+    h2 = get_langfuse_handler()
+    assert h1 is not h2
+
+
+def test_get_langfuse_handler_no_forced_trace_id(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Handler must be constructed without a ``trace_context`` trace_id.
+
+    The old implementation used ``Langfuse.create_trace_id(seed=run_id)``
+    to force a deterministic trace_id.  When the same sample_id was reused
+    across eval runs, all observations merged into one Langfuse trace —
+    making it impossible to distinguish separate eval runs.
+
+    The fix: no ``trace_context`` is passed; Langfuse assigns a fresh UUID
+    per invocation.  Trace name and session grouping travel via LangChain
+    RunnableConfig metadata keys (``langfuse_trace_name`` /
+    ``langfuse_session_id``), which the CallbackHandler reads automatically.
+    """
+    captured_kwargs: list[dict] = []
+
+    class _CapturingHandler:
+        def __init__(self, **kwargs: object) -> None:
+            captured_kwargs.append(dict(kwargs))
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
+    _fake_langfuse_module(monkeypatch, fake_handler_cls=_CapturingHandler)
+
+    get_langfuse_handler()
+
+    assert len(captured_kwargs) == 1
+    kwargs = captured_kwargs[0]
+    # Must not inject a forced trace_id — fresh UUID is assigned by Langfuse.
+    assert "trace_context" not in kwargs or kwargs.get("trace_context") is None, (
+        "get_langfuse_handler() must not pass trace_context to CallbackHandler; "
+        "deterministic trace_id causes eval re-runs of the same sample to merge traces."
+    )

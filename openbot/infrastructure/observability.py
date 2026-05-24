@@ -57,6 +57,11 @@ Langfuse
     invocation — re-using one handler across concurrent requests mixes traces.
     Returns ``None`` when Langfuse is not configured; callers guard with
     ``[h for h in [get_langfuse_handler()] if h is not None]``.
+  - Trace name and session grouping are set via LangChain ``RunnableConfig``
+    metadata keys ``"langfuse_trace_name"`` / ``"langfuse_session_id"`` so
+    Langfuse's ``CallbackHandler`` picks them up automatically from the run
+    context.  This keeps each invocation's spans in its own fresh trace while
+    still grouping retries / eval re-runs by session.
 """
 
 from __future__ import annotations
@@ -235,25 +240,27 @@ def init_langfuse() -> None:
         )
 
 
-def get_langfuse_handler(
-    *,
-    run_id: str | None = None,
-    trace_name: str | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> object | None:
+def get_langfuse_handler() -> object | None:
     """Return a fresh Langfuse CallbackHandler for one DeepAgents invocation.
 
     A new instance is created per call so concurrent agent runs get
     independent traces — sharing one handler across requests mixes spans.
 
-    Args:
-        run_id: Unique identifier for this agent run. Used to generate a
-            deterministic trace_id so all operations within the same run
-            belong to the same Langfuse trace.
-        trace_name: Human-readable name for the trace (e.g. "fix-issue",
-            "review-pr", "chat-reply"). If not provided, LangChain default
-            names are used (e.g. "ChatAnthropic", "AgentExecutor").
-        metadata: Additional metadata to attach to the trace.
+    Trace name and session grouping are controlled via LangChain's
+    ``RunnableConfig.metadata`` dict, not via this function.  Callers
+    should add the following keys to the config metadata before calling
+    ``agent.ainvoke()``:
+
+    - ``"langfuse_trace_name"`` — human-readable label shown in the
+      Langfuse UI (e.g. ``"review-openbot_review_responder"``).
+    - ``"langfuse_session_id"`` — groups related traces under one session.
+      Use the agent ``run_id`` so all invocations for the same logical
+      job (including evals that re-run the same sample) appear together
+      without merging their individual spans.
+
+    Each call returns a handler with a **fresh** trace ID, ensuring that
+    separate eval runs for the same sample produce separate, non-overlapping
+    traces in Langfuse.
 
     Returns ``None`` when:
       - ``langfuse`` is not installed, or
@@ -261,17 +268,12 @@ def get_langfuse_handler(
 
     Callers inject the result via::
 
-        callbacks = [
-            h
-            for h in [get_langfuse_handler(run_id=..., trace_name=..., metadata=...)]
-            if h is not None
-        ]
+        callbacks = [h for h in [get_langfuse_handler()] if h is not None]
         config["callbacks"] = callbacks
     """
     import os
 
     try:
-        from langfuse import Langfuse
         from langfuse.langchain import CallbackHandler
     except ImportError:
         return None
@@ -279,22 +281,11 @@ def get_langfuse_handler(
     if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
         return None
 
-    # Build trace_context for unified trace per run_id
-    trace_context: dict[str, str] | None = None
-    if run_id:
-        # Use run_id as seed to generate deterministic trace_id
-        # This ensures all operations in the same agent run share one trace
-        trace_id = Langfuse.create_trace_id(seed=run_id)
-        trace_context = {"trace_id": trace_id}
-
-    # Note: Langfuse CallbackHandler doesn't directly support trace_name
-    # The trace name will be derived from the first LangChain run in the trace
-    # We use metadata to make traces searchable and filterable
-    if metadata and trace_context is not None:
-        # Merge metadata into trace_context (Langfuse will attach these to the trace)
-        trace_context["metadata"] = metadata  # type: ignore[assignment]
-
-    return CallbackHandler(trace_context=trace_context)
+    # No trace_context: let Langfuse assign a fresh UUID per invocation.
+    # trace_name and session_id reach the handler via LangChain metadata keys
+    # "langfuse_trace_name" / "langfuse_session_id" (see CallbackHandler source,
+    # lines ~351-364: it reads those keys from the LangChain run metadata dict).
+    return CallbackHandler()
 
 
 def create_langfuse_root_span(
