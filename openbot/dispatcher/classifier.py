@@ -1,8 +1,10 @@
 # openbot/dispatcher/classifier.py
-"""One-shot LLM classifier — claude-sonnet-4-6 with Redis TTL cache.
+"""One-shot LLM classifier with Redis TTL cache.
 
 Fail-open: any exception returns None so callers set classifier_skipped=True.
 Uses litellm directly (not the complete() wrapper) — no DB session required.
+Model is read from the model router (same as the rest of the app) so all LLM
+calls route through the same proxy/base-URL configuration.
 """
 
 from __future__ import annotations
@@ -15,8 +17,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from openbot.core.metrics import classifier_error_total
+from openbot.core.settings import get_settings
 from openbot.dispatcher.context import extract_event_context
 from openbot.domain.workflows import Feature
+from openbot.infrastructure.llm.model_router import primary_model_for
 
 if TYPE_CHECKING:
     import redis.asyncio as redis_async
@@ -204,12 +208,21 @@ async def classify_event(
         # Deferred import: fail-open if litellm is not installed.
         import litellm
 
+        settings = get_settings()
+        model = primary_model_for(feature)
+        # Route through the same proxy as the rest of the app when configured.
+        # LiteLLM reads ANTHROPIC_API_KEY from the environment automatically.
+        extra_kwargs: dict[str, object] = {}
+        if "anthropic/" in model and settings.anthropic_api_base:
+            extra_kwargs["api_base"] = settings.anthropic_api_base
+
         response = await litellm.acompletion(
-            model="anthropic/claude-sonnet-4-6",
+            model=model,
             messages=[{"role": "user", "content": _build_prompt(feature, body)}],
             max_tokens=500,
             temperature=0,
             timeout=_LLM_TIMEOUT_S,
+            **extra_kwargs,
         )
         content: str = response.choices[0].message.content or ""
         data: dict[str, Any] = json.loads(content.strip())

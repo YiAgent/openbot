@@ -122,6 +122,7 @@ dev = [
     "fakeredis>=2.26",          # in-memory Redis for unit tests (async-compatible)
     "aiosqlite>=0.20",          # in-memory SQLite via SQLAlchemy for unit tests
     "import-linter>=2.0",       # hexagonal layer boundary enforcement
+    "pytest-cov>=7.1.0",
 ]
 
 [build-system]
