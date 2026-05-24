@@ -11,7 +11,7 @@ from evals.common.config import get_eval_config
 def test_eval_config_owns_dataset_catalog() -> None:
     catalog = get_eval_config().catalog
 
-    assert catalog.solver_family_baseline == "deepagents_baseline"
+    assert catalog.solver_family_baseline == "openbot_agent"
     assert catalog.review.dataset_version == "martian_2026w20"
     assert catalog.chat.dataset_version == "chat_swe_qa_pro_v1"
     assert catalog.chat.hf_dataset == "TIGER-Lab/SWE-QA-Pro-Bench"

@@ -1,9 +1,7 @@
 """Inspect solver wrapping the production OpenBot review path (PRD §4.1).
 
-Rewritten in the evals-runtime-redesign to call ``openbot.evaluation.run_review_sample``
-instead of the old ``evals.agents.*`` + ``evals.sandboxes.*`` stack.
-
-This means evals now measure the production code path end-to-end.
+Calls ``openbot.evaluation.run_review_sample`` which exercises the real
+production review workflow end-to-end.
 
 Public surface kept stable:
   - ``Finding`` TypedDict — the scorer (review_overlap.py) reads this shape.
@@ -108,14 +106,8 @@ def openbot_review_solver(
     return _solver()
 
 
-# Backward-compat alias — tasks that imported the old solver name
-# (deepagents_baseline_review_solver) can import this without changing
-# their call site.
-deepagents_baseline_review_solver = openbot_review_solver
-
 __all__ = [
     "Finding",
     "_domain_findings_to_eval",
-    "deepagents_baseline_review_solver",
     "openbot_review_solver",
 ]

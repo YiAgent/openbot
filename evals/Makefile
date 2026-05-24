@@ -82,7 +82,7 @@ endif
 #                  attempt past this; ``--retry-on-error`` then re-tries.
 # RETRY_ON_ERROR:  per-sample retry budget for errors the HTTP layer didn't
 #                  recover from. Independent from
-#                  ``OPENBOT_DEEPAGENTS_MODEL_MAX_RETRIES`` (HTTP layer).
+#                  ``OPENBOT_MODEL_MAX_RETRIES`` (HTTP layer).
 # FAIL_ON_ERROR:   threshold above which the eval **halts** instead of
 #                  pushing more empty-output noise to LangSmith. Inspect
 #                  accepts an integer (absolute error count) or a fraction

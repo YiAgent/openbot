@@ -125,7 +125,7 @@ There is **no sandbox** in this flow because the model only reads a diff and emi
 
 1. `build_chat_swe_qa_pro_dataset.py` mirrors SWE-QA-Pro-Bench into LangSmith.
 2. The task loads it from LangSmith.
-3. The solver uses the preconfigured SWE-QA agent built on `evals.agents.baseline`.
+3. The solver uses the preconfigured SWE-QA agent built on `evals.runtime.config`.
 4. Each sample spins up a `DockerSandboxBackend` where the repo is cloned.
 5. The agent uses `ls`, `grep`, `read_file` to browse the code before answering.
 6. `swe_qa_pro_judge_scorer()` calls the 5-dimension judge for scoring.
@@ -154,11 +154,11 @@ There are three distinct LangSmith integrations in the current code:
    - mirror-only storage for `test_swt_bench_verified`
 
 2. **Trace routing**
-   - `evals.agents.langsmith.configure_tracing_for_dataset(...)` enables LangSmith tracing
+   - `evals.inspect.langsmith.configure_tracing_for_dataset(...)` enables LangSmith tracing
    - `LANGSMITH_EVAL_PROJECT` is the single project override for eval agent and judge traces
 
 3. **Experiment / feedback projection**
-   - `evals.agents.langsmith.LangSmithExperiment.wrap(...)` projects per-sample SWE-bench / SWT-Bench results into LangSmith Experiment projects
+   - `evals.inspect.langsmith.LangSmithExperiment.wrap(...)` projects per-sample SWE-bench / SWT-Bench results into LangSmith Experiment projects
    - `swe_qa_pro_judge_scorer()` attaches per-dimension feedback to the live LangSmith trace
 
 ## Directory map
@@ -259,8 +259,8 @@ Tunables:
 make -C evals smoke LIMIT=3
 
 # change coding-model ids without editing the Makefile
-OPENBOT_DEEPAGENTS_MODEL=mimo-v2.5 make -C evals smoke-fix
-OPENBOT_DEEPAGENTS_MODEL=mimo-v2.5 make -C evals smoke-test
+OPENBOT_MODEL=mimo-v2.5 make -C evals smoke-fix
+OPENBOT_MODEL=mimo-v2.5 make -C evals smoke-test
 
 # point the viewer at Makefile-produced smoke logs or a different port
 make -C evals view-open VIEW_LOG_DIR=evals/logs VIEW_OUTPUT_DIR=evals/logs-www
@@ -284,10 +284,10 @@ client. Defaults: **90 s timeout, 3 retries** on retryable HTTP errors
 
 ```bash
 # per-request HTTP timeout — applies to every model call
-OPENBOT_DEEPAGENTS_MODEL_TIMEOUT_S=60 make -C evals smoke-review
+OPENBOT_MODEL_TIMEOUT_S=60 make -C evals smoke-review
 
 # HTTP-layer retry count for transient errors (429 / 5xx / network)
-OPENBOT_DEEPAGENTS_MODEL_MAX_RETRIES=5 make -C evals smoke-review
+OPENBOT_MODEL_MAX_RETRIES=5 make -C evals smoke-review
 ```
 
 ### Layer 2 — Inspect per-sample resilience
