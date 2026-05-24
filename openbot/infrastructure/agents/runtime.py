@@ -234,6 +234,16 @@ class BaseDeepAgentRuntime:
             checkpointer=effective_checkpointer,
         )
 
+        # Langfuse reads "langfuse_trace_name" and "langfuse_session_id" from
+        # the LangChain run metadata dict (CallbackHandler source lines ~351-364).
+        # Setting them here — alongside the regular observability fields — keeps
+        # config assembly in one place and avoids a duplicate trace_metadata dict.
+        #
+        # langfuse_session_id = run_id groups all traces for the same logical job
+        # (e.g. all eval runs of the same sample, or all retries of one webhook)
+        # under a single Langfuse session while keeping each run's spans in its
+        # own trace.  This replaces the old deterministic trace_id approach, which
+        # caused every re-run of the same sample to merge into one trace.
         config = RunnableConfig(
             recursion_limit=profile.limits.recursion_limit,
             metadata={
@@ -246,6 +256,9 @@ class BaseDeepAgentRuntime:
                 "model": display_name(model),
                 "checkpoint_enabled": effective_checkpointer is not None,
                 "sandbox_present": request.sandbox is not None,
+                # Langfuse-specific: trace label and session grouping.
+                "langfuse_trace_name": (f"{profile.feature.value}-{profile.agent_name}"),
+                "langfuse_session_id": request.run_id or "",
                 **dict(request.metadata),
             },
         )
@@ -253,31 +266,10 @@ class BaseDeepAgentRuntime:
             config["configurable"] = {"thread_id": request.run_id}
 
         # Inject a fresh Langfuse callback so every agent run gets its own
-        # trace with all steps + tool calls visible. No-op when
+        # trace with all steps + tool calls visible.  No-op when
         # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
-        # Pass run_id to generate a deterministic trace_id so all operations
-        # within the same agent run belong to the same Langfuse trace.
-        trace_metadata = {
-            "feature": profile.feature.value,
-            "agent_profile": profile.agent_name,
-            "run_id": request.run_id,
-            "task_id": request.event.delivery_id,
-            "repo": request.event.repo,
-            "actor": request.event.actor,
-            "model": display_name(model),
-            **dict(request.metadata),
-        }
-        lf_callbacks = [
-            h
-            for h in [
-                get_langfuse_handler(
-                    run_id=request.run_id,
-                    trace_name=f"{profile.feature.value}-{profile.agent_name}",
-                    metadata=trace_metadata,
-                )
-            ]
-            if h is not None
-        ]
+        # trace_name and session_id are conveyed via the metadata keys above.
+        lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
         if lf_callbacks:
             config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
 
