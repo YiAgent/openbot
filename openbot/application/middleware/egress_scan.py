@@ -35,12 +35,20 @@ import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Final
+from typing import TYPE_CHECKING, Any, Final, Literal
+
+if TYPE_CHECKING:
+    from openbot.application.ports.channel_adapter import ChannelAdapterPort
+    from openbot.domain.events import UnifiedEvent
 
 _logger = logging.getLogger(__name__)
 
 REDACTION_MARKER: Final = "<openbot:redacted-secret>"
 SAFE_TIMEOUT_REPLACEMENT: Final = "[openbot: response withheld — egress safety scanner timed out]"
+_BLOCK_FALLBACK_BODY: Final = (
+    "[openbot: response withheld — egress safety scanner detected a "
+    "potential secret. Audit row recorded.]"
+)
 _TIMEOUT_S: float = 0.5
 
 
@@ -178,10 +186,134 @@ async def scan_egress_text(text: str, *, surface: EgressSurface) -> EgressScanRe
     )
 
 
+class EgressScannedAdapter:
+    """Decorator over ``ChannelAdapterPort`` that scans every outbound text.
+
+    Wrap once at composition root (in ``entrypoints/api/app.py`` and
+    ``entrypoints/worker/__main__.py``). Use cases call the unchanged
+    ``ChannelAdapterPort`` interface — they never know the decorator exists.
+
+    The decorator delegates every non-egress method (``read_file``, ``grep_repo``,
+    ``add_label``, ``get_issue``, etc.) by attribute forwarding via ``__getattr__``.
+    Only the four egress-bound methods (``reply``, ``create_pr_review``,
+    ``open_pull_request``, plus a ``raw`` accessor for tests) are intercepted.
+    """
+
+    def __init__(
+        self,
+        inner: ChannelAdapterPort,
+        *,
+        action: Literal["redact", "block"] = "redact",
+    ) -> None:
+        self._inner = inner
+        self._action = action
+
+    @property
+    def name(self) -> str:
+        return getattr(self._inner, "name", "unknown")
+
+    @property
+    def raw(self) -> ChannelAdapterPort:
+        """Underlying adapter — only for ports that legitimately bypass egress
+        (e.g. ``announce_once`` admin comments). Use sparingly."""
+        return self._inner
+
+    async def _process(self, text: str, *, surface: EgressSurface) -> str:
+        result = await scan_egress_text(text, surface=surface)
+        if result.timed_out:
+            return result.text
+        if not result.findings:
+            return result.text
+        if self._action == "block":
+            return _BLOCK_FALLBACK_BODY
+        return result.text
+
+    # ── Egress-bound methods ──
+
+    async def reply(self, event: UnifiedEvent, message: str) -> dict[str, Any]:
+        scanned = await self._process(message, surface=EgressSurface.ISSUE_REPLY)
+        return await self._inner.reply(event, scanned)
+
+    async def create_pr_review(
+        self,
+        event: UnifiedEvent,
+        pr_number: int,
+        *,
+        body: str,
+        event_type: Literal["APPROVE", "COMMENT"],
+        comments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        scanned_body = await self._process(body, surface=EgressSurface.PR_REVIEW_BODY)
+        scanned_comments: list[dict[str, Any]] | None
+        if self._action == "block" and await self._has_findings(body, comments):
+            scanned_body = _BLOCK_FALLBACK_BODY
+            scanned_comments = []
+        else:
+            processed = []
+            for c in comments or []:
+                processed.append(
+                    {
+                        **c,
+                        "body": await self._process(
+                            c.get("body", ""), surface=EgressSurface.PR_REVIEW_INLINE
+                        ),
+                    }
+                )
+            scanned_comments = processed or None
+        return await self._inner.create_pr_review(
+            event,
+            pr_number,
+            body=scanned_body,
+            event_type=event_type,
+            comments=scanned_comments,
+        )
+
+    async def open_pull_request(
+        self,
+        event: UnifiedEvent,
+        *,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+    ) -> dict[str, Any]:
+        scanned_title = await self._process(title, surface=EgressSurface.PR_TITLE)
+        scanned_body = await self._process(body, surface=EgressSurface.PR_BODY)
+        return await self._inner.open_pull_request(
+            event,
+            title=scanned_title,
+            body=scanned_body,
+            head=head,
+            base=base,
+        )
+
+    async def _has_findings(
+        self,
+        body: str,
+        comments: list[dict[str, Any]] | None,
+    ) -> bool:
+        body_result = await scan_egress_text(body, surface=EgressSurface.PR_REVIEW_BODY)
+        if body_result.findings:
+            return True
+        for c in comments or []:
+            inline_result = await scan_egress_text(
+                c.get("body", ""), surface=EgressSurface.PR_REVIEW_INLINE
+            )
+            if inline_result.findings:
+                return True
+        return False
+
+    # ── Pass-through everything else ──
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._inner, item)
+
+
 __all__ = [
     "REDACTION_MARKER",
     "SAFE_TIMEOUT_REPLACEMENT",
     "EgressScanResult",
+    "EgressScannedAdapter",
     "EgressSurface",
     "scan_egress_text",
 ]
