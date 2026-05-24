@@ -39,7 +39,10 @@ Rules:
 """
 
 _CHAT_LIMITS = AgentRunLimits(
-    recursion_limit=10,
+    # 30 gives headroom for LangGraph's per-node step counting (model,
+    # router, tool-exec ≈ 3 steps per iteration). model_call_limit=3 with
+    # 'continue' still needs ~9+ steps; 10 was too tight.
+    recursion_limit=30,
     model_call_limit=3,
     model_timeout_s=60,
     max_output_tokens=4_096,
