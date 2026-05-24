@@ -129,8 +129,39 @@ class BudgetGuard(AgentMiddleware):
         )
 
 
+class _DeferredBudgetGuard(BudgetGuard):
+    """Pre-stack-time placeholder; ``runtime.run`` rebinds ``self._state`` per run.
+
+    The stack is built once per profile; each ``run`` call mutates the state
+    via ``bind_state`` so concurrent runs don't share counters.
+    """
+
+    def __init__(self) -> None:
+        # Construct with a no-op state — the cap is unreachable until rebound.
+        super().__init__(
+            state=BudgetGuardState(
+                task_id="<unbound>",
+                cap_usd=Decimal("999999"),
+                lookup=_zero_lookup,
+            )
+        )
+
+    def bind_state(self, state: BudgetGuardState) -> None:
+        self._state = state
+
+
+async def _zero_lookup() -> Decimal:
+    return Decimal("0")
+
+
+def make_budget_guard() -> _DeferredBudgetGuard:
+    return _DeferredBudgetGuard()
+
+
 __all__ = [
     "BUDGET_EXCEEDED_REASON",
     "BudgetGuard",
     "BudgetGuardState",
+    "_DeferredBudgetGuard",
+    "make_budget_guard",
 ]

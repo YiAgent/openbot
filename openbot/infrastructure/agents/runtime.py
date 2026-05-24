@@ -5,11 +5,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from deepagents import create_deep_agent
 from langchain_core.runnables import RunnableConfig
 
+from openbot.infrastructure.agents._budget_middleware import (
+    BudgetGuardState,
+    _DeferredBudgetGuard,
+    make_budget_guard,
+)
 from openbot.infrastructure.agents._middleware import ToolCallRepetitionGuard
 from openbot.infrastructure.agents.model_names import display_name, normalize_for_langchain
 from openbot.infrastructure.agents.profiles import (
@@ -83,8 +89,8 @@ def _register_harness_profile(model: str) -> None:
 
 
 def _build_standard_middleware(limits: AgentRunLimits) -> list[AgentMiddleware]:
-    """Standard safety middleware: repetition guard → tool cap → model cap."""
-    stack: list[Any] = [ToolCallRepetitionGuard()]
+    """Standard safety middleware: budget guard → repetition guard → tool cap → model cap."""
+    stack: list[Any] = [make_budget_guard(), ToolCallRepetitionGuard()]
     try:
         from langchain.agents.middleware import (  # type: ignore[import]
             ModelCallLimitMiddleware,
@@ -108,6 +114,19 @@ def _build_standard_middleware(limits: AgentRunLimits) -> list[AgentMiddleware]:
     except (ImportError, AttributeError):
         _logger.debug("ToolCallLimitMiddleware/ModelCallLimitMiddleware not available")
     return stack
+
+
+def _resolve_per_task_cap(request: AgentRequest) -> Decimal:
+    """Read the cap from request.metadata['per_task_cap_usd'], else default."""
+    raw = request.metadata.get("per_task_cap_usd") if request.metadata else None
+    if raw is None:
+        return Decimal("1.50")
+    if isinstance(raw, Decimal):
+        return raw
+    try:
+        return Decimal(str(raw))
+    except Exception:
+        return Decimal("1.50")
 
 
 def _validate_sandbox(profile: AgentProfile[Any], request: AgentRequest) -> None:
@@ -141,6 +160,36 @@ class BaseDeepAgentRuntime:
 
         middleware = _build_standard_middleware(profile.limits)
         middleware.extend(profile.extra_middleware)
+
+        # Find the deferred budget guard (always at index 0) and rebind its
+        # state to this run's task_id + cap + lookup. The lookup uses
+        # ``CostMeterRepo.sum_recorded_for_task`` with a session per call so
+        # we always read fresh.
+        deferred = next(
+            (m for m in middleware if isinstance(m, _DeferredBudgetGuard)),
+            None,
+        )
+        if deferred is not None:
+            cap = _resolve_per_task_cap(request)
+            session_factory = request.metadata.get("session_factory")
+            task_id = request.event.delivery_id or "<unknown>"
+
+            async def _lookup() -> Decimal:
+                if session_factory is None:
+                    return Decimal("0")
+                from openbot.infrastructure.persistence.repository import CostMeterRepo
+
+                async with session_factory() as session:
+                    return await CostMeterRepo(session).sum_recorded_for_task(task_id)
+
+            budget_state = BudgetGuardState(
+                task_id=task_id,
+                cap_usd=cap,
+                lookup=_lookup,
+            )
+            deferred.bind_state(budget_state)
+        else:
+            budget_state = None
 
         tools = list(profile.build_tools(request))
 
@@ -205,6 +254,17 @@ class BaseDeepAgentRuntime:
             raise AgentExecutionError(
                 f"Agent '{profile.agent_name}' failed: {type(exc).__name__}"
             ) from exc
+
+        # Surface the budget verdict so callers can flip partial=True.
+        if budget_state is not None and budget_state.partial:
+            # `RunnableConfig.metadata` is read-only after dispatch; we attach
+            # to the request.metadata dict in place so the use case can read it.
+            try:
+                request.metadata["budget_partial"] = True
+                request.metadata["budget_reason"] = budget_state.exceeded_reason or ""
+            except TypeError:
+                # request.metadata is a frozen mapping — log only.
+                _logger.warning("budget_partial_metadata_unmutable")
 
         return profile.parse_result(raw)
 
