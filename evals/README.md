@@ -132,16 +132,23 @@ There is **no sandbox** in this flow because the model only reads a diff and emi
 
 ## Sandbox boundary
 
-The repo currently uses **Local Docker** for all agent-based evals:
+The eval solvers themselves do **not** own a sandbox. They obtain one
+from the OpenBot product factory
+(`openbot.application.sandbox_factory_deps.build_sandbox_factory`) and
+pass it to `openbot.evaluation.run_fix_sample(...)`:
 
 ```text
-DeepAgents solver
-  -> DockerSandboxBackend
-  -> Local Docker container
+Inspect Task
+  -> evals/solvers/fix.py (thin adapter)
+  -> openbot.evaluation.run_fix_sample(sandbox=<from openbot product factory>)
+  -> Daytona / Modal / Docker backend (selected via OPENBOT_SANDBOX_BACKEND)
 ```
 
-Inspect AI owns the Task orchestration, but **DeepAgents owns the sandbox lifecycle** for these tasks.
-The sandbox is created by the solver at the start of each sample and destroyed at the end.
+Inspect AI owns the Task orchestration; **OpenBot owns the sandbox
+lifecycle**. This is the inversion that motivated the Phase 1/2
+refactor: evals are no longer a parallel implementation of the agent
+loop — they call the same code path production triage/review/fix
+agents do.
 
 ## LangSmith behavior
 
