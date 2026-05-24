@@ -363,8 +363,9 @@ class _LangSmithExperimentHook(Hooks):
             from langsmith import Client
 
             client = Client()
-            for scorer_name, scorer_metrics in (data.log.results.scores or {}).items():
-                for metric_name, metric_val in (scorer_metrics.metrics or {}).items():
+            for eval_score in data.log.results.scores or []:
+                scorer_name = eval_score.scorer
+                for metric_name, metric_val in (eval_score.metrics or {}).items():
                     if metric_val.value is None:
                         continue
                     agg_key = f"{scorer_name}__{metric_name}"
@@ -375,7 +376,7 @@ class _LangSmithExperimentHook(Hooks):
                         score=float(metric_val.value),
                         comment=(
                             f"aggregate {metric_name} over "
-                            f"{data.log.stats.completed_samples} samples"
+                            f"{data.log.results.completed_samples} samples"
                         ),
                         source_info={"source": "inspect_task_end_hook"},
                     )
