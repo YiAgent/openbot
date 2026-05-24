@@ -4,21 +4,33 @@ Tests: event→feature routing, bot-authored suppression, None-returns
 for incomplete events, and deterministic task_id derivation.
 No IO, no fakes. Settings cache is cleared per-test so routing
 is always based on the ambient (scrubbed) environment.
+
+Note: _resolve_handler is monkeypatched to a stub so the lazy-import
+of LangGraph/LangChain use-cases (~1 s) doesn't happen per-test.
+Unit tests only verify which Feature is returned, not which handler.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
+import openbot.application.router as _router_mod
 from openbot.application.router import SandboxPolicy, dispatch_for
 from openbot.core.settings import get_settings
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.workflows import Feature
 
 
+async def _stub_handler(_ctx: Any) -> None:
+    """No-op handler substituted during unit tests."""
+
+
 @pytest.fixture(autouse=True)
-def _clear_settings_cache() -> None:
-    """Ensure dispatch_for reads a fresh Settings on each test."""
+def _patch_resolve_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Block lazy use-case imports; unit tests only check Feature/task_id."""
+    monkeypatch.setattr(_router_mod, "_resolve_handler", lambda _feature: _stub_handler)
     get_settings.cache_clear()
 
 
