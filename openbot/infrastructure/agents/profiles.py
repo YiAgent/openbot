@@ -74,6 +74,11 @@ class AgentRequest:
     run_id: str | None = None
     checkpointer: BaseCheckpointSaver | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    # Optional ChannelAdapterPort for tools that need repo I/O. Chat profile
+    # closes over this in build_tools to construct read-only chat tools;
+    # other profiles ignore it. Stays None for fully self-contained agents.
+    # Typed as Any to avoid circular imports — chat profile narrows it.
+    event_adapter: Any | None = None
 
 
 class SandboxRequirement(StrEnum):

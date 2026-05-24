@@ -134,6 +134,7 @@ class DeepAgentsChatResponder:
         user_request: str,
         run_id: str | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
+        adapter: Any | None = None,
     ) -> str:
         return await self._runtime.run(
             ChatProfile(),
@@ -142,6 +143,7 @@ class DeepAgentsChatResponder:
                 run_id=run_id,
                 checkpointer=checkpointer,
                 input={"user_request": user_request},
+                event_adapter=adapter,
             ),
         )
 
