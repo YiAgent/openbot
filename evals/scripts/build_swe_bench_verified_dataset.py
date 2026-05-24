@@ -24,7 +24,7 @@ import sys
 
 from inspect_evals.swe_bench.swe_bench import swe_bench as _upstream_swe_bench
 
-from evals.common.config import get_eval_config as _eval_cfg
+from evals.runtime.config import get_eval_config as _eval_cfg
 
 # Dataset identifiers from CatalogSettings — single source of truth.
 _DS_NAME = _eval_cfg().catalog.fix.dataset_version

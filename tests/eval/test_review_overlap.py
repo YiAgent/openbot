@@ -127,12 +127,12 @@ def test_judge_is_called_through_locked_martian_model(monkeypatch) -> None:  # t
     whatever the shared judge-model resolver chose, so callers downstream
     (overlap scorer, task metadata, LangSmith experiment record) all see
     the same id. Pre-v3 this pinned the literal ``claude-opus-4-5``; v3
-    moved the id to :func:`evals.common.judge_client.resolve_judge_model`
+    moved the id to :func:`evals.scorers._judge_client.resolve_judge_model`
     so per-gateway overrides work without touching code.
     """
     import importlib
 
-    from evals.common import judge_client
+    from evals.scorers import _judge_client as judge_client
     from evals.scorers import review_judge
 
     monkeypatch.setenv("OPENBOT_REVIEW_JUDGE_MODEL_ID", "anthropic:test-judge-model")

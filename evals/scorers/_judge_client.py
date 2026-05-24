@@ -29,7 +29,7 @@ from functools import lru_cache
 
 from langchain_anthropic import ChatAnthropic
 
-from evals.common import config
+from evals.runtime import config
 
 # ─── Shared judge model resolution ────────────────────────────────────────
 #

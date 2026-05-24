@@ -9,9 +9,9 @@ from typing import Any
 from inspect_ai.scorer import Scorer
 from pydantic import BaseModel
 
-from evals.common.config import get_eval_config
-from evals.common.prediction_export import prediction_exporter
-from evals.inspect.langsmith import LangSmithExperiment
+from evals.runtime.config import get_eval_config
+from evals.runtime.langsmith import LangSmithExperiment
+from evals.runtime.prediction_export import prediction_exporter
 
 
 @dataclass(frozen=True)

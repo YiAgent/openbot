@@ -28,7 +28,7 @@ import argparse
 import json
 import sys
 
-from evals.common.config import get_eval_config as _eval_cfg
+from evals.runtime.config import get_eval_config as _eval_cfg
 
 # Dataset identifiers from CatalogSettings — single source of truth.
 _DS_NAME = _eval_cfg().catalog.swt.dataset_version
