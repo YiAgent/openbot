@@ -48,7 +48,15 @@ def test_webhook_rejects_tampered_body(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_webhook_accepts_valid_signature(client: TestClient) -> None:
+def test_webhook_accepts_valid_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+    import fakeredis.aioredis
+
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SECRET)
+    monkeypatch.setenv("OPENBOT_REDIS_URL", "redis://fake")
+    monkeypatch.setattr("openbot.entrypoints.api.app.make_client", lambda url: fake)
+    get_settings.cache_clear()
+
     body = json.dumps(
         {
             "action": "opened",
@@ -58,7 +66,11 @@ def test_webhook_accepts_valid_signature(client: TestClient) -> None:
             "installation": {"id": 12345},
         }
     ).encode()
-    response = client.post("/webhook/github", content=body, headers=_sign(body))
+    try:
+        with TestClient(app) as c:
+            response = c.post("/webhook/github", content=body, headers=_sign(body))
+    finally:
+        get_settings.cache_clear()
 
     assert response.status_code == 202
     data = response.json()
@@ -107,14 +119,11 @@ def test_webhook_503_when_secret_unset(monkeypatch: pytest.MonkeyPatch, tmp_path
 # ───── dedup integration ─────
 
 
-def test_webhook_dedup_fallback_open_when_redis_unset(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Without OPENBOT_REDIS_URL, both repeats are processed (fall-open).
+def test_webhook_requires_redis(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Without OPENBOT_REDIS_URL, the webhook raises RuntimeError.
 
-    Deterministic version of the prior "either-or" test: explicitly scrubs
-    the env so the dedup is guaranteed to be in fall-open mode, and asserts
-    both outcomes are "accepted".
+    BackgroundTask fallback was removed — Redis is now mandatory for
+    webhook dispatch. Without it, ``ingest_webhook`` raises RuntimeError.
     """
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SECRET)
@@ -130,15 +139,14 @@ def test_webhook_dedup_fallback_open_when_redis_unset(
             "installation": {"id": 99},
         }
     ).encode()
-    headers = _sign(body) | {"x-github-delivery": "fallback-test-id"}
+    headers = _sign(body) | {"x-github-delivery": "redis-required-test"}
 
     try:
-        with TestClient(app) as c:
-            r1 = c.post("/webhook/github", content=body, headers=headers)
-            r2 = c.post("/webhook/github", content=body, headers=headers)
-
-        assert r1.status_code == 202 and r1.json()["status"] == "accepted"
-        assert r2.status_code == 202 and r2.json()["status"] == "accepted"
+        with (
+            TestClient(app) as c,
+            pytest.raises(RuntimeError, match="Redis client is not configured"),
+        ):
+            c.post("/webhook/github", content=body, headers=headers)
     finally:
         get_settings.cache_clear()
 
@@ -150,7 +158,8 @@ async def test_webhook_enqueues_when_redis_present(
     invoking the in-process BackgroundTask path. Slice D behavior."""
     import fakeredis.aioredis  # local import: dev-only dep
 
-    from openbot.infrastructure.queue.payload import STREAM_NAME, deserialize_payload
+    from openbot.infrastructure.queue.payload import STREAM_NAME
+    from openbot.infrastructure.queue.task_spec import deserialize_task_spec
 
     monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", _SECRET)
     get_settings.cache_clear()
@@ -187,10 +196,10 @@ async def test_webhook_enqueues_when_redis_present(
         entries = await fake.xrange(STREAM_NAME, count=10)
         assert len(entries) == 1
         _entry_id, fields = entries[0]
-        restored = deserialize_payload(fields["json"])
+        restored = deserialize_task_spec(fields["json"])
         assert restored is not None
         assert restored.delivery_id == "queue-test-id"
-        assert restored.feature == "triage"
+        assert restored.scenario == "triage"
         assert restored.repo == "YiAgent/openbot"
     finally:
         get_settings.cache_clear()

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 from openbot.application.dispatcher import build_preflight_chain, execute_handler
 from openbot.application.middleware import MiddlewareResult, PreflightContext, run_preflight
 from openbot.application.state.runs_repo import get_last_reviewed_sha
-from openbot.dispatcher.classifier import classify_event, stages_from_classifier
+from openbot.dispatcher.classifier import classify_for_dispatch, stages_from_classifier
 from openbot.dispatcher.context import extract_event_context
 from openbot.dispatcher.direct_actions import RULES_BY_FEATURE, DirectAction
 from openbot.dispatcher.incremental import compute_diff_scope
@@ -154,21 +154,11 @@ async def decide_and_enqueue(
 
         initial_labels = _extract_initial_labels(event.raw)
 
-        # Classify event (one-shot LLM) — fail-open: on exception, treat as
-        # classifier_skipped and let the worker run all stages.
-        classifier_result = None
-        if feature is not Feature.FIX:
-            try:
-                classifier_result = await classify_event(
-                    feature=feature,
-                    body=ev_ctx.classification_body,
-                    redis=redis,
-                )
-            except Exception:
-                _logger.exception(
-                    "classifier_exception_in_decide",
-                    extra={"delivery_id": event.delivery_id, "repo": event.repo},
-                )
+        # Classify the event once — ``classify_for_dispatch`` handles the
+        # FIX-feature skip, the body extraction, and the fail-open wrap
+        # (see its docstring). Used by all three dispatcher entry points
+        # to keep the LLM call-site a single source of truth.
+        classifier_result = await classify_for_dispatch(event=event, feature=feature, redis=redis)
         classifier_output = (
             _dataclass_asdict(classifier_result) if classifier_result is not None else None
         )
@@ -220,6 +210,11 @@ async def decide_and_enqueue(
                 "decide_and_enqueue_in_process_fallback",
                 extra={"delivery_id": event.delivery_id},
             )
+            # In-process fallback (dev / unit tests): pass the typed
+            # ``classifier_result`` straight through — no asdict / parse
+            # round-trip needed when we stay in the same process. The
+            # worker path is the only one that has to traverse the
+            # serialise/deserialise boundary.
             await execute_handler(
                 adapter=adapter,
                 event=event,
@@ -230,6 +225,7 @@ async def decide_and_enqueue(
                 check_run_id=check_run_id,
                 audit=audit,
                 rate_limiter=rate_limiter,
+                classifier_output=classifier_result,
             )
 
     except Exception:

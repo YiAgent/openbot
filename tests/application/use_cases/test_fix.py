@@ -1,17 +1,27 @@
-"""Use case tests for ``maybe_run_fix`` (slice C end-to-end)."""
+"""Use case tests for ``maybe_run_fix`` (slice C end-to-end).
+
+Part 3 of the unified-sandbox-entry plan moved provisioning (factory →
+clone → installation token) up into ``dispatcher._run_with_sandbox``,
+so this suite no longer covers those branches — the dispatcher's own
+test (``tests/application/test_dispatcher.py``) does. The fix handler
+now receives a pre-built ``SandboxedHandle`` on ``ctx.sandbox_handle``
+and either consumes it or posts the ``_NO_SANDBOX`` degrade reply.
+"""
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openbot.application.sandbox_handle import SandboxedHandle
 from openbot.application.use_cases import fix as fix_module
+from openbot.domain.checkout import CheckoutSpec, CloneStrategy
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.fix import FixAttempt, FixOutcome
+from tests._fakes.sandbox import FakeSandboxLifecycle
 
 
 def _event(**overrides: Any) -> UnifiedEvent:
@@ -52,40 +62,45 @@ def _issue() -> dict[str, Any]:
     }
 
 
-@dataclass
-class _FakeSandbox:
-    """In-test stand-in for ``SandboxPort``. Records each call as a
-    ``(repo_url, ref, token)`` or ``(branch_ref, message, token)`` tuple
-    so wiring tests can assert on the exact contract the use case must
-    honour against the real ``DaytonaSandboxAdapter``.
+def _checkout(**overrides: Any) -> CheckoutSpec:
+    """Build a CheckoutSpec matching the canonical ``_issue()`` fixture
+    so the branch-naming + commit-and-push assertions still line up."""
+    defaults: dict[str, Any] = {
+        "repo_url": "https://github.com/o/r.git",
+        "ref": "abc1234567",
+        "strategy": CloneStrategy.SHALLOW,
+        "diff_base": None,
+    }
+    defaults.update(overrides)
+    return CheckoutSpec(**defaults)
+
+
+def _handle(
+    *,
+    sandbox: FakeSandboxLifecycle | None = None,
+    checkout: CheckoutSpec | None = None,
+    token: str = "tok123",
+) -> SandboxedHandle:
+    """The dispatcher builds this; tests inject it directly into ctx.
+
+    Keeps the three correlated values together — see
+    ``openbot.application.sandbox_handle`` docstring.
     """
-
-    workspace: str = "/workspace/repo"
-    cloned: list[tuple[str, str, str]] = field(default_factory=list)
-    pushed: list[tuple[str, str, str]] = field(default_factory=list)
-    closed: bool = False
-
-    async def clone(self, *, repo_url: str, ref: str, token: str) -> None:
-        self.cloned.append((repo_url, ref, token))
-
-    async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
-        self.pushed.append((branch_ref, message, token))
-
-    async def close(self) -> None:
-        self.closed = True
-
-
-@asynccontextmanager
-async def _sandbox_cm(sandbox: _FakeSandbox):
-    try:
-        yield sandbox
-    finally:
-        await sandbox.close()
+    return SandboxedHandle(
+        sandbox=sandbox or FakeSandboxLifecycle(),
+        checkout=checkout or _checkout(),
+        token=token,
+    )
 
 
 def _adapter(**method_overrides: Any) -> MagicMock:
     """Happy-path adapter mock; pass kwargs to override a method
     (e.g. ``get_issue=AsyncMock(side_effect=RuntimeError())``).
+
+    ``get_installation_token`` returns a fresh token string matching the
+    handle's default token.  The fix handler refreshes the token
+    immediately before commit_and_push to guard against 1-hour token
+    expiry during long agent runs.
     """
     a = MagicMock()
     a.get_issue = AsyncMock(return_value=_issue())
@@ -100,7 +115,14 @@ def _adapter(**method_overrides: Any) -> MagicMock:
     return a
 
 
-def _ctx(*, event: UnifiedEvent | None = None, adapter: Any, sandbox_factory: Any) -> Any:
+def _ctx(
+    *,
+    event: UnifiedEvent | None = None,
+    adapter: Any,
+    sandbox_handle: SandboxedHandle | None,
+    run_id: str | None = None,
+    agent_checkpointer: Any = None,
+) -> Any:
     from openbot.application.middleware import PreflightContext
     from openbot.application.router import Dispatch, derive_task_id
     from openbot.application.use_cases.fix import maybe_run_fix
@@ -110,12 +132,13 @@ def _ctx(*, event: UnifiedEvent | None = None, adapter: Any, sandbox_factory: An
     real_event = event or _event()
     return PreflightContext(
         event=real_event,
-        dispatch=Dispatch(Feature.FIX, maybe_run_fix, derive_task_id(real_event)),
+        dispatch=Dispatch(Feature.FIX, maybe_run_fix, derive_task_id(real_event), run_id=run_id),
         config=baked_in_defaults(),
         adapter=adapter,
         session_factory=None,
         redis=None,
-        sandbox_factory=sandbox_factory,
+        sandbox_handle=sandbox_handle,
+        agent_checkpointer=agent_checkpointer,
     )
 
 
@@ -129,7 +152,7 @@ async def test_skips_when_required_event_field_missing(field_to_drop: str):
     ctx = _ctx(
         event=_event(**{field_to_drop: None}),
         adapter=adapter,
-        sandbox_factory=lambda: _sandbox_cm(_FakeSandbox()),
+        sandbox_handle=_handle(),
     )
 
     await fix_module.maybe_run_fix(ctx)
@@ -139,41 +162,56 @@ async def test_skips_when_required_event_field_missing(field_to_drop: str):
 
 
 @pytest.mark.asyncio
-async def test_comments_when_sandbox_factory_missing():
+async def test_fix_degrades_when_sandbox_handle_none():
+    """Handler given ``ctx.sandbox_handle is None`` posts the
+    ``_NO_SANDBOX`` template and never touches GitHub.
+
+    This is the unified-entry degrade contract — the dispatcher signals
+    "no sandbox available" by passing None, and the handler chooses a
+    workflow-appropriate reply rather than the dispatcher trying to
+    guess per-feature templates.
+    """
     adapter = _adapter()
-    ctx = _ctx(adapter=adapter, sandbox_factory=None)
+    ctx = _ctx(adapter=adapter, sandbox_handle=None)
 
     await fix_module.maybe_run_fix(ctx)
 
-    assert "sandbox is not configured" in adapter.reply.call_args.args[1].lower()
+    posted = adapter.reply.call_args.args[1].lower()
+    assert "sandbox is not configured" in posted
+    # No GitHub work proceeds — `get_issue` is the first call inside
+    # the lifecycle block, and the early return happens above it.
+    adapter.get_issue.assert_not_called()
 
 
 # ---------- Happy path ----------
 
 
 @pytest.mark.asyncio
-async def test_fetches_issue_clones_and_opens_pr(monkeypatch):
-    sandbox = _FakeSandbox()
+async def test_fix_uses_sandbox_handle_from_context(monkeypatch):
+    """Handler consumes the pre-provisioned handle: never opens its own
+    sandbox, never fetches the installation token, never calls clone.
+
+    The dispatcher has already done all three, so a second clone would
+    be wasted work *and* would race the dispatcher's checkout.
+    """
+    sandbox = FakeSandboxLifecycle()
     adapter = _adapter()
 
-    async def fake_generate(*, sandbox, event, adapter, issue):
+    async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
         return FixOutcome(attempt=_attempt(tests_passed=True))
 
     monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
 
-    ctx = _ctx(adapter=adapter, sandbox_factory=lambda: _sandbox_cm(sandbox))
+    ctx = _ctx(adapter=adapter, sandbox_handle=_handle(sandbox=sandbox))
     await fix_module.maybe_run_fix(ctx)
 
-    # Use case passes raw clone_url + ref + token through to the port —
-    # token injection is the adapter's job (see SandboxPort docstring).
-    assert sandbox.cloned == [
-        ("https://github.com/o/r.git", "abc1234567", "tok123"),
-    ]
-    assert sandbox.closed is True
+    # The handler did NOT re-clone — provisioning is the dispatcher's job.
+    assert sandbox.cloned == []
+    # The handler refreshes the installation token before commit_and_push
+    # to guard against 1-hour token expiry during long agent runs.
+    assert adapter.get_installation_token.called
 
-    # Branch name pattern + short SHA.
-    # adapter.create_branch receives the *short* ref; the GitHub adapter
-    # prepends "refs/heads/" internally before calling the REST API.
+    # Branch name pattern + short SHA come from the handle's checkout.
     branch_ref = adapter.create_branch.call_args.args[1]
     assert branch_ref.startswith("openbot/fix-issue-7-")
     assert "abc1234" in branch_ref
@@ -183,7 +221,7 @@ async def test_fetches_issue_clones_and_opens_pr(monkeypatch):
     assert pr_kwargs["base"] == "main"
     assert pr_kwargs["head"].startswith("openbot/fix-issue-7-")
     assert "Closes #7" in pr_kwargs["body"]
-    # commit_and_push receives the *short* branch_ref + the raw token.
+    # commit_and_push receives the short branch_ref + the handle's token.
     assert sandbox.pushed
     assert sandbox.pushed[0][0].startswith("openbot/fix-issue-7-")
     assert sandbox.pushed[0][2] == "tok123"
@@ -194,7 +232,7 @@ async def test_fetches_issue_clones_and_opens_pr(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_audit_lifecycle_records_pr_url_on_success(monkeypatch):
-    sandbox = _FakeSandbox()
+    sandbox = FakeSandboxLifecycle()
     adapter = _adapter()
     captured: list[str] = []
 
@@ -208,12 +246,12 @@ async def test_audit_lifecycle_records_pr_url_on_success(monkeypatch):
 
     monkeypatch.setattr(fix_module, "audit_lifecycle", fake_audit_lifecycle)
 
-    async def fake_generate(*, sandbox, event, adapter, issue):
+    async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
         return FixOutcome(attempt=_attempt(tests_passed=True))
 
     monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
 
-    ctx = _ctx(adapter=adapter, sandbox_factory=lambda: _sandbox_cm(sandbox))
+    ctx = _ctx(adapter=adapter, sandbox_handle=_handle(sandbox=sandbox))
     await fix_module.maybe_run_fix(ctx)
 
     assert captured == ["pr_opened:https://github.com/o/r/pull/9"]
@@ -224,18 +262,18 @@ async def test_audit_lifecycle_records_pr_url_on_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_comments_with_truncated_output_when_tests_failed(monkeypatch):
-    sandbox = _FakeSandbox()
+    sandbox = FakeSandboxLifecycle()
     adapter = _adapter()
     huge = "X" * 50_000
 
-    async def fake_generate(*, sandbox, event, adapter, issue):
+    async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
         return FixOutcome(
             attempt=_attempt(tests_passed=False, test_output=huge),
         )
 
     monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
 
-    ctx = _ctx(adapter=adapter, sandbox_factory=lambda: _sandbox_cm(sandbox))
+    ctx = _ctx(adapter=adapter, sandbox_handle=_handle(sandbox=sandbox))
     await fix_module.maybe_run_fix(ctx)
 
     adapter.create_branch.assert_not_called()
@@ -246,48 +284,6 @@ async def test_comments_with_truncated_output_when_tests_failed(monkeypatch):
     assert len(posted) < 10_000  # well under GitHub's 65k cap
 
 
-# ---------- Token-fetch failure (its own audit branch) ----------
-
-
-@pytest.mark.asyncio
-async def test_comments_when_token_fetch_fails(monkeypatch):
-    """``get_installation_token`` runs in its own try/except so audit
-    dashboards can distinguish ``token_failed`` from ``clone_failed``
-    even though the user-visible message is the same ``_CLONE_FAIL``.
-    """
-    sandbox = _FakeSandbox()
-    adapter = _adapter(
-        get_installation_token=AsyncMock(side_effect=RuntimeError("token endpoint 500")),
-    )
-    captured: list[str] = []
-
-    @asynccontextmanager
-    async def fake_audit_lifecycle(ctx, *, workflow):
-        rec = type("R", (), {"outcome": ""})()
-        try:
-            yield rec
-        finally:
-            captured.append(rec.outcome)
-
-    monkeypatch.setattr(fix_module, "audit_lifecycle", fake_audit_lifecycle)
-
-    ctx = _ctx(adapter=adapter, sandbox_factory=lambda: _sandbox_cm(sandbox))
-    await fix_module.maybe_run_fix(ctx)
-
-    # Sandbox is never opened — the early return happens before the
-    # ``async with factory() as sandbox:`` block.
-    assert sandbox.cloned == []
-    assert sandbox.closed is False
-    # No branch/PR work proceeds.
-    adapter.create_branch.assert_not_called()
-    adapter.open_pull_request.assert_not_called()
-    # User sees the shared _CLONE_FAIL message but audit records the
-    # distinct stage so ops can split the two on the dashboard.
-    posted = adapter.reply.call_args.args[1].lower()
-    assert "clone" in posted
-    assert captured == ["token_failed"]
-
-
 # ---------- Failure paths (parametrized over the stage that explodes) ----------
 
 
@@ -296,7 +292,6 @@ async def test_comments_when_token_fetch_fails(monkeypatch):
     ("stage", "expected_phrase", "expect_pr_attempt"),
     [
         ("get_issue", "could not read", False),
-        ("clone", "clone", False),
         ("agent", "agent failed", False),
         ("create_branch", "branch", False),
         ("push", "push", False),
@@ -311,22 +306,20 @@ async def test_failure_in_stage_yields_tailored_comment(
 ):
     """One parametrized case per stage. Setup is shared — only the
     failing dependency varies, plus the user-visible comment phrase.
+
+    The ``clone`` stage isn't in this matrix anymore: that's the
+    dispatcher's responsibility (it degrades to ``sandbox_handle =
+    None`` on a clone failure, which the ``_NO_SANDBOX`` branch above
+    covers).
     """
-    sandbox: _FakeSandbox = _FakeSandbox()
+    sandbox: FakeSandboxLifecycle = FakeSandboxLifecycle()
     adapter_overrides: dict[str, Any] = {}
 
     if stage == "get_issue":
         adapter_overrides["get_issue"] = AsyncMock(side_effect=RuntimeError("404"))
-    elif stage == "clone":
-
-        class ExplodingClone(_FakeSandbox):
-            async def clone(self, *args, **kwargs) -> None:
-                raise RuntimeError("clone refused")
-
-        sandbox = ExplodingClone()
     elif stage == "agent":
 
-        async def fake_generate(*, sandbox, event, adapter, issue):
+        async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
             raise RuntimeError("agent imploded")
 
         monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
@@ -336,7 +329,7 @@ async def test_failure_in_stage_yields_tailored_comment(
         )
     elif stage == "push":
 
-        class PushFail(_FakeSandbox):
+        class PushFail(FakeSandboxLifecycle):
             async def commit_and_push(self, *args, **kwargs) -> None:
                 raise RuntimeError("auth failed")
 
@@ -348,22 +341,72 @@ async def test_failure_in_stage_yields_tailored_comment(
 
     if stage != "agent":
 
-        async def fake_generate(*, sandbox, event, adapter, issue):
+        async def fake_generate(*, sandbox, event, adapter, issue, run_id=None, checkpointer=None):
             return FixOutcome(attempt=_attempt(tests_passed=True))
 
         monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
 
     adapter = _adapter(**adapter_overrides)
-    ctx = _ctx(adapter=adapter, sandbox_factory=lambda: _sandbox_cm(sandbox))
+    ctx = _ctx(adapter=adapter, sandbox_handle=_handle(sandbox=sandbox))
     await fix_module.maybe_run_fix(ctx)
-
-    # Sandbox CM cleanup ran unless we never entered it (get_issue path).
-    if stage == "get_issue":
-        assert sandbox.cloned == []
-    else:
-        assert sandbox.closed is True
 
     if not expect_pr_attempt:
         adapter.open_pull_request.assert_not_called()
 
     assert expected_phrase in adapter.reply.call_args.args[1].lower()
+
+
+# ---------- Checkpointer + cancellation ----------
+
+
+@pytest.mark.asyncio
+async def test_fix_passes_checkpointer_and_run_id_to_responder(monkeypatch) -> None:
+    """maybe_run_fix must forward ctx.agent_checkpointer + ctx.dispatch.run_id
+    to _generate_fix_outcome."""
+    from langgraph.checkpoint.memory import MemorySaver
+
+    captured: dict[str, Any] = {}
+
+    async def fake_generate(
+        *, sandbox, event, adapter, issue, run_id=None, checkpointer=None
+    ) -> FixOutcome:
+        captured["run_id"] = run_id
+        captured["checkpointer"] = checkpointer
+        return FixOutcome(attempt=_attempt(tests_passed=True))
+
+    monkeypatch.setattr(fix_module, "_generate_fix_outcome", fake_generate)
+
+    saver = MemorySaver()
+    ctx = _ctx(
+        adapter=_adapter(),
+        sandbox_handle=_handle(),
+        run_id="run-fix-1",
+        agent_checkpointer=saver,
+    )
+    await fix_module.maybe_run_fix(ctx)
+
+    assert captured["run_id"] == "run-fix-1"
+    assert captured["checkpointer"] is saver
+
+
+@pytest.mark.asyncio
+async def test_fix_cancellation_checkpoint_fires_before_agent(monkeypatch) -> None:
+    """If cancellation is signalled before the agent call, RunCancelledError propagates.
+
+    RunCancelledError inherits from asyncio.CancelledError → BaseException, so
+    audit_lifecycle's ``except Exception`` guard does NOT intercept it.
+    """
+    from openbot.application.state.cancellation import RunCancelledError
+
+    async def _always_cancelled(redis: Any, run_id: str) -> None:
+        raise RunCancelledError()
+
+    monkeypatch.setattr(fix_module, "checkpoint", _always_cancelled)
+
+    ctx = _ctx(
+        adapter=_adapter(),
+        sandbox_handle=_handle(),
+        run_id="run-cancel-test",
+    )
+    with pytest.raises(RunCancelledError):
+        await fix_module.maybe_run_fix(ctx)

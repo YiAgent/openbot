@@ -234,9 +234,19 @@ class GitHubAdapter(ChannelAdapter):
             pr_number = None
             issue_number = issue.get("number")
 
-        comment_body = (payload.get("comment") or {}).get("body")
+        comment = payload.get("comment") or {}
+        comment_body = comment.get("body")
         installation_id = (payload.get("installation") or {}).get("id")
         event_seq = _extract_event_seq(pull_request, issue)
+
+        # Promoted fields for unified sandbox checkout (Task 1.8 of plan
+        # ``2026-05-21-unified-sandbox-entry``). Only present on payloads
+        # that actually carry them; downstream resolver tolerates None.
+        clone_url = (payload.get("repository") or {}).get("clone_url") or None
+        # ``commit_id`` is present on pull_request_review_comment events;
+        # we don't gate on event kind here because issue.comments / etc.
+        # simply won't have the key — ``.get`` returns None.
+        review_commit_id = comment.get("commit_id") or None
 
         return UnifiedEvent(
             channel=self.name,
@@ -250,6 +260,8 @@ class GitHubAdapter(ChannelAdapter):
             comment_body=comment_body,
             installation_id=installation_id,
             event_seq=event_seq,
+            clone_url=clone_url,
+            review_commit_id=review_commit_id,
             raw=payload,
         )
 
@@ -420,6 +432,26 @@ class GitHubAdapter(ChannelAdapter):
             raise ValueError(f"Unexpected encoding from GitHub Contents API: {encoding!r}")
         return base64.b64decode(encoded, validate=False)
 
+    async def get_pull_request(self, event: UnifiedEvent, pr_number: int) -> dict[str, Any]:
+        """Return the JSON body of ``GET /repos/{owner}/{repo}/pulls/{n}``.
+
+        Used by the checkout resolver when the event payload doesn't
+        carry head/base SHAs (e.g. ``issue_comment`` events on a PR).
+        Bypasses ``get_pr_diff`` because we need the JSON, not the
+        ``application/vnd.github.v3.diff`` text representation.
+
+        Raises ``httpx.HTTPStatusError`` on non-2xx — the resolver
+        surfaces these as ``CheckoutResolutionError``.
+        """
+        url = f"{self._api_base}/repos/{event.repo}/pulls/{pr_number}"
+        data = await self._authed_json("GET", url, event)
+        if not isinstance(data, dict):
+            # Defensive: a non-dict response means the JSON parsed but
+            # the API contract is broken — treat as a hard failure so
+            # the resolver doesn't silently propagate garbage.
+            raise ValueError(f"unexpected PR shape: {type(data).__name__}")
+        return data
+
     async def get_pr_diff(self, event: UnifiedEvent, pr_number: int) -> str:
         """Fetch the PR's unified diff via the Accept-header content switch.
 
@@ -553,6 +585,30 @@ class GitHubAdapter(ChannelAdapter):
         if comments:
             payload["comments"] = comments
         return await self._authed_json("POST", url, event, json_body=payload)
+
+    async def get_default_branch_sha(self, event: UnifiedEvent) -> str:
+        """Resolve repo's default branch then return its tip SHA.
+
+        Two ``_authed_json`` calls — both inherit the adapter's retry +
+        rate-limit-headroom instrumentation, so callers don't need to
+        re-wrap them. Raises on hard HTTP errors (the resolver bubbles
+        the failure up to the use case).
+        """
+        base = f"{self._api_base}/repos/{event.repo}"
+        repo_meta = await self._authed_json("GET", base, event)
+        default_branch = (
+            str(repo_meta.get("default_branch") or "main")
+            if isinstance(repo_meta, dict)
+            else "main"
+        )
+        ref = await self._authed_json("GET", f"{base}/git/ref/heads/{default_branch}", event)
+        if isinstance(ref, dict) and isinstance(ref.get("object"), dict):
+            return str(ref["object"]["sha"])
+        # A malformed-but-200 response (missing object.sha) must raise so
+        # the checkout resolver can catch it as CheckoutResolutionError and
+        # degrade gracefully.  Returning "" would produce a CheckoutSpec
+        # with ref="" that silently triggers a bad git clone downstream.
+        raise ValueError(f"unexpected ref shape from GitHub API: {ref!r}")
 
     async def get_issue(self, event: UnifiedEvent, issue_number: int) -> dict[str, Any]:
         """Return a normalized issue snapshot for the fix loop.

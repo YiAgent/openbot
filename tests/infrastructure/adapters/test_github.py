@@ -237,6 +237,72 @@ def test_parse_missing_actor_type_defaults_to_none() -> None:
     assert event.is_from_bot is False
 
 
+# ───── clone_url / review_commit_id ingest (Task 1.8) ─────
+
+
+def test_parse_pr_opened_extracts_clone_url() -> None:
+    """PR webhooks carry the HTTPS clone URL — promote it to a typed field
+    so the dispatcher's checkout resolver doesn't have to dig through `raw`.
+    """
+    payload = {
+        "action": "opened",
+        "pull_request": {"number": 17},
+        "repository": {
+            "full_name": "YiAgent/openbot",
+            "clone_url": "https://github.com/YiAgent/openbot.git",
+        },
+        "sender": {"login": "contributor"},
+    }
+    body = json.dumps(payload).encode()
+    event = _adapter().parse_event(body, _sign(body, event="pull_request"))
+    assert event.clone_url == "https://github.com/YiAgent/openbot.git"
+
+
+def test_parse_issue_opened_extracts_clone_url() -> None:
+    payload = _issue_opened_payload() | {
+        "repository": {
+            "full_name": "YiAgent/openbot",
+            "clone_url": "https://github.com/YiAgent/openbot.git",
+        }
+    }
+    body = json.dumps(payload).encode()
+    event = _adapter().parse_event(body, _sign(body))
+    assert event.clone_url == "https://github.com/YiAgent/openbot.git"
+
+
+def test_parse_missing_clone_url_is_none() -> None:
+    """Adapter does not invent a URL — the resolver decides what to do."""
+    body = json.dumps(_issue_opened_payload()).encode()  # no `clone_url`
+    event = _adapter().parse_event(body, _sign(body))
+    assert event.clone_url is None
+
+
+def test_parse_pr_review_comment_extracts_commit_id() -> None:
+    """Inline PR review comments carry the commit SHA they were left on —
+    promote it so the review workflow can checkout the *exact* commit.
+    """
+    payload = {
+        "action": "created",
+        "pull_request": {"number": 17},
+        "comment": {
+            "body": "nit",
+            "commit_id": "abc123def456" + "0" * 28,
+        },
+        "repository": {"full_name": "YiAgent/openbot"},
+        "sender": {"login": "reviewer"},
+    }
+    body = json.dumps(payload).encode()
+    event = _adapter().parse_event(body, _sign(body, event="pull_request_review_comment"))
+    assert event.review_commit_id == "abc123def456" + "0" * 28
+
+
+def test_parse_missing_review_commit_id_is_none() -> None:
+    """Non-review events don't have a commit_id; field stays None."""
+    body = json.dumps(_issue_opened_payload()).encode()
+    event = _adapter().parse_event(body, _sign(body))
+    assert event.review_commit_id is None
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Write-back: reply / add_label / remove_label / get_actor_role
 # All requests go through httpx.MockTransport — no real network.
@@ -794,6 +860,144 @@ async def test_get_issue_raises_on_404(adapter_factory: Any) -> None:
     )
     with pytest.raises(httpx.HTTPStatusError):
         await adapter.get_issue(_event(issue_number=999), 999)
+
+
+# ───── get_default_branch_sha ─────
+
+
+async def test_get_default_branch_sha_resolves_repo_default_branch(
+    adapter_factory: Any,
+) -> None:
+    """Two-call dance: repo metadata to learn the default branch name,
+    then git/ref/heads/{branch} for the commit SHA. The resolver feeds
+    this into a CheckoutSpec when the event itself doesn't already
+    carry a SHA (e.g. label flips, ad-hoc chat mentions)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if url.endswith("/repos/YiAgent/openbot"):
+            return httpx.Response(
+                200,
+                json={
+                    "default_branch": "main",
+                    "clone_url": "https://github.com/YiAgent/openbot.git",
+                },
+            )
+        if url.endswith("/repos/YiAgent/openbot/git/ref/heads/main"):
+            return httpx.Response(
+                200,
+                json={"object": {"sha": "deadbeef1234567890abcdef1234567890abcdef"}},
+            )
+        raise AssertionError(f"unexpected url: {url}")
+
+    adapter, captured = adapter_factory(handler, auth=_FakeAuth())
+    sha = await adapter.get_default_branch_sha(_event(issue_number=None, pr_number=None))
+    assert sha == "deadbeef1234567890abcdef1234567890abcdef"
+    # Exactly two GETs — repo metadata + ref lookup. Caching across
+    # events stays out of scope for v0.1 (event volume is low; tokens
+    # are short-lived) so the call count is intentional.
+    assert len(captured) == 2
+
+
+async def test_get_default_branch_sha_follows_non_default_branch_name(
+    adapter_factory: Any,
+) -> None:
+    """Repos with a custom default branch ('trunk', 'develop', etc.) still resolve."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if url.endswith("/repos/YiAgent/openbot"):
+            return httpx.Response(200, json={"default_branch": "trunk"})
+        if url.endswith("/repos/YiAgent/openbot/git/ref/heads/trunk"):
+            return httpx.Response(200, json={"object": {"sha": "cafebabe"}})
+        raise AssertionError(f"unexpected url: {url}")
+
+    adapter, _ = adapter_factory(handler, auth=_FakeAuth())
+    sha = await adapter.get_default_branch_sha(_event())
+    assert sha == "cafebabe"
+
+
+async def test_get_default_branch_sha_defaults_to_main_when_metadata_missing(
+    adapter_factory: Any,
+) -> None:
+    """If the repo endpoint omits ``default_branch`` (unexpected but
+    possible on a permissions-stripped response), fall back to 'main'
+    rather than raising — the caller treats 'no SHA' as a clean failure."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        url = str(req.url)
+        if url.endswith("/repos/YiAgent/openbot"):
+            return httpx.Response(200, json={})
+        if url.endswith("/repos/YiAgent/openbot/git/ref/heads/main"):
+            return httpx.Response(200, json={"object": {"sha": "abc123"}})
+        raise AssertionError(f"unexpected url: {url}")
+
+    adapter, _ = adapter_factory(handler, auth=_FakeAuth())
+    sha = await adapter.get_default_branch_sha(_event())
+    assert sha == "abc123"
+
+
+async def test_get_default_branch_sha_raises_on_repo_404(
+    adapter_factory: Any,
+) -> None:
+    """A 404 on the repo endpoint is a hard failure — the resolver
+    can't pick a checkout without it. Propagate so the use case can
+    short-circuit and post a tailored comment."""
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(404, json={"message": "Not Found"}),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.get_default_branch_sha(_event())
+
+
+# ───── get_pull_request (used by checkout_resolver) ─────
+
+
+async def test_get_pull_request_returns_full_pr_json(adapter_factory: Any) -> None:
+    """GET /repos/{owner}/{repo}/pulls/{n} — used by the resolver to
+    get head/base SHAs that the webhook payload doesn't carry (e.g.
+    ``issue_comment`` events on a PR)."""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert str(req.url).endswith("/repos/YiAgent/openbot/pulls/17")
+        return httpx.Response(
+            200,
+            json={
+                "number": 17,
+                "head": {"sha": "a" * 40, "ref": "feature/x"},
+                "base": {"sha": "b" * 40, "ref": "main"},
+                "state": "open",
+            },
+        )
+
+    adapter, _ = adapter_factory(handler, auth=_FakeAuth())
+    pr = await adapter.get_pull_request(_event(pr_number=17), 17)
+    assert pr["head"]["sha"] == "a" * 40
+    assert pr["base"]["sha"] == "b" * 40
+
+
+async def test_get_pull_request_raises_on_404(adapter_factory: Any) -> None:
+    """Closed/deleted PRs surface as 404 — propagate so the resolver
+    can convert it into a ``CheckoutResolutionError``."""
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(404, json={"message": "Not Found"}),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await adapter.get_pull_request(_event(pr_number=999), 999)
+
+
+async def test_get_pull_request_rejects_non_dict_payload(adapter_factory: Any) -> None:
+    """Defensive: GitHub always returns an object here, but if some
+    proxy returns a list/string the resolver shouldn't silently
+    propagate garbage."""
+    adapter, _ = adapter_factory(
+        lambda req: httpx.Response(200, json=["unexpected", "shape"]),
+        auth=_FakeAuth(),
+    )
+    with pytest.raises(ValueError, match="unexpected PR shape"):
+        await adapter.get_pull_request(_event(pr_number=17), 17)
 
 
 async def test_get_issue_handles_empty_body_and_no_comments(adapter_factory: Any) -> None:

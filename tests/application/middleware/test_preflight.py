@@ -5,6 +5,7 @@ Slice A only exercises the FRAMEWORK; real gates land in slice B/C.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock
@@ -20,10 +21,13 @@ from openbot.application.middleware import (
     run_preflight,
 )
 from openbot.application.router import Dispatch, derive_task_id
+from openbot.application.sandbox_handle import SandboxedHandle
 from openbot.application.use_cases import maybe_run_triage
+from openbot.dispatcher.classifier import TriageClassifierOutput
+from openbot.domain.checkout import CheckoutSpec, CloneStrategy
 from openbot.domain.events import EventKind, UnifiedEvent
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.config_loader import baked_in_defaults
-from openbot.infrastructure.llm.model_router import Feature
 from openbot.infrastructure.persistence.models import WorkflowPhase
 
 
@@ -241,3 +245,94 @@ def test_middleware_decision_is_frozen(field: str, value: Any) -> None:
     decision = MiddlewareDecision(result=MiddlewareResult.BLOCKED, **{field: value})
     with pytest.raises(Exception):  # noqa: B017 — FrozenInstanceError
         setattr(decision, field, WorkflowPhase.FAILED)
+
+
+# ───── unified sandbox entry: context carries handle + classifier ─────
+
+
+def test_preflight_context_sandbox_handle_default_is_none() -> None:
+    """Default construction leaves sandbox_handle unset — the dispatcher
+    only attaches it on the REQUIRED path after a successful clone."""
+    ctx = _ctx()
+    assert ctx.sandbox_handle is None
+
+
+def test_preflight_context_classifier_output_default_is_none() -> None:
+    """No classifier ran yet → field stays None. Receive side populates
+    it after the classifier returns (or after a fail-open None)."""
+    ctx = _ctx()
+    assert ctx.classifier_output is None
+
+
+def test_preflight_context_replace_attaches_sandbox_handle() -> None:
+    """The dispatcher threads a new SandboxedHandle through the context
+    via ``dataclasses.replace`` — verify the immutability discipline
+    works and unrelated fields survive the copy."""
+    base = _ctx()
+    handle = SandboxedHandle(
+        sandbox=AsyncMock(),
+        checkout=CheckoutSpec(
+            repo_url="https://github.com/org/r.git",
+            ref="main",
+            strategy=CloneStrategy.SHALLOW,
+        ),
+        token="ghs_fake",
+    )
+    upgraded = dataclasses.replace(base, sandbox_handle=handle)
+    # The new context carries the handle …
+    assert upgraded.sandbox_handle is handle
+    # … while the original stays untouched (frozen-dataclass guarantee).
+    assert base.sandbox_handle is None
+    # And the event / dispatch identity survives the copy.
+    assert upgraded.event is base.event
+    assert upgraded.dispatch is base.dispatch
+
+
+def test_preflight_context_replace_attaches_classifier_output() -> None:
+    """Same immutability discipline for the classifier signal — populated
+    on the receive side before the policy gate runs."""
+    base = _ctx()
+    output = TriageClassifierOutput(
+        type="bug",
+        severity_guess="high",
+        has_reproduction_info=True,
+        looks_like_spam=False,
+    )
+    upgraded = dataclasses.replace(base, classifier_output=output)
+    assert upgraded.classifier_output is output
+    assert base.classifier_output is None
+
+
+# ───── snapshot cache port: Task 2.1 ─────────────────────────────────────────
+
+
+def test_preflight_context_sandbox_cache_default_is_none() -> None:
+    """Default-constructed context has no cache backend wired.
+
+    The dispatcher checks ``ctx.sandbox_cache is None`` to decide whether
+    to attempt a warm-cache acquire. ``None`` means "no cache configured
+    — always run the cold path". The NoOpSandboxCache is only used when
+    wiring explicitly configures it; default wiring leaves this None
+    so existing tests continue to exercise the cold path exclusively.
+    """
+    ctx = _ctx()
+    assert ctx.sandbox_cache is None
+
+
+def test_preflight_context_replace_sandbox_cache_preserves_other_fields() -> None:
+    """``dataclasses.replace`` with a cache adapter must not disturb
+    unrelated fields — frozen-dataclass immutability discipline.
+
+    This mirrors the ``sandbox_handle`` / ``classifier_output`` tests: the
+    DI layer swaps in the concrete adapter via ``replace``; everything
+    else must be unchanged.
+    """
+    from openbot.infrastructure.sandboxes.cache_noop import NoOpSandboxCache
+
+    base = _ctx()
+    upgraded = dataclasses.replace(base, sandbox_cache=NoOpSandboxCache())
+
+    assert upgraded.sandbox_cache is not None
+    assert base.sandbox_cache is None  # original untouched
+    assert upgraded.event is base.event
+    assert upgraded.dispatch is base.dispatch

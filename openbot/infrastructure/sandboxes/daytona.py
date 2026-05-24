@@ -23,6 +23,12 @@ from typing import Any
 
 from openbot.application.ports.sandbox import ExecResult, SandboxPort
 from openbot.core.settings import Settings
+from openbot.domain.checkout import CloneStrategy
+
+# Default history window for SHALLOW_HISTORY clones — enough commits
+# for `git blame` and recent `git log -p` queries the fix loop runs to
+# understand a regression, while still keeping the payload small.
+_SHALLOW_HISTORY_DEPTH = 50
 
 _logger = logging.getLogger(__name__)
 
@@ -76,18 +82,77 @@ def _redact_tokens(text: str) -> str:
     return _TOKEN_PATTERN.sub("x-access-token:<redacted>@", text)
 
 
+# Allowlist of Git hosts that may receive x-access-token credentials.
+# Sending the credential to any other host would leak the GitHub installation
+# token to an attacker who controls the DNS or HTTP endpoint at that host.
+# GitHub Enterprise users: add their GHES hostname here (or make it
+# configurable via Settings.github_host in a follow-up slice).
+_ALLOWED_CLONE_HOSTS: frozenset[str] = frozenset({"github.com"})
+
+
 def _inject_token(repo_url: str, token: str) -> str:
-    """Build the x-access-token push URL. HTTPS-only by design.
+    """Build the x-access-token push URL. HTTPS + allowlisted host only.
 
     Refusing non-HTTPS prevents an SSH or file URL from silently bypassing
     the credential injection (and leaking a clone of a repo we don't own).
+    Checking the host prevents a crafted webhook payload (clone_url pointing
+    at an attacker-controlled server) from receiving the installation token
+    via HTTP Basic-auth in the git clone request.
     """
+    import urllib.parse
+
     if not repo_url.startswith("https://"):
         raise ValueError(
             f"DaytonaSandboxAdapter.clone requires an https repo_url, got: {repo_url!r}"
         )
+    parsed = urllib.parse.urlparse(repo_url)
+    host = parsed.hostname or ""
+    if host not in _ALLOWED_CLONE_HOSTS:
+        raise ValueError(
+            f"DaytonaSandboxAdapter.clone: host {host!r} is not in the allowed clone "
+            f"host list {sorted(_ALLOWED_CLONE_HOSTS)}. "
+            "Injecting a credential into a non-GitHub URL would leak the installation token."
+        )
     # https://github.com/X/Y.git -> https://x-access-token:TOKEN@github.com/X/Y.git
     return repo_url.replace("https://", f"https://x-access-token:{token}@", 1)
+
+
+def _build_clone_command(
+    *,
+    workspace: str,
+    url: str,
+    ref: str,
+    strategy: CloneStrategy,
+) -> str:
+    """Compose the ``git clone`` shell command for a given strategy.
+
+    Pulled out as a pure helper so the four strategy variants are
+    trivially unit-testable without spinning up a Daytona mock and so
+    the strategy → flags mapping lives in one place.
+
+    All inputs are ``shlex.quote``-d before interpolation; the strategy
+    is a closed enum so no untrusted text reaches the shell.
+    """
+    cd = f"cd {shlex.quote(workspace)}"
+    ref_q = shlex.quote(ref)
+    url_q = shlex.quote(url)
+    if strategy is CloneStrategy.SHALLOW:
+        return f"{cd} && git clone --depth=1 --branch={ref_q} {url_q} ."
+    if strategy is CloneStrategy.SHALLOW_HISTORY:
+        return f"{cd} && git clone --depth={_SHALLOW_HISTORY_DEPTH} --branch={ref_q} {url_q} ."
+    if strategy is CloneStrategy.BLOBLESS:
+        # Blobless = full commit graph (good for blame / diff) but
+        # file blobs streamed on demand. ``--no-checkout`` keeps the
+        # working tree empty until the explicit checkout, which lets
+        # us decouple "clone succeeded" from "ref exists".
+        return (
+            f"{cd} && git clone --filter=blob:none --no-checkout {url_q} . && git checkout {ref_q}"
+        )
+    if strategy is CloneStrategy.FULL:
+        return f"{cd} && git clone --branch={ref_q} {url_q} ."
+    # Exhaustive — the enum is closed. Defensive raise so a new variant
+    # doesn't silently fall through to an unintended command shape.
+    raise ValueError(f"unsupported CloneStrategy: {strategy!r}")
 
 
 @dataclass
@@ -132,6 +197,11 @@ class DaytonaSandboxAdapter(SandboxPort):
         sandbox = client.create()
         return cls(_client=client, _sandbox=sandbox)
 
+    @property
+    def workspace_id(self) -> str:
+        """The Daytona workspace UUID (needed by DaytonaSnapshotCache.publish)."""
+        return str(self._sandbox.id)
+
     async def close(self) -> None:
         """Best-effort sandbox teardown — never raises."""
         sb_id = getattr(self._sandbox, "id", "unknown")
@@ -146,12 +216,20 @@ class DaytonaSandboxAdapter(SandboxPort):
 
     # ── git ──
 
-    async def clone(self, *, repo_url: str, ref: str, token: str) -> None:
+    async def clone(
+        self,
+        *,
+        repo_url: str,
+        ref: str,
+        token: str,
+        strategy: CloneStrategy = CloneStrategy.SHALLOW,
+    ) -> None:
         url = _inject_token(repo_url, token)
-        clone_cmd = (
-            f"cd {shlex.quote(self.workspace)} && "
-            f"git clone --depth=1 --branch={shlex.quote(ref)} "
-            f"{shlex.quote(url)} ."
+        clone_cmd = _build_clone_command(
+            workspace=self.workspace,
+            url=url,
+            ref=ref,
+            strategy=strategy,
         )
         # 5 minute timeout — generous for repos up to a few hundred MB.
         response = await asyncio.to_thread(self._sandbox.process.exec, clone_cmd, 300)

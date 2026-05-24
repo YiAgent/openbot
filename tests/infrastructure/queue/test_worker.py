@@ -1,7 +1,7 @@
 """Worker consume loop — XREADGROUP + XACK + retry + DLQ.
 
 These tests exercise the worker against fakeredis with the actual
-dispatch wired through. Each test seeds a single message via `enqueue`,
+dispatch wired through. Each test seeds a single message via direct XADD,
 runs ONE iteration of `consume_loop` (via a one-shot shutdown), and
 inspects the resulting Redis state.
 """
@@ -9,23 +9,19 @@ inspects the resulting Redis state.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import fakeredis.aioredis
 import pytest
 
 from openbot.domain.events import EventKind, UnifiedEvent
-from openbot.infrastructure.llm.model_router import Feature
-from openbot.infrastructure.queue import (
-    QueuePayload,
-    consume_loop,
-    enqueue,
-    ensure_consumer_group,
-)
+from openbot.infrastructure.queue import consume_loop, ensure_consumer_group
 from openbot.infrastructure.queue.payload import DEAD_STREAM, GROUP_NAME, STREAM_NAME
+from openbot.infrastructure.queue.task_spec import TaskSpec
+from tests._fakes.config_loader import FakeConfigLoader
 
 
-def _payload(delivery_id: str = "d-1") -> QueuePayload:
+def _spec(delivery_id: str = "d-1") -> TaskSpec:
     event = UnifiedEvent(
         channel="github",
         delivery_id=delivery_id,
@@ -37,7 +33,11 @@ def _payload(delivery_id: str = "d-1") -> QueuePayload:
         installation_id=99,
         raw={},
     )
-    return QueuePayload.from_event(event, feature=Feature.TRIAGE, task_id="t-1")
+    from openbot.application.router import dispatch_for
+
+    dispatch = dispatch_for(event)
+    assert dispatch is not None
+    return TaskSpec.from_event_and_dispatch(event, dispatch)
 
 
 async def _run_one_iteration(redis: fakeredis.aioredis.FakeRedis, **kwargs) -> None:
@@ -64,42 +64,60 @@ async def _run_one_iteration(redis: fakeredis.aioredis.FakeRedis, **kwargs) -> N
 # ───── happy path: consume + XACK ─────
 
 
-async def test_consumer_acks_after_successful_dispatch() -> None:
+async def test_consumer_acks_after_successful_dispatch(monkeypatch) -> None:
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     await ensure_consumer_group(redis)
-    await enqueue(redis, _payload())
+    spec = _spec()
+    await redis.xadd(STREAM_NAME, {"json": spec.to_json()})
 
-    # Stub run_dispatch so we don't need a real adapter / DB.
+    # Stub execute_handler + load_for_repo so we don't need a real adapter / DB.
     adapter = AsyncMock()
-    with patch(
-        "openbot.infrastructure.queue.worker.run_dispatch", new=AsyncMock(return_value=None)
-    ):
-        await _run_one_iteration(redis, adapter=adapter, session_factory=None)
+
+    async def fake_execute_handler(**kw: object) -> None:
+        pass
+
+    monkeypatch.setattr(
+        "openbot.infrastructure.queue.worker.execute_handler",
+        fake_execute_handler,
+    )
+    fake_loader = FakeConfigLoader()
+    monkeypatch.setattr(
+        "openbot.infrastructure.queue.worker.load_for_repo",
+        fake_loader.load_for_repo,
+    )
+
+    await _run_one_iteration(redis, adapter=adapter, session_factory=None)
 
     # Stream still has the entry (XACK doesn't delete) but PEL is empty.
     pending = await redis.xpending(STREAM_NAME, GROUP_NAME)
     assert pending["pending"] == 0
 
 
-async def test_consumer_skips_unrouted_payload() -> None:
-    """A payload whose Router no longer dispatches (e.g. forward-incompat
+async def test_consumer_skips_unroutable_spec(monkeypatch) -> None:
+    """A spec whose Router no longer dispatches (e.g. forward-incompat
     EventKind) is XACK'd silently — no DLQ, no retry."""
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     await ensure_consumer_group(redis)
 
-    # Build a payload whose kind round-trips to UNKNOWN. Router rejects.
-    payload = _payload()
-    # Bypass enqueue to control the exact blob.
-    tampered = payload.to_json().replace('"issue.opened"', '"issue.transferred"')
+    spec = _spec()
+    tampered = spec.to_json().replace('"issue.opened"', '"issue.transferred"')
     await redis.xadd(STREAM_NAME, {"json": tampered})
 
-    adapter = AsyncMock()
-    with patch(
-        "openbot.infrastructure.queue.worker.run_dispatch", new=AsyncMock()
-    ) as mock_dispatch:
-        await _run_one_iteration(redis, adapter=adapter, session_factory=None)
+    handler_called = False
 
-    mock_dispatch.assert_not_called()  # never reached the handler
+    async def fake_execute_handler(**kw: object) -> None:
+        nonlocal handler_called
+        handler_called = True
+
+    monkeypatch.setattr(
+        "openbot.infrastructure.queue.worker.execute_handler",
+        fake_execute_handler,
+    )
+
+    adapter = AsyncMock()
+    await _run_one_iteration(redis, adapter=adapter, session_factory=None)
+
+    assert not handler_called  # never reached the handler
     pending = await redis.xpending(STREAM_NAME, GROUP_NAME)
     assert pending["pending"] == 0  # XACK'd
 
@@ -122,17 +140,28 @@ async def test_unreadable_payload_goes_to_dlq() -> None:
     assert pending["pending"] == 0
 
 
-async def test_retry_counter_incremented_per_attempt() -> None:
+async def test_retry_counter_incremented_per_attempt(monkeypatch) -> None:
     """Every dispatch bumps `openbot:workflows:retries:<entry_id>`."""
     redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     await ensure_consumer_group(redis)
-    await enqueue(redis, _payload())
+    spec = _spec()
+    await redis.xadd(STREAM_NAME, {"json": spec.to_json()})
+
+    async def fake_execute_handler(**kw: object) -> None:
+        pass
+
+    monkeypatch.setattr(
+        "openbot.infrastructure.queue.worker.execute_handler",
+        fake_execute_handler,
+    )
+    fake_loader = FakeConfigLoader()
+    monkeypatch.setattr(
+        "openbot.infrastructure.queue.worker.load_for_repo",
+        fake_loader.load_for_repo,
+    )
 
     adapter = AsyncMock()
-    with patch(
-        "openbot.infrastructure.queue.worker.run_dispatch", new=AsyncMock(return_value=None)
-    ):
-        await _run_one_iteration(redis, adapter=adapter, session_factory=None)
+    await _run_one_iteration(redis, adapter=adapter, session_factory=None)
 
     # Find the entry's retry counter.
     counter_keys = await redis.keys("openbot:workflows:retries:*")
@@ -198,7 +227,7 @@ async def test_dlq_entry_preserves_original_payload() -> None:
     assert len(dlq_entries) == 1
     _entry_id, fields = dlq_entries[0]
     # DLQ entry MUST carry a reason so ops can grep by failure class.
-    assert fields["reason"] == "payload_unreadable"
+    assert fields["reason"] == "task_spec_unreadable"
 
 
 @pytest.fixture(autouse=True)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sys
-from types import ModuleType
+from types import SimpleNamespace
 
 from evals.tasks import chat_swe_qa_pro, review_martian
 
@@ -60,36 +60,12 @@ def test_review_task_metadata_unchanged(monkeypatch) -> None:  # type: ignore[no
     assert task.kwargs["metadata"]["solver_family"] == "deepagents_baseline"
 
 
-class _FakeExperiment:
-    def wrap(self, scorer, **kwargs):  # type: ignore[no-untyped-def]
-        return ("wrapped", scorer, kwargs)
-
-    def metadata(self) -> dict[str, str]:
-        return {"langsmith_experiment_name": "exp"}
-
-
 def _import_coding_task_modules(monkeypatch):  # type: ignore[no-untyped-def]
-    """Reload SWE/SWT task modules with HF dataset loading stubbed out.
+    """Reload SWE/SWT task modules for wiring tests.
 
-    The real modules call ``datasets.load_dataset`` at task-construction
-    time, which would hit HuggingFace; we replace it with a tiny fake
-    iterable so the wiring tests stay offline.
+    HuggingFace dataset loading is gated behind ``load_issue_dataset``, which
+    individual tests patch — so no ``datasets`` stub is needed here.
     """
-    fake_datasets = ModuleType("datasets")
-
-    def _load_dataset(_name, *, split):  # type: ignore[no-untyped-def]
-        return [
-            {
-                "instance_id": "x__y-1",
-                "repo": "x/y",
-                "base_commit": "sha",
-                "problem_statement": "issue body",
-                "version": "1.0",
-            }
-        ]
-
-    fake_datasets.load_dataset = _load_dataset  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "datasets", fake_datasets)
     sys.modules.pop("evals.tasks.fix_swe_bench_verified", None)
     sys.modules.pop("evals.tasks.test_swt_bench_verified", None)
     return (
@@ -98,51 +74,55 @@ def _import_coding_task_modules(monkeypatch):  # type: ignore[no-untyped-def]
     )
 
 
+def _fake_build_experiment(calls: dict):  # type: ignore[no-untyped-def]
+    """Factory for a ``build_export_experiment`` stub that records its kwargs."""
+
+    def _inner(**kw):  # type: ignore[no-untyped-def]
+        calls.update(kw)
+        return SimpleNamespace(scorer="fake-scorer", metadata={})
+
+    return _inner
+
+
 def test_fix_task_wires_exporter_and_modal_solver(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     fix_mod, _ = _import_coding_task_modules(monkeypatch)
 
+    exp_calls: dict = {}
     monkeypatch.setattr(fix_mod, "configure_tracing_for_dataset", lambda _n: None)
-    monkeypatch.setattr(fix_mod, "_git_sha", lambda: "gitsha")
-    monkeypatch.setattr(fix_mod, "_resolve_model_label", lambda: "model-x")
-    monkeypatch.setattr(
-        fix_mod.LangSmithExperiment, "start", classmethod(lambda *_a, **_kw: _FakeExperiment())
-    )
+    monkeypatch.setattr(fix_mod, "git_sha", lambda: "gitsha")
+    monkeypatch.setattr(fix_mod, "resolve_model_label", lambda: "model-x")
+    monkeypatch.setattr(fix_mod, "build_export_experiment", _fake_build_experiment(exp_calls))
     monkeypatch.setattr(fix_mod, "deepagents_baseline_swe_solver", lambda: "deep-solver")
-    monkeypatch.setattr(fix_mod, "prediction_exporter", lambda **kw: ("exporter", kw))
+    monkeypatch.setattr(fix_mod, "load_issue_dataset", lambda **_: [])
     # Inspect's Task validates the scorer at construction time and rejects
     # non-registered scorer objects; swap in a recording fake.
     monkeypatch.setattr(fix_mod, "Task", _FakeTask)
 
     task = fix_mod.fix_swe_bench_verified_deepagents()
 
-    wrapped = task.kwargs["scorer"]
-    assert wrapped[0] == "wrapped"
-    inner = wrapped[1]
-    assert inner[0] == "exporter"
-    assert inner[1]["dataset_version"] == "fix_swe_bench_verified"
-    assert inner[1]["schema"].__name__ == "SweBenchPrediction"
+    assert exp_calls["dataset_version"] == "fix_swe_bench_verified"
+    assert exp_calls["schema"].__name__ == "SweBenchPrediction"
+    assert task.kwargs["scorer"] == "fake-scorer"
     assert task.kwargs["solver"] == "deep-solver"
 
 
 def test_swt_task_wires_exporter_and_modal_solver(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     _, swt_mod = _import_coding_task_modules(monkeypatch)
 
+    exp_calls: dict = {}
     monkeypatch.setattr(swt_mod, "configure_tracing_for_dataset", lambda _n: None)
-    monkeypatch.setattr(swt_mod, "_git_sha", lambda: "gitsha")
-    monkeypatch.setattr(swt_mod, "_resolve_model_label", lambda: "model-x")
-    monkeypatch.setattr(
-        swt_mod.LangSmithExperiment, "start", classmethod(lambda *_a, **_kw: _FakeExperiment())
-    )
+    monkeypatch.setattr(swt_mod, "git_sha", lambda: "gitsha")
+    monkeypatch.setattr(swt_mod, "resolve_model_label", lambda: "model-x")
+    monkeypatch.setattr(swt_mod, "build_export_experiment", _fake_build_experiment(exp_calls))
     monkeypatch.setattr(swt_mod, "deepagents_baseline_swt_solver", lambda: "deep-solver")
-    monkeypatch.setattr(swt_mod, "prediction_exporter", lambda **kw: ("exporter", kw))
+    monkeypatch.setattr(swt_mod, "load_issue_dataset", lambda **_: [])
     monkeypatch.setattr(swt_mod, "Task", _FakeTask)
 
     task = swt_mod.test_swt_bench_verified_deepagents()
-    wrapped = task.kwargs["scorer"]
-    assert wrapped[0] == "wrapped"
-    inner = wrapped[1]
-    assert inner[1]["dataset_version"] == "test_swt_bench_verified"
-    assert inner[1]["schema"].__name__ == "SwtBenchPrediction"
+
+    assert exp_calls["dataset_version"] == "test_swt_bench_verified"
+    assert exp_calls["schema"].__name__ == "SwtBenchPrediction"
+    assert task.kwargs["scorer"] == "fake-scorer"
     assert task.kwargs["solver"] == "deep-solver"
 
 
@@ -154,5 +134,5 @@ def test_coding_task_model_labels_use_shared_deepagents_env(monkeypatch) -> None
     monkeypatch.delenv("OPENBOT_TEST_MODEL_ID", raising=False)
     monkeypatch.setenv("OPENBOT_DEEPAGENTS_MODEL", "mimo-v2.5")
 
-    assert fix_mod._resolve_model_label() == "anthropic:mimo-v2.5"
-    assert swt_mod._resolve_model_label() == "anthropic:mimo-v2.5"
+    assert fix_mod.resolve_model_label() == "anthropic:mimo-v2.5"
+    assert swt_mod.resolve_model_label() == "anthropic:mimo-v2.5"

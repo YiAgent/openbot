@@ -38,6 +38,24 @@ class FakeChannelAdapter:
         }
     )
     fake_installation_token: str = "fake-install-token"
+    # Constant SHA returned by ``get_default_branch_sha`` — exposed as a
+    # field so the few resolver tests that care can override it without
+    # subclassing.
+    fake_default_branch_sha: str = "0" * 40
+    default_branch_sha_lookups: list[str | None] = field(default_factory=list)
+    # Constant PR payload returned by ``get_pull_request`` — exposed as
+    # a field so resolver tests can override head/base SHAs without
+    # subclassing. Only ``head.sha`` / ``base.sha`` are read by callers
+    # in v0.1; other keys are present for shape parity with GitHub.
+    fake_pull_request: dict[str, Any] = field(
+        default_factory=lambda: {
+            "head": {"sha": "a" * 40, "ref": "feature"},
+            "base": {"sha": "b" * 40, "ref": "main"},
+            "number": 1,
+            "state": "open",
+        }
+    )
+    pull_request_lookups: list[tuple[str | None, int]] = field(default_factory=list)
 
     def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
         return  # always accept
@@ -149,3 +167,12 @@ class FakeChannelAdapter:
     async def get_installation_token(self, event: UnifiedEvent) -> str:
         self.token_lookups.append(event.resource_key)
         return self.fake_installation_token
+
+    async def get_default_branch_sha(self, event: UnifiedEvent) -> str:
+        self.default_branch_sha_lookups.append(event.resource_key)
+        return self.fake_default_branch_sha
+
+    async def get_pull_request(self, event: UnifiedEvent, pr_number: int) -> dict[str, Any]:
+        self.pull_request_lookups.append((event.resource_key, pr_number))
+        # Return a *copy* so test mutations don't poison the shared default.
+        return dict(self.fake_pull_request)

@@ -3,20 +3,13 @@
 This module contains all orchestration logic that was previously embedded in the
 github_webhook route. The entrypoint (route) becomes thin HTTP glue: parse request,
 call ingest_webhook, return response.
-
-BackgroundTasks note
---------------------
-FastAPI's ``BackgroundTasks`` object cannot be passed into a use-case (it is an HTTP
-concern). When Redis is unavailable or enqueue fails, this use-case attaches a
-``_BackgroundDispatch`` instance to ``IngestResult.background_dispatch`` and the
-route inspects that field to decide whether to call ``background.add_task(...)``.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from openbot.application.router import Dispatch, derive_run_id, dispatch_for, upgrade_dispatch
@@ -37,24 +30,6 @@ _logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Internal data type — the route uses this to drive background.add_task()
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class _BackgroundDispatch:
-    """Carry the dispatch payload back to the route for BackgroundTask wiring.
-
-    Not exported: only the route file needs this type. The route receives it
-    via ``IngestResult.background_dispatch`` and passes it to ``_run_dispatch``.
-    """
-
-    event: UnifiedEvent
-    dispatch: Dispatch
-    check_run_id: int | None
-
-
-# ---------------------------------------------------------------------------
 # Public result type
 # ---------------------------------------------------------------------------
 
@@ -64,11 +39,6 @@ class IngestResult:
     """Outcome of processing one webhook event.
 
     ``status`` is one of ``"accepted"``, ``"duplicate"``, or ``"ignored"``.
-
-    ``background_dispatch`` is non-None only when the route must schedule a
-    ``BackgroundTask`` fallback (Redis unavailable or enqueue failed). The route
-    inspects this field and calls ``background.add_task`` itself — FastAPI's
-    ``BackgroundTasks`` object cannot cross the HTTP/application boundary.
     """
 
     status: str  # "accepted" | "duplicate" | "ignored"
@@ -82,8 +52,6 @@ class IngestResult:
     intent: str | None = None
     reason: str | None = None
     resource_key: str | None = None
-    # Set when the route must dispatch via BackgroundTask.
-    background_dispatch: _BackgroundDispatch | None = field(default=None, compare=False)
 
     def to_response(self) -> dict[str, str | int | bool | None]:
         """Build the HTTP response body (omits None values except check_run_id).
@@ -190,8 +158,6 @@ async def ingest_webhook(
       - Calling ``adapter.verify_signature`` and mapping ``SignatureError``
         to HTTP 401.
       - Calling ``adapter.parse_event`` and mapping errors to HTTP 401.
-      - Scheduling a ``BackgroundTask`` when
-        ``result.background_dispatch is not None``.
 
     This function handles all application-level orchestration:
       1. Dedup check.
@@ -199,7 +165,7 @@ async def ingest_webhook(
       3. State-machine classification (when DB + resource_key present).
       4. Cancellation signal.
       5. GitHub check run creation.
-      6. Redis enqueue or BackgroundTask fallback.
+      6. Redis enqueue (raises if Redis unavailable).
     """
     # ── 1. Dedup ─────────────────────────────────────────────────────────────
     outcome = await dedup.check_and_mark(event.channel, event.delivery_id)
@@ -333,46 +299,32 @@ async def ingest_webhook(
                     extra={"delivery_id": event.delivery_id, "repo": event.repo},
                 )
 
-    # ── 5. Enqueue or prepare BackgroundTask fallback ─────────────────────────
-    # The queue path is what production runs — workflows survive a webapp
-    # restart because the entry persists in Redis until a worker XACKs it.
-    # The fallback exists so `make dev` without docker-compose still gives a
-    # working bot.
-    if redis_client is not None:
-        try:
-            assert queue is not None, "queue port must be set when redis_client is present"
-            entry_id = await queue.enqueue(
-                event,
-                feature=dispatch.feature,
-                task_id=dispatch.task_id,
-                check_run_id=check_run_id,
-                intent=dispatch.intent,
-                run_id=dispatch.run_id,
-                prev_run_id=dispatch.prev_run_id,
-                resource_key=dispatch.resource_key,
-                event_seq=dispatch.event_seq,
-            )
-            return IngestResult(
-                status="accepted",
-                delivery_id=event.delivery_id,
-                kind=event.kind.value,
-                relevant=event.is_relevant,
-                feature=dispatch.feature.value,
-                task_id=dispatch.task_id,
-                entry_id=entry_id,
-                check_run_id=check_run_id,
-            )
-        except Exception:
-            # Redis enqueue failed (RDB save in progress, OOM, etc.).
-            # Don't 5xx the webhook — degrade to BackgroundTask so the event
-            # isn't lost. The next event will retry the queue path.
-            _logger.exception(
-                "queue_enqueue_failed_falling_back_to_background_task",
-                extra={"delivery_id": event.delivery_id, "repo": event.repo},
-            )
+    # ── 5. Enqueue to Redis Stream ────────────────────────────────────────────
+    # Redis is required. If enqueue fails, raise so the route returns 500
+    # and GitHub retries the webhook (GitHub retries with exponential backoff
+    # for up to several days).
+    if redis_client is None:
+        raise RuntimeError("Redis client is not configured — webhook dispatch requires Redis")
 
-    # BackgroundTask fallback path — attach the dispatch payload to the result;
-    # the route calls background.add_task() with it.
+    assert queue is not None, "queue port must be set when redis_client is present"
+
+    # ── 5a. Enqueue immediately (classifier runs in the worker) ───────────────
+    # The LLM classifier (``classify_for_dispatch``) has a 10 s timeout; running
+    # it here, before returning 202, risks exceeding GitHub's 10 s webhook
+    # delivery deadline and triggering an unnecessary retry storm.
+    #
+    # Instead we enqueue with ``classifier_output=None`` (``classifier_skipped``
+    # will be True on the TaskSpec) and let the worker run the classifier before
+    # ``execute_handler``.  The worker has no 10 s deadline.
+    from openbot.infrastructure.queue.task_spec import TaskSpec
+
+    spec = TaskSpec.from_event_and_dispatch(
+        event,
+        dispatch,
+        check_run_id=check_run_id,
+        classifier_output=None,
+    )
+    entry_id = await queue.enqueue_task_spec(spec)
     return IngestResult(
         status="accepted",
         delivery_id=event.delivery_id,
@@ -380,12 +332,8 @@ async def ingest_webhook(
         relevant=event.is_relevant,
         feature=dispatch.feature.value,
         task_id=dispatch.task_id,
+        entry_id=entry_id,
         check_run_id=check_run_id,
-        background_dispatch=_BackgroundDispatch(
-            event=event,
-            dispatch=dispatch,
-            check_run_id=check_run_id,
-        ),
     )
 
 

@@ -89,7 +89,7 @@ async def test_complete_records_cost_row(
 
     assert isinstance(result, CompletionResult)
     assert result.cost_usd == Decimal("0.012345")
-    assert result.model == "anthropic/claude-sonnet-4-6"  # PRD §13 #2 triage route
+    assert result.model == "anthropic/GLM-5.1"  # PRD §13 #2 triage route
     assert result.prompt_tokens == 50
     assert result.completion_tokens == 8
 
@@ -114,8 +114,8 @@ async def test_complete_routes_review_to_opus(
             session=session,
         )
 
-    # PRD §13 #2: review → claude-opus-4-7
-    assert captured["calls"][0]["model"] == "anthropic/claude-opus-4-7"
+    # PRD §13 #2: review → GLM-5.1 (via BigModel proxy)
+    assert captured["calls"][0]["model"] == "anthropic/GLM-5.1"
 
 
 # ───── session is required ─────
@@ -246,7 +246,7 @@ async def test_completion_result_rejects_negative_cost() -> None:
     with pytest.raises(ValueError, match="cost_usd"):
         CompletionResult(
             content="",
-            model="anthropic/claude-sonnet-4-6",
+            model="anthropic/GLM-5.1",
             prompt_tokens=10,
             completion_tokens=5,
             cost_usd=Decimal("-0.01"),
@@ -260,7 +260,7 @@ async def test_completion_result_rejects_negative_tokens() -> None:
     with pytest.raises(ValueError, match="token"):
         CompletionResult(
             content="",
-            model="anthropic/claude-sonnet-4-6",
+            model="anthropic/GLM-5.1",
             prompt_tokens=-1,
             completion_tokens=5,
             cost_usd=Decimal("0.001"),

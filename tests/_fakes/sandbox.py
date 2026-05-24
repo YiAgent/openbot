@@ -1,4 +1,15 @@
-"""FakeSandbox — programmable SandboxPort that records every command."""
+"""Sandbox fakes — two programmable SandboxPort stand-ins for different test layers.
+
+FakeSandbox
+    Implements the *command-execution* face (``run`` + queued results).
+    Used by agent tool tests and the sandbox-port contract suite.
+
+FakeSandboxLifecycle
+    Implements the *lifecycle* face (``clone`` + ``commit_and_push`` + ``close``).
+    Used by fix-workflow use case tests and E2E fix-loop demos.
+    Each call is recorded as a tuple so tests can assert on the exact
+    contract the use case must honour against the real DaytonaSandboxAdapter.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from openbot.application.ports.sandbox import ExecResult
+from openbot.domain.checkout import CloneStrategy
 
 
 @dataclass
@@ -31,4 +43,47 @@ class FakeSandbox:
         return self.default_result
 
 
-__all__ = ["FakeSandbox"]
+@dataclass
+class FakeSandboxLifecycle:
+    """Lifecycle-only fake — records ``clone``, ``commit_and_push``, and ``close`` calls.
+
+    Implements only the methods reachable in fix-workflow tests when the
+    agent path is monkeypatched. The command-execution surface (``run``,
+    ``read_file``, ``write_file``, ``list_files``, ``git_diff``) is
+    intentionally omitted; extend or subclass if a test exercises it.
+
+    Token injection is the *adapter's* concern (see
+    ``DaytonaSandboxAdapter._inject_token`` + ``SandboxPort`` docstring);
+    the use case passes raw URL + token unchanged, so tests assert on
+    raw values, not pre-injected URLs.
+    """
+
+    workspace: str = "/workspace/repo"
+    cloned: list[tuple[str, str, str]] = field(default_factory=list)
+    # Parallel list of strategies, one entry per ``clone`` call. Kept
+    # alongside ``cloned`` rather than as a 4-tuple so the historical
+    # ``sandbox.cloned == [(url, ref, token)]`` assertion shape stays
+    # intact for existing tests.
+    clone_strategies: list[CloneStrategy] = field(default_factory=list)
+    pushed: list[tuple[str, str, str]] = field(default_factory=list)
+    closed: bool = False
+
+    async def clone(
+        self,
+        *,
+        repo_url: str,
+        ref: str,
+        token: str,
+        strategy: CloneStrategy = CloneStrategy.SHALLOW,
+    ) -> None:
+        self.cloned.append((repo_url, ref, token))
+        self.clone_strategies.append(strategy)
+
+    async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
+        self.pushed.append((branch_ref, message, token))
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+__all__ = ["FakeSandbox", "FakeSandboxLifecycle"]

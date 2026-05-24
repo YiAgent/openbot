@@ -23,14 +23,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from openbot.application.router import derive_task_id
 from openbot.domain.events import EventKind
 from openbot.infrastructure.config_loader import RateLimitConfig
-from openbot.infrastructure.llm.model_router import Feature
 from openbot.infrastructure.persistence.models import Workflow, WorkflowPhase
 from openbot.infrastructure.queue import worker as queue_worker
-from openbot.infrastructure.queue.enqueue import enqueue
-from openbot.infrastructure.queue.payload import QueuePayload
+from openbot.infrastructure.queue.enqueue import enqueue_task_spec
+from openbot.infrastructure.queue.task_spec import TaskSpec
 from openbot.infrastructure.queue.worker import consume_loop, ensure_consumer_group
 
 if TYPE_CHECKING:
@@ -419,18 +417,18 @@ async def test_demo_09_worker_restart_does_not_drop_message(
 
     await ensure_consumer_group(redis)
 
-    # Build a representative payload — issue.opened triage event.
+    # Build a representative TaskSpec v3 — issue.opened triage event.
+    from openbot.application.router import dispatch_for
+
     event = webhook_harness.make_event(
         kind=EventKind.ISSUE_OPENED,
         delivery_id="d-worker-restart",
         issue_number=21,
     )
-    payload = QueuePayload.from_event(
-        event,
-        feature=Feature.TRIAGE,
-        task_id=derive_task_id(event),
-    )
-    entry_id = await enqueue(redis, payload)
+    dispatch = dispatch_for(event)
+    assert dispatch is not None, "dispatch_for returned None for ISSUE_OPENED"
+    spec = TaskSpec.from_event_and_dispatch(event, dispatch, initial_labels=[])
+    entry_id = await enqueue_task_spec(redis, spec)
 
     # Simulate the "first consumer crashed mid-handler": read the entry
     # under a dead consumer name without XACKing. The entry now sits in
@@ -537,3 +535,121 @@ async def test_demo_10_bot_assigned_fix_tests_failed_yields_comment(
     assert number == 22
     assert "tests did not pass" in body.lower()
     assert "1 failed" in body
+
+
+# ─────── demo 12: sandbox cache hit < 1 s P95 (env-gated) ───────
+
+
+class _FullFakeSandbox:
+    """Combined sandbox: lifecycle (clone/close) + command execution (run).
+
+    Used by demo 12 so a single sandbox instance can:
+      - serve the cold-path factory (clone + close),
+      - be stored in InMemorySandboxCache (run via _refresh_to_ref).
+    """
+
+    def __init__(self) -> None:
+        from openbot.application.ports.sandbox import ExecResult
+
+        self._ok = ExecResult(stdout="", stderr="", exit_code=0, timed_out=False)
+        self.cloned: list[tuple[str, str, str]] = []
+        self.calls: list[list[str]] = []
+        self.closed: bool = False
+
+    async def clone(self, *, repo_url: str, ref: str, token: str, strategy: object = None) -> None:
+        self.cloned.append((repo_url, ref, token))
+
+    async def run(
+        self,
+        *,
+        command: list[str],
+        env: object = None,
+        timeout_seconds: int = 60,
+    ) -> object:
+        self.calls.append(command)
+        return self._ok
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.skipif(
+    not __import__("os").getenv("RUN_CACHE_E2E"),
+    reason="env-gated; run with RUN_CACHE_E2E=1 to opt in",
+)
+async def test_demo_12_chat_cache_hit_under_one_second(
+    webhook_harness: WebhookHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Second chat event with same (repo, ref) resolves from InMemorySandboxCache
+    in < 1 s wall-clock, proving the cache path avoids cold-clone overhead.
+
+    Structure:
+      1. Wire InMemorySandboxCache + _FullFakeSandbox factory into the harness.
+      2. Replace sandbox_cache_total with a MagicMock so we can assert on calls.
+      3. First dispatch  → cold path → clone recorded → cache publish scheduled.
+      4. Drain asyncio event loop so background publish task runs.
+      5. Second dispatch → cache hit → no clone → elapsed < 1 s.
+      6. Assert sandbox_cache_total.labels called with feature=chat, result=hit.
+    """
+    import time
+    from contextlib import asynccontextmanager
+    from unittest.mock import MagicMock
+
+    from openbot.infrastructure.sandboxes.cache_fake import InMemorySandboxCache
+
+    # Replace the Prometheus wrapper with a MagicMock (same pattern as
+    # tests/application/test_dispatcher_cache.py::_record_counter).
+    cache_total_mock = MagicMock()
+    monkeypatch.setattr("openbot.application.dispatcher.sandbox_cache_total", cache_total_mock)
+
+    cache = InMemorySandboxCache(max_entries=10, ttl_seconds=86_400)
+    fake_sandbox = _FullFakeSandbox()
+
+    @asynccontextmanager
+    async def _factory():  # type: ignore[return]
+        try:
+            yield fake_sandbox
+        finally:
+            await fake_sandbox.close()
+
+    webhook_harness.sandbox_factory_override = _factory
+    webhook_harness.sandbox_cache_override = cache
+
+    event = webhook_harness.make_event(
+        kind=EventKind.ISSUE_COMMENT_CREATED,
+        delivery_id="d-cache-demo-12-cold",
+        issue_number=12,
+        comment_body="@openbot explain this code",
+    )
+
+    # ── First dispatch: cold path ────────────────────────────────────────────
+    await webhook_harness.dispatch(event)
+    # Drain the event loop so the background _safe_publish task completes.
+    await asyncio.sleep(0.05)
+
+    # Cold path must have cloned once.
+    assert len(fake_sandbox.cloned) == 1, "expected one clone on cold path"
+    # Publish must have run — exactly one entry in the cache.
+    assert cache.size() == 1, "expected cache entry after publish"
+
+    # ── Second dispatch: warm cache hit ──────────────────────────────────────
+    event2 = webhook_harness.make_event(
+        kind=EventKind.ISSUE_COMMENT_CREATED,
+        delivery_id="d-cache-demo-12-warm",
+        issue_number=12,
+        comment_body="@openbot what does this function do",
+    )
+
+    t_start = time.perf_counter()
+    await webhook_harness.dispatch(event2)
+    elapsed = time.perf_counter() - t_start
+
+    # In-memory cache with FakeSandbox is effectively instant.
+    assert elapsed < 1.0, f"cache hit took {elapsed:.3f}s; expected < 1s"
+
+    # Hit counter must be emitted exactly once for feature=chat, result=hit.
+    cache_total_mock.labels.assert_any_call(feature="chat", result="hit")
+
+    # No second clone on the warm path.
+    assert len(fake_sandbox.cloned) == 1, "expected no clone on cache hit"

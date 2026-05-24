@@ -14,13 +14,17 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from openbot.application.state.cancellation import checkpoint
 from openbot.application.use_cases._lifecycle import audit_lifecycle
+from openbot.application.use_cases._tracing import observe as _observe
 from openbot.application.use_cases._tracing import traceable as _traceable
 from openbot.application.use_cases.chat_parser import parse as parse_chat_command
 from openbot.domain.workflows import Workflow
 from openbot.infrastructure.agents import DeepAgentsChatResponder
 
 if TYPE_CHECKING:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
     from openbot.application.middleware.preflight import PreflightContext
 
 _logger = logging.getLogger(__name__)
@@ -48,10 +52,19 @@ _HELP_TEMPLATE = (
 )
 
 
-async def _generate_freeform_reply(*, event, user_request: str) -> str:
-    return await _RESPONDER.reply_for_event(event, user_request=user_request)
+async def _generate_freeform_reply(
+    *,
+    event,
+    user_request: str,
+    run_id: str | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
+) -> str:
+    return await _RESPONDER.reply_for_event(
+        event, user_request=user_request, run_id=run_id, checkpointer=checkpointer
+    )
 
 
+@_observe(name="chat", capture_input=False)
 @_traceable(run_type="chain", name="chat")
 async def maybe_run_chat(ctx: PreflightContext) -> None:
     event = ctx.event
@@ -75,6 +88,9 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
         )
         return
 
+    run_id = ctx.dispatch.run_id
+    checkpointer = ctx.agent_checkpointer
+
     # Branch on structural intent:
     #   is_cancel   → never reached in practice (CancelCommentMiddleware
     #                 short-circuits earlier); defensive no-op.
@@ -96,6 +112,8 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
             message = await _generate_freeform_reply(
                 event=event,
                 user_request=command.body_after_mention,
+                run_id=run_id,
+                checkpointer=checkpointer,
             )
         except Exception:
             _logger.exception(
@@ -103,6 +121,13 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
                 extra={"delivery_id": event.delivery_id, "repo": event.repo},
             )
             message = _ERROR_TEMPLATE
+
+    # Cancellation checkpoint: after message is determined (or falls back to
+    # error template) but before we open the audit row.  RunCancelledError is
+    # a BaseException so it propagates through the outer ``except Exception``
+    # guard unimpeded.
+    if run_id:
+        await checkpoint(ctx.redis, run_id)
 
     try:
         async with audit_lifecycle(ctx, workflow=Workflow.CHAT) as audit:
@@ -119,6 +144,15 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
                     "comment_id": result.get("id"),
                 },
             )
+            # Clean up checkpoint state now that the reply has landed.
+            if run_id and checkpointer is not None:
+                try:
+                    await checkpointer.adelete_thread(run_id)
+                except Exception:
+                    _logger.warning(
+                        "chat_checkpoint_delete_failed",
+                        extra={"delivery_id": event.delivery_id, "run_id": run_id},
+                    )
     except Exception:
         _logger.exception(
             "chat_ack_failed",

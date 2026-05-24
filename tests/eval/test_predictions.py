@@ -26,7 +26,7 @@ from evals.common.predictions import (
 def test_swe_bench_prediction_round_trips() -> None:
     p = SweBenchPrediction(
         instance_id="astropy__astropy-12907",
-        model_name_or_path="anthropic:claude-sonnet-4-6",
+        model_name_or_path="anthropic:GLM-5.1",
         model_patch="diff --git a/foo b/foo\n+x\n",
     )
     blob = p.model_dump_json()

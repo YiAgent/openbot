@@ -1,13 +1,21 @@
 """Issue → PR fix workflow — PRD §4.3 end-to-end pipeline.
 
-Flow:
-  1. Fetch the issue body and base commit from GitHub.
-  2. Open a sandbox via ``ctx.sandbox_factory()``.
-  3. Clone the repo with an installation-scoped token.
-  4. Run ``DeepAgentsFixResponder`` to produce a ``FixOutcome``.
-  5. Tests passed → push branch, open PR, comment with PR URL.
+Flow (Part-3 post-migration shape):
+  1. Fetch the issue body from GitHub (default branch / base SHA come
+     from the same payload).
+  2. Consume the pre-provisioned ``ctx.sandbox_handle`` —
+     ``dispatcher._run_with_sandbox`` already opened the sandbox,
+     fetched the installation token, resolved the ``CheckoutSpec``,
+     and cloned at ``checkout.ref``. The handler **never** clones.
+  3. Run ``DeepAgentsFixResponder`` to produce a ``FixOutcome``.
+  4. Tests passed → push branch, open PR, comment with PR URL.
      Tests failed → comment with the truncated test output.
      Any step raised → comment with the corresponding error template.
+
+If ``ctx.sandbox_handle is None`` the handler posts the ``_NO_SANDBOX``
+degrade reply and returns — the dispatcher already logged the cause
+(factory missing / clone failed / resolution failed) under
+``openbot_dispatch_sandbox_total{bypass_source="degrade"}``.
 
 The whole pipeline runs inside ``audit_lifecycle`` so the workflow
 phase transitions get logged uniformly with review/triage. No path
@@ -19,13 +27,17 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from openbot.application.state.cancellation import checkpoint
 from openbot.application.use_cases._lifecycle import audit_lifecycle
+from openbot.application.use_cases._tracing import observe as _observe
 from openbot.application.use_cases._tracing import traceable as _traceable
 from openbot.domain.fix import FixOutcome
 from openbot.domain.workflows import Workflow
 from openbot.infrastructure.agents import DeepAgentsFixResponder
 
 if TYPE_CHECKING:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
     from openbot.application.middleware.preflight import PreflightContext
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
     from openbot.application.ports.sandbox import SandboxPort
@@ -47,10 +59,12 @@ _ISSUE_READ_FAIL = (
     ":warning: OpenBot could not read this issue from GitHub. The fix loop "
     "was skipped. The error has been logged."
 )
-_CLONE_FAIL = (
-    ":warning: OpenBot opened a sandbox but could not clone the repository. "
-    "The fix loop was skipped. The error has been logged."
-)
+# Part 3: ``_CLONE_FAIL`` was deleted with the internal clone block.
+# The dispatcher now owns clone + token errors — both surface to the
+# user as ``_NO_SANDBOX`` (the dispatcher leaves ``sandbox_handle =
+# None`` on its degrade path) and are tagged on the
+# ``dispatch_sandbox_total{bypass_source="degrade"}`` counter so ops
+# can still split the causes in dashboards.
 _AGENT_FAIL = (
     ":warning: OpenBot's fix agent failed before producing a result. "
     "The error has been logged; please re-assign the issue to retry."
@@ -130,6 +144,8 @@ async def _generate_fix_outcome(
     event: UnifiedEvent,
     adapter: ChannelAdapterPort,
     issue: dict[str, Any],
+    run_id: str | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ) -> FixOutcome:
     """Module-level seam — E2E tests monkeypatch this to skip DeepAgents.
 
@@ -144,9 +160,12 @@ async def _generate_fix_outcome(
         adapter=adapter,
         sandbox=sandbox,
         issue=issue,
+        run_id=run_id,
+        checkpointer=checkpointer,
     )
 
 
+@_observe(name="fix", capture_input=False)
 @_traceable(run_type="chain", name="fix")
 async def maybe_run_fix(ctx: PreflightContext) -> None:
     event = ctx.event
@@ -159,46 +178,47 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
 
     adapter = ctx.adapter
     issue_number = event.issue_number
+    run_id = ctx.dispatch.run_id
+    checkpointer = ctx.agent_checkpointer
 
-    if ctx.sandbox_factory is None:
+    # Unified-entry contract: the dispatcher either pre-provisions a
+    # SandboxedHandle (sandbox + checkout + token, already cloned) or
+    # sets ``sandbox_handle = None`` on the degrade path. The cause of
+    # the degrade (factory missing / resolver / clone / token) is
+    # already counted by ``openbot_dispatch_sandbox_total`` — we just
+    # post the user-visible reply here.
+    if ctx.sandbox_handle is None:
         await _safe_reply(adapter, event, _NO_SANDBOX)
         return
 
-    async with audit_lifecycle(ctx, workflow=Workflow.FIX) as audit:
-        try:
-            issue = await adapter.get_issue(event, issue_number)
-        except Exception:
-            _logger.exception("fix_get_issue_failed", extra=_log_extra(event))
-            await _safe_reply(adapter, event, _ISSUE_READ_FAIL)
-            audit.outcome = "get_issue_failed"
-            return
+    handle = ctx.sandbox_handle
+    sandbox = handle.sandbox
+    token = handle.token
+    # ``checkout.ref`` is the concrete SHA the dispatcher cloned at, so
+    # the branch name lines up with the workspace HEAD even if the
+    # adapter's issue payload disagrees (defence-in-depth — the
+    # resolver and the adapter both look at the same ``base_sha`` in
+    # v0.1, but coupling on the handle makes the dependency explicit).
+    base_sha = handle.checkout.ref
 
-        clone_url = str(issue.get("clone_url", ""))
-        base_sha = str(issue.get("base_sha", ""))
-        default_branch = str(issue.get("default_branch", "main"))
-
-        # The token is a bearer secret. We pass it through to the
-        # ``SandboxPort`` as a separate argument rather than baking it
-        # into the clone URL — the adapter owns the interpolation and
-        # the HTTPS-only invariant (see ``DaytonaSandboxAdapter._inject_token``).
-        try:
-            token = await adapter.get_installation_token(event)
-        except Exception:
-            _logger.exception("fix_token_failed", extra=_log_extra(event))
-            await _safe_reply(adapter, event, _CLONE_FAIL)
-            audit.outcome = "token_failed"
-            return
-
-        factory = ctx.sandbox_factory
-        assert factory is not None  # narrowed by the early return above.
-        async with factory() as sandbox:
+    try:
+        async with audit_lifecycle(ctx, workflow=Workflow.FIX) as audit:
             try:
-                await sandbox.clone(repo_url=clone_url, ref=base_sha, token=token)
+                issue = await adapter.get_issue(event, issue_number)
             except Exception:
-                _logger.exception("fix_clone_failed", extra=_log_extra(event))
-                await _safe_reply(adapter, event, _CLONE_FAIL)
-                audit.outcome = "clone_failed"
+                _logger.exception("fix_get_issue_failed", extra=_log_extra(event))
+                await _safe_reply(adapter, event, _ISSUE_READ_FAIL)
+                audit.outcome = "get_issue_failed"
                 return
+
+            # ① Cancellation checkpoint after slow I/O — raises RunCancelledError
+            # (BaseException, not Exception) if the user cancelled the run.
+            # RunCancelledError propagates through audit_lifecycle's BaseException
+            # guard, writing CANCELLED before re-raising to the worker.
+            if run_id:
+                await checkpoint(ctx.redis, run_id)
+
+            default_branch = str(issue.get("default_branch", "main"))
 
             try:
                 outcome = await _generate_fix_outcome(
@@ -206,12 +226,18 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
                     event=event,
                     adapter=adapter,
                     issue=issue,
+                    run_id=run_id,
+                    checkpointer=checkpointer,
                 )
             except Exception:
                 _logger.exception("fix_agent_failed", extra=_log_extra(event))
                 await _safe_reply(adapter, event, _AGENT_FAIL)
                 audit.outcome = "agent_failed"
                 return
+
+            # ② Checkpoint after the (potentially long) agent loop.
+            if run_id:
+                await checkpoint(ctx.redis, run_id)
 
             if not outcome.attempt.tests_passed:
                 await _safe_reply(
@@ -236,17 +262,37 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
                 audit.outcome = "create_branch_failed"
                 return
 
+            # ③ Checkpoint after branch creation.
+            if run_id:
+                await checkpoint(ctx.redis, run_id)
+
+            # Refresh the installation token immediately before the push.
+            # GitHub installation tokens have a ~1 h TTL; the fix-agent loop
+            # can run 10-60+ minutes, so the token captured at dispatch time
+            # (handle.token) may be expired by the time we push.  The adapter
+            # caches tokens internally and refreshes them on demand, so this
+            # call is cheap on a warm cache and correct on an expired one.
+            try:
+                fresh_token = await adapter.get_installation_token(event)
+            except Exception:
+                _logger.warning("fix_token_refresh_failed", extra=_log_extra(event))
+                fresh_token = token  # fall back to the original token
+
             try:
                 await sandbox.commit_and_push(
                     branch_ref=branch,
                     message=f"openbot: fix #{issue_number}",
-                    token=token,
+                    token=fresh_token,
                 )
             except Exception:
                 _logger.exception("fix_push_failed", extra=_log_extra(event))
                 await _safe_reply(adapter, event, _PUSH_FAIL)
                 audit.outcome = "push_failed"
                 return
+
+            # ④ Checkpoint after push.
+            if run_id:
+                await checkpoint(ctx.redis, run_id)
 
             try:
                 pr = await adapter.open_pull_request(
@@ -279,6 +325,18 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
                 ),
             )
             audit.outcome = f"pr_opened:{pr_url}"
+    finally:
+        # ⑤ Cleanup: delete LangGraph checkpoint rows regardless of outcome
+        # (success, agent failure, push failure, cancellation, etc.) so they
+        # don't accumulate in Postgres indefinitely.
+        if run_id and checkpointer is not None:
+            try:
+                await checkpointer.adelete_thread(run_id)
+            except Exception:
+                _logger.warning(
+                    "fix_checkpoint_delete_failed",
+                    extra={"run_id": run_id, **_log_extra(event)},
+                )
 
 
 async def _safe_reply(adapter: ChannelAdapterPort, event: UnifiedEvent, message: str) -> None:

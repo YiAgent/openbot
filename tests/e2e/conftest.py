@@ -18,7 +18,7 @@ The fixture builds a **WebhookHarness** with three swappable backends:
 
 We deliberately bypass ``TestClient(app)`` for chain-behavior tests because
 the webhook → queue serialization is already locked down by
-``tests/test_webhook_endpoint.py``. Demos 1-8 call ``run_dispatch`` directly
+``tests/test_webhook_endpoint.py``. Demos 1-8 call ``execute_handler`` directly
 with a synthetic ``UnifiedEvent``; demo 9 exercises the worker loop end-to-
 end. Doing it this way keeps each test under 60 lines and avoids tying
 demo assertions to the specific shape of FastAPI BackgroundTask scheduling.
@@ -40,13 +40,15 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from openbot.application.dispatcher import run_dispatch
+from openbot.application.dispatcher import _run_with_sandbox, build_preflight_chain
+from openbot.application.middleware.preflight import run_preflight
 from openbot.application.router import dispatch_for
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.infrastructure.adapters.github import GitHubAdapter
 from openbot.infrastructure.config_loader import EffectiveConfig, baked_in_defaults
 from openbot.infrastructure.persistence.models import AuditLog, Base
 from openbot.infrastructure.persistence.rate_limiter_redis import RedisRateLimiter
+from tests._fakes.sandbox import FakeSandboxLifecycle as FakeSandbox
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -56,44 +58,6 @@ if TYPE_CHECKING:
 # Test-only webhook secret — only used inside RecordingGitHubAdapter so
 # the parent class' constructor doesn't reject an empty string.
 _E2E_SECRET = "e2e-test-secret"
-
-
-@dataclass
-class FakeSandbox:
-    """Partial ``SandboxPort`` stand-in for the E2E fix-loop demos.
-
-    Implements only the methods reachable when ``_generate_fix_outcome``
-    is monkeypatched: ``clone`` + ``commit_and_push`` + ``close`` +
-    ``workspace``. The agent-side surface (``read_file`` / ``write_file``
-    / ``list_files`` / ``run`` / ``git_diff``) is intentionally omitted —
-    if you extend a demo to exercise the real agent path, copy
-    ``_FakeSandbox`` from ``tests/application/use_cases/test_fix.py``
-    (full port shape) instead of growing this class.
-
-    Each call is recorded as a ``(repo_url, ref, token)`` /
-    ``(branch_ref, message, token)`` tuple so demos can assert on the
-    exact contract the use case must honour against the real
-    ``DaytonaSandboxAdapter``.
-
-    Token injection is the *adapter's* concern (see
-    ``DaytonaSandboxAdapter._inject_token`` + ``SandboxPort`` docstring);
-    the use case passes the raw URL + token through unchanged. The E2E
-    harness therefore asserts on raw values, not pre-injected URLs.
-    """
-
-    workspace: str = "/workspace/repo"
-    cloned: list[tuple[str, str, str]] = field(default_factory=list)
-    pushed: list[tuple[str, str, str]] = field(default_factory=list)
-    closed: bool = False
-
-    async def clone(self, *, repo_url: str, ref: str, token: str) -> None:
-        self.cloned.append((repo_url, ref, token))
-
-    async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
-        self.pushed.append((branch_ref, message, token))
-
-    async def close(self) -> None:
-        self.closed = True
 
 
 class RecordingGitHubAdapter(GitHubAdapter):
@@ -254,6 +218,29 @@ class RecordingGitHubAdapter(GitHubAdapter):
         """Return the same fake token ``_installation_token`` uses."""
         return "fake-installation-token"
 
+    async def get_default_branch_sha(self, event: UnifiedEvent) -> str:
+        """Resolver hook for issue-context FIX/TRIAGE dispatches.
+
+        Returns the same ``base_sha`` the ``fake_issue`` fixture carries
+        so the use case's downstream branch-name + create-branch
+        assertions remain stable.
+        """
+        return str(self.fake_issue.get("base_sha", "abc1234567"))
+
+    async def get_pull_request(self, event: UnifiedEvent, pr_number: int) -> dict[str, Any]:
+        """Resolver hook for PR-context REVIEW dispatches.
+
+        Returns the minimum shape ``checkout_resolver`` reads:
+        ``head.sha`` (where the diff stops) and ``base.sha`` (the
+        diff origin). Real GitHub payloads carry far more, but the
+        resolver only touches these two fields.
+        """
+        base_sha = str(self.fake_issue.get("base_sha", "abc1234567"))
+        return {
+            "head": {"sha": base_sha},
+            "base": {"sha": base_sha},
+        }
+
     async def _installation_token(self, event: UnifiedEvent) -> Any:
         """Bypass App auth — return a minimal object whose ``.token`` is read."""
 
@@ -314,11 +301,14 @@ class WebhookHarness:
     # ``fix_outcome_tests_passed = False`` instead of swapping the fake.
     sandbox: FakeSandbox = field(default_factory=FakeSandbox)
     fix_outcome_tests_passed: bool = True
-    # Sandbox factory injected into ``run_dispatch`` for the FIX use case.
+    # Sandbox factory injected into ``execute_handler`` for the FIX use case.
     # ``None`` keeps the other demos working unchanged (the use case
     # then takes the "sandbox not configured" early-return). The
     # ``webhook_harness`` fixture sets this to a working factory.
     sandbox_factory_override: Callable[[], AbstractAsyncContextManager[Any]] | None = None
+    # Sandbox cache injected into ``_run_with_sandbox`` for the cache E2E demo.
+    # ``None`` keeps all existing demos unchanged (cache disabled by default).
+    sandbox_cache_override: Any | None = None  # SandboxCachePort | None
 
     def make_event(
         self,
@@ -332,7 +322,14 @@ class WebhookHarness:
         comment_body: str | None = None,
         raw: dict[str, Any] | None = None,
     ) -> UnifiedEvent:
-        """Synthesize a ``UnifiedEvent`` mirroring what GitHubAdapter would parse."""
+        """Synthesize a ``UnifiedEvent`` mirroring what GitHubAdapter would parse.
+
+        ``clone_url`` is populated from the same URL the ``fake_issue``
+        fixture carries — the unified-entry checkout resolver demands a
+        non-None ``clone_url`` on every dispatchable event, mirroring
+        the GitHubAdapter's invariant that ``repository.clone_url`` is
+        always present on real webhook payloads.
+        """
         return UnifiedEvent(
             channel="github",
             delivery_id=delivery_id,
@@ -345,28 +342,45 @@ class WebhookHarness:
             comment_body=comment_body,
             installation_id=self.installation_id,
             raw=raw or {},
+            clone_url=str(self.adapter.fake_issue.get("clone_url")),
         )
 
     async def dispatch(self, event: UnifiedEvent) -> None:
-        """Run the full pre-flight chain + workflow handler for ``event``.
+        """Run the full preflight chain + workflow handler for ``event``.
 
-        Mirrors what the worker does after popping an entry from the queue.
+        Mirrors what the ingest path + worker together do: preflight first,
+        then sandbox + handler — using a SINGLE shared ``PreflightContext`` so
+        cache flags set by ``AuditStartMiddleware`` are visible to the handler's
+        ``audit_lifecycle`` helper (prevents double STARTED audit rows).
+
         ``dispatch_for`` may return ``None`` (router decides it's not relevant);
         we treat that as a no-op so tests can pass irrelevant events without
         a special-case branch.
         """
+        from openbot.application.middleware import MiddlewareResult, PreflightContext
+
         decision: Dispatch | None = dispatch_for(event)
         if decision is None:
             return
-        await run_dispatch(
-            adapter=self.adapter,
+        ctx = PreflightContext(
             event=event,
             dispatch=decision,
+            config=self.config,
+            adapter=self.adapter,
             session_factory=self.session_factory,
             redis=self.redis,
             rate_limiter=RedisRateLimiter(self.redis),
             sandbox_factory=self.sandbox_factory_override,
+            sandbox_cache=self.sandbox_cache_override,
         )
+        import contextlib
+
+        chain = build_preflight_chain()
+        preflight_decision = await run_preflight(ctx, chain)
+        if preflight_decision.result is MiddlewareResult.BLOCKED:
+            return
+        with contextlib.suppress(Exception):
+            await _run_with_sandbox(ctx)
 
     async def audit_rows(self, *, delivery_id: str | None = None) -> Sequence[AuditLog]:
         """All audit_log rows, optionally filtered by ``delivery_id``."""
@@ -410,15 +424,21 @@ async def webhook_harness(
 
     harness = WebhookHarness(adapter=adapter, redis=redis, session_factory=session_factory)
 
-    # The real loader reaches out to GitHub over httpx. In tests we just
-    # hand back whatever the test put on ``harness.config`` (frozen
-    # dataclass — mutation requires ``dataclasses.replace``).
+    # ``WebhookHarness.dispatch`` uses ``self.config`` directly (no load_for_repo
+    # call in the harness path). For the demo-09 worker path we patch the
+    # worker's load_for_repo so it returns harness.config without hitting GitHub.
     async def _fake_load_for_repo(_adapter: Any, _event: UnifiedEvent) -> EffectiveConfig:
         return harness.config
 
-    monkeypatch.setattr("openbot.application.dispatcher.load_for_repo", _fake_load_for_repo)
+    monkeypatch.setattr("openbot.infrastructure.queue.worker.load_for_repo", _fake_load_for_repo)
 
-    async def _fake_chat_reply(*, event: UnifiedEvent, user_request: str) -> str:
+    async def _fake_chat_reply(
+        *,
+        event: UnifiedEvent,
+        user_request: str,
+        run_id: str | None = None,
+        checkpointer: Any = None,
+    ) -> str:
         return f"DeepAgents test reply: {user_request}"
 
     monkeypatch.setattr(
@@ -428,7 +448,13 @@ async def webhook_harness(
 
     from openbot.domain.review import ReviewFindings as _ReviewFindings
 
-    async def _fake_review_findings(*, event: UnifiedEvent, adapter: Any) -> _ReviewFindings:
+    async def _fake_review_findings(
+        *,
+        event: UnifiedEvent,
+        adapter: Any,
+        run_id: Any = None,
+        checkpointer: Any = None,
+    ) -> _ReviewFindings:
         # E2E doesn't exercise the real reviewer — only the audit + PR Review
         # API plumbing. PRD §8.3: prompt-quality assertions live in evals/.
         return _ReviewFindings(summary=f"DeepAgents review summary for PR #{event.pr_number}")
@@ -462,7 +488,13 @@ async def webhook_harness(
     harness.sandbox_factory_override = _sandbox_factory
 
     async def _fake_fix_outcome(
-        *, sandbox: Any, event: UnifiedEvent, adapter: Any, issue: dict[str, Any]
+        *,
+        sandbox: Any,
+        event: UnifiedEvent,
+        adapter: Any,
+        issue: dict[str, Any],
+        run_id: str | None = None,
+        checkpointer: Any = None,
     ) -> _FixOutcome:
         # Default: tests passed. Demos that need the tests-failed branch
         # flip ``harness.fix_outcome_tests_passed = False`` before dispatch.

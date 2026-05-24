@@ -8,31 +8,18 @@ Actual grading happens offline via the SWE-bench Docker harness.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from inspect_ai.solver import Generate, Solver, TaskState, solver
 
 from evals.agents.baseline import build_run_config, resolve_model
 from evals.agents.fix import build_fix_agent, build_fix_user_message
+from evals.common.messages import join_message_texts
 from evals.common.predictions import SweBenchPrediction, empty_swe_prediction
 from evals.common.termination import assert_clean_termination
 from evals.common.usage import aggregate_provider_usage
 from evals.sandboxes import RepoSpec, create_sandbox_for_sample
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_text(message: Any) -> str:
-    text = message.content if hasattr(message, "content") else str(message)
-    if isinstance(text, list):
-        text = "\n".join(b.get("text", "") for b in text if isinstance(b, dict))
-    return str(text)
-
-
-def _join_message_text(messages: list[Any]) -> str:
-    """Concatenate all AI-visible message text for offline debugging."""
-    parts = [_extract_text(message).strip() for message in messages]
-    return "\n\n".join(part for part in parts if part)
 
 
 def deepagents_baseline_swe_solver(*, model: str | None = None) -> Solver:
@@ -107,7 +94,7 @@ def deepagents_baseline_swe_solver(*, model: str | None = None) -> Solver:
                 provider_usage = aggregate_provider_usage(messages)
                 if provider_usage is not None:
                     state.metadata["provider_usage"] = provider_usage
-                state.metadata["agent_raw_output"] = _join_message_text(messages)
+                state.metadata["agent_raw_output"] = join_message_texts(messages)
                 # Stable eval/export surface: the benchmark output is the
                 # prediction patch, not the agent's final prose.
                 state.output.completion = prediction.model_dump_json()

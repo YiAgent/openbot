@@ -22,6 +22,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from openbot.application.use_cases._lifecycle import audit_lifecycle
+from openbot.application.use_cases._tracing import observe as _observe
 from openbot.application.use_cases._tracing import traceable as _traceable
 from openbot.domain.events import EventKind
 from openbot.domain.workflows import Workflow
@@ -38,6 +39,7 @@ _ACK_TEMPLATE = (
 )
 
 
+@_observe(name="triage", capture_input=False)
 @_traceable(run_type="chain", name="triage")
 async def maybe_run_triage(ctx: PreflightContext) -> None:
     event = ctx.event

@@ -24,8 +24,11 @@ import sys
 
 from inspect_evals.swe_bench.swe_bench import swe_bench as _upstream_swe_bench
 
-DATASET_NAME = "fix_swe_bench_verified"
-HF_DATASET = "princeton-nlp/SWE-bench_Verified"
+from evals.common.config import get_eval_config as _eval_cfg
+
+# Dataset identifiers from CatalogSettings — single source of truth.
+_DS_NAME = _eval_cfg().catalog.fix.dataset_version
+_DS_HF = _eval_cfg().catalog.fix.hf_dataset
 HF_SPLIT = "test"
 
 
@@ -50,8 +53,8 @@ def _load_examples() -> list[dict]:
     from datasets import load_dataset
 
     revision = _hf_revision()
-    print(f"[hf] loading {HF_DATASET} ({HF_SPLIT}) @ {revision[:12]}", file=sys.stderr)
-    rows = load_dataset(HF_DATASET, split=HF_SPLIT, revision=revision)
+    print(f"[hf] loading {_DS_HF} ({HF_SPLIT}) @ {revision[:12]}", file=sys.stderr)
+    rows = load_dataset(_DS_HF, split=HF_SPLIT, revision=revision)
 
     examples: list[dict] = []
     for row in rows:
@@ -70,8 +73,8 @@ def _load_examples() -> list[dict]:
                 },
                 "metadata": {
                     "instance_id": instance_id,
-                    "dataset_version": DATASET_NAME,
-                    "hf_dataset": HF_DATASET,
+                    "dataset_version": _DS_NAME,
+                    "hf_dataset": _DS_HF,
                     "hf_split": HF_SPLIT,
                     "hf_revision": revision,
                     "test_patch": row["test_patch"],
@@ -91,26 +94,26 @@ def _publish(examples: list[dict], *, force: bool) -> str:
     from langsmith import Client
 
     client = Client()
-    existing = next((d for d in client.list_datasets(dataset_name=DATASET_NAME)), None)
+    existing = next((d for d in client.list_datasets(dataset_name=_DS_NAME)), None)
     if existing and not force:
         print(
-            f"FATAL: LangSmith dataset {DATASET_NAME!r} already exists ({existing.id}). "
+            f"FATAL: LangSmith dataset {_DS_NAME!r} already exists ({existing.id}). "
             f"Re-run with --force to delete and recreate.",
             file=sys.stderr,
         )
         sys.exit(1)
     if existing and force:
         print(
-            f"--force: deleting existing dataset {DATASET_NAME} ({existing.id})",
+            f"--force: deleting existing dataset {_DS_NAME} ({existing.id})",
             file=sys.stderr,
         )
         client.delete_dataset(dataset_id=existing.id)
 
     revision = _hf_revision()
     ds = client.create_dataset(
-        dataset_name=DATASET_NAME,
+        dataset_name=_DS_NAME,
         description=(
-            f"SWE-bench Verified mirror — {HF_DATASET} ({HF_SPLIT} split) at HF "
+            f"SWE-bench Verified mirror — {_DS_HF} ({HF_SPLIT} split) at HF "
             f"revision {revision[:12]}. Source of truth remains HuggingFace; this "
             f"mirror exists so per-sample scorer runs can reference dataset "
             f"examples in the LangSmith Experiments view. Published by "
@@ -133,7 +136,7 @@ def _publish(examples: list[dict], *, force: bool) -> str:
         print(f"  uploaded {total}/{len(examples)}", file=sys.stderr)
 
     print(
-        f"[done] published {total} examples to LangSmith dataset {DATASET_NAME} ({ds.id})",
+        f"[done] published {total} examples to LangSmith dataset {_DS_NAME} ({ds.id})",
         file=sys.stderr,
     )
     return str(ds.id)
@@ -153,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "dataset_id": ds_id,
-                "dataset_name": DATASET_NAME,
+                "dataset_name": _DS_NAME,
                 "sample_count": len(examples),
                 "hf_revision": _hf_revision(),
             }

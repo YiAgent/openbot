@@ -23,6 +23,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from openbot.application.ports.sandbox import ExecResult
+from openbot.domain.checkout import CloneStrategy
 
 
 class FakeSandboxAdapter:
@@ -31,11 +32,29 @@ class FakeSandboxAdapter:
     def __init__(self) -> None:
         self.workspace: str = tempfile.mkdtemp(prefix="openbot-fix-")
         self._closed: bool = False
+        # Records the strategy the last ``clone`` call received so
+        # use-case tests can assert the resolver picked the right one
+        # without needing to mock the full git invocation.
+        self.last_clone_strategy: CloneStrategy | None = None
 
-    async def clone(self, *, repo_url: str, ref: str, token: str) -> None:
+    async def clone(
+        self,
+        *,
+        repo_url: str,
+        ref: str,
+        token: str,
+        strategy: CloneStrategy = CloneStrategy.SHALLOW,
+    ) -> None:
         # Token is unused for file:// origins (tests). Real HTTPS origins
         # would interpolate via x-access-token like the Daytona adapter,
         # but the fake never sees those — production wires Daytona.
+        #
+        # The fake doesn't vary its git invocation per strategy; it just
+        # records the choice. The honest depth/filter behaviour lives in
+        # ``DaytonaSandboxAdapter`` and is unit-tested there. Tests that
+        # need to assert the resolver picked the right strategy read
+        # ``self.last_clone_strategy`` after the call returns.
+        self.last_clone_strategy = strategy
         result = await self._run_inside(
             ["git", "clone", "--quiet", "--branch", ref, repo_url, "."],
         )

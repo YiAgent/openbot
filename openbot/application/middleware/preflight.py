@@ -39,13 +39,17 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     import redis.asyncio as redis_async
+    from langgraph.checkpoint.base import BaseCheckpointSaver
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from openbot.application.ports.audit_log import AuditLogPort
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
     from openbot.application.ports.rate_limiter import RateLimiterPort
     from openbot.application.ports.sandbox import SandboxPort
+    from openbot.application.ports.sandbox_cache import SandboxCachePort
     from openbot.application.router import Dispatch
+    from openbot.application.sandbox_handle import SandboxedHandle
+    from openbot.dispatcher.classifier import ClassifierOutput
     from openbot.domain.config_schema import EffectiveConfig
 
 _logger = logging.getLogger(__name__)
@@ -126,6 +130,37 @@ class PreflightContext:
     # Returns an async context manager so ``close()`` runs on every
     # exit, including the failure paths.
     sandbox_factory: Callable[[], AbstractAsyncContextManager[SandboxPort]] | None = None
+    # Unified sandbox entry (slice unified-sandbox-entry): the live
+    # handle bundling the open sandbox + resolved CheckoutSpec + GH
+    # installation token. The dispatcher attaches it via
+    # ``dataclasses.replace`` after the policy-merge yields REQUIRED
+    # AND the clone succeeds. ``None`` on every NO_SANDBOX path and on
+    # the degrade path (sandbox provisioning failed) — handlers branch
+    # on ``ctx.sandbox_handle is None``.
+    sandbox_handle: SandboxedHandle | None = None
+    # LLM intent classifier signal (one-shot, fail-open). The receive
+    # side calls ``classify_event`` between preflight and policy gate,
+    # then ``dataclasses.replace``-s the context with the result so
+    # handlers can specialize their reply (e.g. ask for repro steps).
+    # ``None`` means the classifier didn't run for this feature, timed
+    # out, or raised — the policy-gate code treats None as "respect
+    # the static SandboxPolicy" (see ``derive_sandbox_policy``).
+    classifier_output: ClassifierOutput | None = None
+    # Snapshot cache port — optional warm-sandbox cache between dispatcher
+    # and factory (Part 4 of unified-sandbox-entry). ``None`` means no cache
+    # backend is configured; the dispatcher always runs the cold path. When
+    # set, ``_run_with_sandbox`` attempts ``acquire`` first and schedules an
+    # async ``publish`` after a successful cold-path clone.
+    # Wired via DI: ``NoOpSandboxCache`` (dev/default), ``InMemorySandboxCache``
+    # (tests), or ``DaytonaSnapshotCache`` (production with snapshot API).
+    sandbox_cache: SandboxCachePort | None = None
+    # LangGraph agent checkpointer — one ``AsyncPostgresSaver`` per Worker
+    # process, shared across consumers. ``None`` in dev / tests / callers
+    # that haven't been upgraded. Handlers access via ``ctx.agent_checkpointer``
+    # and pass it (plus ``ctx.dispatch.run_id``) to the responder. Graceful-
+    # degrade: ``None`` means "no persistence" — same pattern as
+    # ``ctx.sandbox_factory is None``.
+    agent_checkpointer: BaseCheckpointSaver | None = None
     # Reserved for slice B+: middlewares may stash cached lookups
     # (actor role, cancel set membership) keyed by their middleware name.
     # Frozen at construction; slice A leaves it empty.

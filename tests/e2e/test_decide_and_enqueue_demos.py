@@ -577,7 +577,9 @@ async def test_f3_02_mocked_triage_classifier_populates_spec(
         looks_like_spam=False,
     )
 
-    with patch("openbot.dispatcher.decide.classify_event", new=AsyncMock(return_value=mock_output)):
+    with patch(
+        "openbot.dispatcher.classifier.classify_event", new=AsyncMock(return_value=mock_output)
+    ):
         await _run(
             event,
             queue=queue,
@@ -616,7 +618,9 @@ async def test_f3_03_mocked_review_classifier_sets_stages(
         suggested_subagents=("correctness", "security"),
     )
 
-    with patch("openbot.dispatcher.decide.classify_event", new=AsyncMock(return_value=mock_output)):
+    with patch(
+        "openbot.dispatcher.classifier.classify_event", new=AsyncMock(return_value=mock_output)
+    ):
         await _run(
             event,
             queue=queue,
@@ -655,7 +659,9 @@ async def test_f3_04_mocked_docs_only_pr_stages(
         suggested_subagents=("docs",),
     )
 
-    with patch("openbot.dispatcher.decide.classify_event", new=AsyncMock(return_value=mock_output)):
+    with patch(
+        "openbot.dispatcher.classifier.classify_event", new=AsyncMock(return_value=mock_output)
+    ):
         await _run(
             event,
             queue=queue,
@@ -811,7 +817,7 @@ async def test_f01_classifier_timeout_fails_open(
     async def _timeout(*_a, **_kw):
         raise TimeoutError("simulated LLM timeout")
 
-    with patch("openbot.dispatcher.decide.classify_event", new=_timeout):
+    with patch("openbot.dispatcher.classifier.classify_event", new=_timeout):
         await _run(
             event,
             queue=queue,

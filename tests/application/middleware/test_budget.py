@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from openbot.application.middleware import MiddlewareResult
 from openbot.application.middleware.budget import BudgetMiddleware, _effective_global_cap
-from openbot.infrastructure.llm.model_router import Feature
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.persistence import Base, make_session_factory
 from openbot.infrastructure.persistence.models import CostMeter, CostStatus, WorkflowPhase
 from tests.application.middleware.conftest import make_ctx, make_event

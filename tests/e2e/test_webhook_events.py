@@ -28,14 +28,16 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import fakeredis.aioredis
 import pytest
 from fastapi.testclient import TestClient
 
 from openbot.application.router import derive_task_id
 from openbot.core.settings import get_settings
 from openbot.domain.events import UnifiedEvent
+from openbot.domain.workflows import Feature
 from openbot.entrypoints.api.app import app
-from openbot.infrastructure.llm.model_router import Feature
+from openbot.infrastructure.queue.enqueue import RedisStreamQueue
 from tests.e2e._github_payloads import (
     WEBHOOK_SECRET,
     issue_assigned_to_bot,
@@ -58,17 +60,22 @@ _REPO = "acme-corp/widgets"
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """FastAPI TestClient with the webhook secret wired, no Redis.
+    """FastAPI TestClient with the webhook secret + fakeredis wired.
 
-    Scrubs ``OPENBOT_REDIS_URL`` so dedup falls open — each test owns its
-    own delivery_id anyway, but without this an ambient ``.env`` on the
-    dev machine could turn the second request in a test into a duplicate.
+    Scrubs ``OPENBOT_REDIS_URL`` so dedup falls open (each test owns its
+    own delivery_id anyway). A fakeredis instance is injected into
+    app.state after startup so ``ingest_webhook`` can enqueue without
+    a real Redis — the queue simplification requires Redis to be present.
     """
     monkeypatch.setenv("OPENBOT_GITHUB_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.delenv("OPENBOT_REDIS_URL", raising=False)
     monkeypatch.delenv("OPENBOT_POSTGRES_URL", raising=False)
     get_settings.cache_clear()
     with TestClient(app) as c:
+        # Inject fakeredis so ingest_webhook can enqueue (no real Redis needed).
+        fake_redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+        c.app.state.redis = fake_redis
+        c.app.state.queue = RedisStreamQueue(fake_redis)
         yield c
     get_settings.cache_clear()
 
@@ -102,15 +109,17 @@ def test_issue_opened_dispatches_triage(client: TestClient) -> None:
 
     assert response.status_code == 202
     data = response.json()
-    assert data == {
-        "status": "accepted",
-        "delivery_id": "e2e-iss-1",
-        "kind": "issue.opened",
-        "feature": Feature.TRIAGE.value,
-        "task_id": _expected_task_id(delivery_id="e2e-iss-1"),
-        "relevant": True,
-        "check_run_id": None,
-    }
+    # ``entry_id`` is now always present when Redis is configured (queue
+    # simplification: no BackgroundTask fallback). Check key fields instead
+    # of strict equality to avoid coupling to the Redis stream entry ID.
+    assert data["status"] == "accepted"
+    assert data["delivery_id"] == "e2e-iss-1"
+    assert data["kind"] == "issue.opened"
+    assert data["feature"] == Feature.TRIAGE.value
+    assert data["task_id"] == _expected_task_id(delivery_id="e2e-iss-1")
+    assert data["relevant"] is True
+    assert data["check_run_id"] is None
+    assert "entry_id" in data  # stream entry ID from fakeredis
 
 
 def test_issue_assigned_to_bot_dispatches_fix(client: TestClient) -> None:

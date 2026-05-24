@@ -1,28 +1,19 @@
 """Integration L3 test fixtures.
 
-The integration tests need the same harness as the state-machine L2 tests
-(FakeRedis + aiosqlite + ASGI client). Rather than sys.path tricks or
-conftest chaining, we duplicate the fixture setup here — the fixture body
-is short enough that the duplication cost is lower than the coupling cost.
-
-Why not import from ``tests/state_machine/conftest.py``?
-  - pytest adds each conftest's directory to sys.path, so
-    ``state_machine.conftest`` is importable at runtime. But Pyright
-    (and ruff) treat it as an unresolved import unless the project root
-    is also in ``pythonpath``. Duplication avoids the tool noise.
-  - The ``SMHarness`` helper is also re-exported so integration test
-    files can annotate with it without a second import.
+Shares ``SMHarness`` with the L2 state-machine tests via
+``tests._fakes.sm_harness`` — a common module that keeps the dataclass in one
+place so adding a new ``app.state`` field doesn't require updating two files.
+The ``sm`` fixture body is kept local here because it needs its own conftest
+scope and has minor differences in comment context from the L2 version.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 
 import fakeredis.aioredis
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from openbot.infrastructure.adapters.github import GitHubAdapter
 from openbot.infrastructure.persistence import (
@@ -32,49 +23,14 @@ from openbot.infrastructure.persistence import (
     make_session_factory,
 )
 from openbot.infrastructure.persistence.cancellation_redis import RedisCancellation
-from openbot.infrastructure.persistence.models import State, TaskRun
 from openbot.infrastructure.persistence.resource_lock_redis import RedisResourceLock
 from openbot.infrastructure.persistence.runs_repo_impl import SqlRunsRepo
 from openbot.infrastructure.queue.enqueue import RedisStreamQueue
+from tests._fakes.sm_harness import SMHarness
 
 # Use the same secret and payloads as the L2 state-machine tests so
 # assertions on delivery IDs and resource keys are compatible.
 from tests.state_machine._payloads import _SM_SECRET
-
-
-@dataclass
-class SMHarness:
-    """One integration test environment: live ASGI app + FakeRedis + aiosqlite.
-
-    Same interface as ``tests/state_machine/conftest.SMHarness`` — they can
-    be used interchangeably in fixture type annotations.
-    """
-
-    client: AsyncClient
-    redis: fakeredis.aioredis.FakeRedis
-    session_factory: async_sessionmaker[AsyncSession]
-
-    async def queue_len(self) -> int:
-        """Entries currently in the ``openbot.application.workflows`` stream."""
-        return await self.redis.xlen("openbot:workflows")
-
-    async def _db_row(self, resource_key: str) -> TaskRun | None:
-        async with self.session_factory() as session:
-            return await session.get(TaskRun, resource_key)
-
-    async def db_state(self, resource_key: str) -> State:
-        """Persisted state for ``resource_key``; ``State.IDLE`` when absent."""
-        row = await self._db_row(resource_key)
-        return row.state if row is not None else State.IDLE
-
-    async def db_run_id(self, resource_key: str) -> str | None:
-        """``current_run_id`` for ``resource_key``; ``None`` when absent."""
-        row = await self._db_row(resource_key)
-        return row.current_run_id if row is not None else None
-
-    async def cancel_flag(self, run_id: str) -> bool:
-        """True iff the Redis cancellation key for ``run_id`` is set."""
-        return bool(await self.redis.exists(f"openbot:run_cancel:{run_id}"))
 
 
 @pytest.fixture

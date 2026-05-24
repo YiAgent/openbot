@@ -1,7 +1,7 @@
-"""Observability bootstrap — Sentry + LangSmith init shared by webapp + worker.
+"""Observability bootstrap — Sentry + LangSmith + Langfuse init shared by webapp + worker.
 
 Two entry processes (``openbot.entrypoints.api.app:app`` and ``openbot.infrastructure.queue.runner``)
-both need Sentry and LangSmith attached. Centralising the init here keeps
+both need Sentry, LangSmith, and Langfuse attached. Centralising the init here keeps
 the contract in one place:
 
 Sentry
@@ -39,6 +39,24 @@ LangSmith
   - ``init_langsmith`` just checks + logs whether tracing is active so the
     startup log line makes the status visible.  The actual tracing machinery
     is wired by ``@traceable`` decorators on the use-case functions.
+
+Langfuse
+--------
+  - Reads ``LANGFUSE_PUBLIC_KEY`` + ``LANGFUSE_SECRET_KEY`` from the environment
+    (Langfuse's own env-var convention; no OPENBOT_ prefix).
+  - Both public and secret key must be set to activate tracing.
+  - Host is read in SDK priority order: ``LANGFUSE_BASE_URL`` → ``LANGFUSE_HOST``
+    → ``https://cloud.langfuse.com``. Use ``LANGFUSE_BASE_URL`` for the US cloud
+    (``https://us.cloud.langfuse.com``) or a self-hosted instance.
+  - Two trace layers:
+      1. ``@observe`` decorators on use-case entry points (outer span, duration,
+         error capture for the whole workflow).
+      2. Per-request ``CallbackHandler`` injected into each DeepAgents/LangGraph
+         ``ainvoke`` call (inner spans for every agent step + tool call).
+  - ``get_langfuse_handler()`` returns a **fresh** ``CallbackHandler()`` per
+    invocation — re-using one handler across concurrent requests mixes traces.
+    Returns ``None`` when Langfuse is not configured; callers guard with
+    ``[h for h in [get_langfuse_handler()] if h is not None]``.
 """
 
 from __future__ import annotations
@@ -159,4 +177,89 @@ def init_langsmith() -> None:
         _logger.info("langsmith_tracing_disabled_no_key")
 
 
-__all__ = ["init_langsmith", "init_sentry"]
+def init_langfuse() -> None:
+    """Log whether Langfuse tracing is active at startup.
+
+    Active when ALL of the following env vars are present:
+      - ``LANGFUSE_PUBLIC_KEY`` — project public key (starts with ``pk-lf-``)
+      - ``LANGFUSE_SECRET_KEY`` — project secret key (starts with ``sk-lf-``)
+
+    Host resolution mirrors the SDK's own priority (first match wins):
+      1. ``LANGFUSE_BASE_URL`` — preferred alias used by Langfuse v4+
+      2. ``LANGFUSE_HOST`` — legacy alias still accepted by the SDK
+      3. ``https://cloud.langfuse.com`` — SDK default (EU cloud)
+
+    Override to ``https://us.cloud.langfuse.com`` for the US-region cloud,
+    or supply your self-hosted URL.
+
+    The function does NOT fail if langfuse is missing — same graceful
+    degradation as Sentry and LangSmith.
+    """
+    import os
+
+    try:
+        import langfuse  # noqa: F401 — existence check only
+    except ImportError:
+        _logger.warning("langfuse_not_installed_tracing_disabled")
+        return
+
+    public_key = os.environ.get("LANGFUSE_PUBLIC_KEY")
+    secret_key = os.environ.get("LANGFUSE_SECRET_KEY")
+    # Mirror the SDK's own env-var priority so the logged host matches
+    # what the SDK actually connects to (LANGFUSE_BASE_URL wins over
+    # LANGFUSE_HOST; both default to the EU cloud).
+    host = (
+        os.environ.get("LANGFUSE_BASE_URL")
+        or os.environ.get("LANGFUSE_HOST")
+        or "https://cloud.langfuse.com"
+    )
+
+    if public_key and secret_key:
+        _logger.info(
+            "langfuse_tracing_active",
+            extra={"host": host},
+        )
+    else:
+        missing = [
+            k
+            for k, v in {
+                "LANGFUSE_PUBLIC_KEY": public_key,
+                "LANGFUSE_SECRET_KEY": secret_key,
+            }.items()
+            if not v
+        ]
+        _logger.info(
+            "langfuse_tracing_disabled",
+            extra={"hint": (f"Set {' and '.join(missing)} to enable Langfuse trace submission.")},
+        )
+
+
+def get_langfuse_handler() -> object | None:
+    """Return a fresh Langfuse CallbackHandler for one DeepAgents invocation.
+
+    A new instance is created per call so concurrent agent runs get
+    independent traces — sharing one handler across requests mixes spans.
+
+    Returns ``None`` when:
+      - ``langfuse`` is not installed, or
+      - ``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY`` are not both set.
+
+    Callers inject the result via::
+
+        callbacks = [h for h in [get_langfuse_handler()] if h is not None]
+        config["callbacks"] = callbacks
+    """
+    import os
+
+    try:
+        from langfuse.langchain import CallbackHandler
+    except ImportError:
+        return None
+
+    if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
+        return None
+
+    return CallbackHandler()
+
+
+__all__ = ["get_langfuse_handler", "init_langfuse", "init_langsmith", "init_sentry"]

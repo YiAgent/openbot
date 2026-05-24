@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenBot — 动态流程图</title>
+<style>
+:root {
+  --bg: #0d1117; --card: #161b22; --card2: #1c2128;
+  --border: #30363d; --border2: #444c56;
+  --text: #e6edf3; --muted: #8b949e; --dim: #656d76;
+  --github: #1f6feb; --http: #8957e5; --usecase: #3fb950;
+  --mw: #d29922; --infra: #f0883e; --domain: #39c5cf;
+  --agent: #f778ba; --worker: #e3b341;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; overflow-x: hidden; }
+
+#app { display: flex; flex-direction: column; min-height: 100vh; }
+
+/* ── Header ── */
+header {
+  background: linear-gradient(180deg,#161b22 0%,#0d1117 100%);
+  border-bottom: 1px solid var(--border);
+  padding: 18px 32px;
+  display: flex; align-items: center; gap: 16px;
+  position: sticky; top: 0; z-index: 200;
+}
+header h1 { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+header h1 span.badge { font-size: 10px; background: rgba(31,111,235,.15); color: var(--github); border: 1px solid var(--github); border-radius: 10px; padding: 2px 8px; }
+.toolbar { margin-left: auto; display: flex; gap: 8px; }
+.btn {
+  border: 1px solid var(--border2); background: var(--card); color: var(--text);
+  border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 12px;
+  transition: all .15s;
+}
+.btn:hover { border-color: var(--border2); background: var(--card2); }
+.btn.active { background: rgba(63,185,80,.1); border-color: var(--usecase); color: var(--usecase); }
+.btn-sim { background: rgba(31,111,235,.1); border-color: var(--github); color: var(--github); }
+.btn-sim:hover { background: rgba(31,111,235,.2); }
+.btn-sim.running { background: rgba(248,81,73,.1); border-color: #f85149; color: #f85149; }
+
+/* ── Layout ── */
+.content { display: flex; flex: 1; }
+.diagram-wrapper { flex: 1; overflow: auto; padding: 24px 16px; display: flex; justify-content: center; }
+
+/* ── SVG Styles ── */
+svg .node-rect { cursor: pointer; transition: filter .2s; }
+svg .node-rect:hover { filter: drop-shadow(0 0 8px currentColor); }
+svg .node-fo { pointer-events: none; }
+svg .node-group { cursor: pointer; }
+svg .node-group:hover .node-rect { filter: brightness(1.3) drop-shadow(0 0 10px rgba(255,255,255,.15)); }
+svg .node-group.active .node-rect { stroke-width: 2.5 !important; filter: drop-shadow(0 0 12px currentColor) brightness(1.4); }
+svg .node-group.simulating .node-rect { animation: simPulse .6s ease-in-out infinite alternate; }
+@keyframes simPulse { from { filter: brightness(1); } to { filter: brightness(1.6) drop-shadow(0 0 16px currentColor); } }
+
+svg .conn-path { fill: none; }
+svg .conn-label-bg { fill: var(--bg); }
+svg .conn-label { font-size: 9px; fill: var(--dim); font-family: inherit; }
+svg .section-label { font-size: 9px; fill: var(--dim); font-family: inherit; letter-spacing: .06em; text-transform: uppercase; }
+svg .arrowhead { fill: none; }
+
+/* foreignObject content */
+.nfo { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 8px 12px; text-align: center; pointer-events: none; }
+.nfo .icon { font-size: 16px; line-height: 1; margin-bottom: 2px; }
+.nfo .title { font-size: 11px; font-weight: 700; color: var(--text); line-height: 1.3; }
+.nfo .sub { font-size: 9px; color: var(--muted); margin-top: 2px; line-height: 1.3; }
+.nfo .hint { font-size: 9px; color: var(--dim); font-style: italic; margin-top: 1px; }
+
+/* Workflow node content */
+.wf-content { width: 100%; height: 100%; display: flex; flex-direction: column; padding: 10px; pointer-events: none; }
+.wf-title { font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.wf-steps { list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.wf-steps li { font-size: 9px; color: var(--muted); padding: 2px 4px; background: rgba(0,0,0,.3); border-radius: 3px; border-left: 2px solid; display: flex; gap: 4px; }
+
+/* ── Detail Panel ── */
+.detail-panel {
+  width: 360px; min-width: 360px;
+  background: var(--card); border-left: 1px solid var(--border);
+  overflow-y: auto; transition: width .25s ease, opacity .2s;
+  position: sticky; top: 57px; height: calc(100vh - 57px);
+}
+.detail-panel.hidden { width: 0; min-width: 0; opacity: 0; overflow: hidden; }
+.detail-inner { padding: 20px; }
+.detail-close { float: right; background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); cursor: pointer; padding: 2px 8px; font-size: 11px; }
+.detail-close:hover { border-color: var(--border2); color: var(--text); }
+.detail-type { font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 10px; display: inline-block; margin-bottom: 8px; }
+.detail-title { font-size: 16px; font-weight: 700; margin-bottom: 6px; color: var(--text); }
+.detail-file { font-size: 10px; color: var(--dim); font-family: 'SF Mono', 'Fira Code', monospace; margin-bottom: 12px; }
+.detail-desc { font-size: 12px; color: var(--muted); line-height: 1.6; margin-bottom: 14px; border-left: 2px solid var(--border2); padding-left: 10px; }
+.detail-section { font-size: 10px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; margin: 14px 0 6px; }
+.detail-steps { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+.detail-steps li { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; border-radius: 5px; background: var(--card2); border: 1px solid rgba(255,255,255,.04); font-size: 11px; color: var(--muted); }
+.detail-steps li .snum { font-weight: 700; font-size: 10px; color: var(--dim); min-width: 18px; flex-shrink: 0; }
+.stag { font-size: 9px; padding: 1px 5px; border-radius: 8px; flex-shrink: 0; align-self: center; }
+.t-redis { background: rgba(240,136,62,.15); color: var(--infra); }
+.t-db { background: rgba(57,197,207,.12); color: var(--domain); }
+.t-gh { background: rgba(31,111,235,.15); color: var(--github); }
+.t-llm { background: rgba(247,120,186,.15); color: var(--agent); }
+.t-lock { background: rgba(227,179,65,.12); color: var(--worker); }
+.t-pure { background: rgba(139,148,158,.1); color: var(--dim); }
+.detail-mw { display: flex; flex-direction: column; gap: 3px; }
+.detail-mw-item { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 4px; font-size: 10px; border: 1px solid rgba(210,153,34,.2); background: rgba(210,153,34,.05); }
+.mw-num { font-size: 9px; font-weight: 700; color: var(--mw); min-width: 14px; }
+.mw-name { font-weight: 500; flex: 1; }
+.mw-block { font-size: 9px; background: rgba(248,81,73,.15); color: #f85149; padding: 1px 5px; border-radius: 8px; }
+.mw-audit { font-size: 9px; background: rgba(57,197,207,.1); color: var(--domain); padding: 1px 5px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div id="app">
+<header>
+  <h1>🤖 OpenBot <span class="badge">当前代码状态 · TaskSpec v3</span></h1>
+  <div class="toolbar">
+    <button class="btn active" id="btn-anim" onclick="toggleAnim()">⏸ 暂停流动</button>
+    <button class="btn btn-sim" id="btn-sim" onclick="runSimulate()">▶ 模拟一次请求</button>
+    <button class="btn" onclick="closePanel()">✕ 关闭详情</button>
+  </div>
+</header>
+<div class="content">
+<div class="diagram-wrapper">
+<svg id="diagram" viewBox="0 0 960 1360" style="width:960px;min-width:960px;overflow:visible">
+<defs>
+  <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+    <path d="M0,0 L0,6 L8,3 z" fill="#444c56"/>
+  </marker>
+  <marker id="arr-git" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+    <path d="M0,0 L0,6 L8,3 z" fill="#1f6feb"/>
+  </marker>
+  <marker id="arr-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+    <path d="M0,0 L0,6 L8,3 z" fill="#3fb950"/>
+  </marker>
+  <marker id="arr-orange" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+    <path d="M0,0 L0,6 L8,3 z" fill="#f0883e"/>
+  </marker>
+  <marker id="arr-gold" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+    <path d="M0,0 L0,6 L8,3 z" fill="#e3b341"/>
+  </marker>
+  <filter id="glow-green"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="glow-blue"><feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+
+<!-- ═══ SECTION LABELS ═══ -->
+<text class="section-label" x="16" y="26">阶段 1 — GitHub Webhook 入口</text>
+<text class="section-label" x="16" y="486">阶段 2 — TaskSpec v3 入队</text>
+<text class="section-label" x="16" y="770">阶段 3 — Worker 恢复上下文与 Sandbox Gate</text>
+<text class="section-label" x="16" y="1010">阶段 4 — 工作流处理器</text>
+
+<!-- ═══════════════════════════════════════
+     CONNECTION PATHS (drawn first, below nodes)
+════════════════════════════════════════ -->
+<!-- 1. GitHub → FastAPI -->
+<path id="p1" class="conn-path" d="M480,100 L480,148" stroke="#1f6feb" stroke-width="2" marker-end="url(#arr-git)"/>
+<!-- 2. FastAPI → ingest -->
+<path id="p2" class="conn-path" d="M480,232 L480,282" stroke="#8957e5" stroke-width="2" marker-end="url(#arr)"/>
+<!-- 3. ingest → Redis Stream -->
+<path id="p3" class="conn-path" d="M480,378 L480,428" stroke="#3fb950" stroke-width="2" marker-end="url(#arr-orange)"/>
+<!-- 4. Redis Stream → Worker -->
+<path id="p4" class="conn-path" d="M480,495 L480,545" stroke="#f0883e" stroke-width="2" marker-end="url(#arr-green)"/>
+<!-- 5. Worker → Sandbox Gate -->
+<path id="p5" class="conn-path" d="M480,643 L480,700" stroke="#3fb950" stroke-width="2" marker-end="url(#arr-orange)"/>
+<!-- 6. Sandbox Gate → execute_handler -->
+<path id="p6" class="conn-path" d="M480,767 L480,812" stroke="#f0883e" stroke-width="2" marker-end="url(#arr-gold)"/>
+<!-- 7. execute_handler → workflow handlers -->
+<path id="p7" class="conn-path" d="M480,905 L480,952" stroke="#e3b341" stroke-width="2" marker-end="url(#arr-green)"/>
+<!-- 8. exec → TRIAGE -->
+<path id="p8" class="conn-path" d="M480,1018 C480,1058 125,1058 125,1078" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-green)"/>
+<!-- 9. exec → REVIEW -->
+<path id="p9" class="conn-path" d="M480,1018 C480,1053 348,1053 348,1078" stroke="#1f6feb" stroke-width="1.5" marker-end="url(#arr-git)"/>
+<!-- 10. exec → FIX -->
+<path id="p10" class="conn-path" d="M480,1018 C480,1053 588,1053 588,1078" stroke="#f0883e" stroke-width="1.5" marker-end="url(#arr-orange)"/>
+<!-- 11. exec → CHAT -->
+<path id="p11" class="conn-path" d="M480,1018 C480,1058 838,1058 838,1078" stroke="#8957e5" stroke-width="1.5" marker-end="url(#arr)"/>
+
+<!-- Current implementation gap (dashed) -->
+<path id="p-fallback" class="conn-path" d="M715,330 C820,330 820,594 726,594"
+  stroke="#656d76" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arr)" opacity=".7"/>
+<rect class="conn-label-bg" x="724" y="444" width="146" height="14" rx="3"/>
+<text class="conn-label" x="728" y="454">当前缺口：未注入 sandbox factory</text>
+
+<!-- Connection labels -->
+<rect class="conn-label-bg" x="418" y="115" width="124" height="13" rx="2"/>
+<text class="conn-label" x="422" y="124" text-anchor="start">GitHub 推送通知 · 签名验证</text>
+<rect class="conn-label-bg" x="438" y="510" width="84" height="13" rx="2"/>
+<text class="conn-label" x="442" y="520" text-anchor="start">Worker 消费 TaskSpec</text>
+<rect class="conn-label-bg" x="424" y="713" width="112" height="13" rx="2"/>
+<text class="conn-label" x="428" y="722" text-anchor="start">按策略 provision 或降级</text>
+
+<!-- ═══════════════════════════════════════
+     ANIMATED PARTICLES
+════════════════════════════════════════ -->
+<g class="particles">
+  <circle r="4" fill="#1f6feb" opacity=".85"><animateMotion dur="1.2s" begin="0s" repeatCount="indefinite"><mpath href="#p1"/></animateMotion></circle>
+  <circle r="4" fill="#8957e5" opacity=".85"><animateMotion dur="1.2s" begin="0.3s" repeatCount="indefinite"><mpath href="#p2"/></animateMotion></circle>
+  <circle r="4" fill="#3fb950" opacity=".85"><animateMotion dur="1.4s" begin="0s" repeatCount="indefinite"><mpath href="#p3"/></animateMotion></circle>
+  <circle r="3" fill="#3fb950" opacity=".5"><animateMotion dur="1.4s" begin="0.7s" repeatCount="indefinite"><mpath href="#p3"/></animateMotion></circle>
+  <circle r="4" fill="#f0883e" opacity=".85"><animateMotion dur="1.4s" begin="0.4s" repeatCount="indefinite"><mpath href="#p4"/></animateMotion></circle>
+  <circle r="4" fill="#3fb950" opacity=".85"><animateMotion dur="1.6s" begin="0s" repeatCount="indefinite"><mpath href="#p5"/></animateMotion></circle>
+  <circle r="4" fill="#f0883e" opacity=".85"><animateMotion dur="1.2s" begin="0.5s" repeatCount="indefinite"><mpath href="#p6"/></animateMotion></circle>
+  <circle r="4" fill="#e3b341" opacity=".85"><animateMotion dur="1.2s" begin="0s" repeatCount="indefinite"><mpath href="#p7"/></animateMotion></circle>
+  <circle r="3.5" fill="#3fb950" opacity=".8"><animateMotion dur="1.8s" begin="0s" repeatCount="indefinite"><mpath href="#p8"/></animateMotion></circle>
+  <circle r="3.5" fill="#1f6feb" opacity=".8"><animateMotion dur="1.8s" begin="0.45s" repeatCount="indefinite"><mpath href="#p9"/></animateMotion></circle>
+  <circle r="3.5" fill="#f0883e" opacity=".8"><animateMotion dur="1.8s" begin="0.9s" repeatCount="indefinite"><mpath href="#p10"/></animateMotion></circle>
+  <circle r="3.5" fill="#8957e5" opacity=".8"><animateMotion dur="1.8s" begin="1.35s" repeatCount="indefinite"><mpath href="#p11"/></animateMotion></circle>
+</g>
+
+<!-- ═══════════════════════════════════════
+     NODES
+════════════════════════════════════════ -->
+
+<!-- 1. GitHub -->
+<g class="node-group" id="ng-github" onclick="showDetail('github')">
+  <rect class="node-rect" x="330" y="32" width="300" height="68" rx="10"
+    fill="#0d2145" stroke="#1f6feb" stroke-width="1.5" style="color:#1f6feb"/>
+  <foreignObject class="node-fo" x="330" y="32" width="300" height="68">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
+      <div class="icon">🐙</div>
+      <div class="title">GitHub 仓库</div>
+      <div class="sub">用户在仓库发生互动时，GitHub 主动推送通知</div>
+    </div>
+  </foreignObject>
+</g>
+
+<!-- 2. FastAPI Route -->
+<g class="node-group" id="ng-fastapi" onclick="showDetail('fastapi')">
+  <rect class="node-rect" x="295" y="148" width="370" height="84" rx="10"
+    fill="#1a0f2e" stroke="#8957e5" stroke-width="1.5" style="color:#8957e5"/>
+  <foreignObject class="node-fo" x="295" y="148" width="370" height="84">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
+      <div class="icon">⚡</div>
+      <div class="title">接收 GitHub 推送 · 安全验证</div>
+      <div class="sub">验证签名 → 解析事件 → 调用 ingest_webhook</div>
+      <div class="hint">入口层保持薄，只负责 HTTP 与鉴权</div>
+    </div>
+  </foreignObject>
+</g>
+
+<!-- 3. ingest_webhook -->
+<g class="node-group" id="ng-ingest" onclick="showDetail('ingest')">
+  <rect class="node-rect" x="240" y="282" width="480" height="96" rx="10"
+    fill="#0d2614" stroke="#3fb950" stroke-width="1.5" style="color:#3fb950"/>
+  <foreignObject class="node-fo" x="240" y="282" width="480" height="96">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
+      <div class="icon">🔀</div>
+      <div class="title">事件接收与 TaskSpec 构造</div>
+      <div class="sub">去重 · 路由 · 状态机 · 取消信号 · Check Run · TaskSpec v3</div>
+      <div class="hint">当前代码直接入队 TaskSpec，不再走两段队列</div>
+    </div>
+  </foreignObject>
+</g>
+
+<!-- 4. Redis Stream -->
+<g class="node-group" id="ng-redis-a" onclick="showDetail('redis')">
+  <rect class="node-rect" x="335" y="428" width="290" height="67" rx="10"
+    fill="#2d1500" stroke="#f0883e" stroke-width="1.5" style="color:#f0883e"/>
+  <foreignObject class="node-fo" x="335" y="428" width="290" height="67">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
+      <div class="icon">🔴</div>
+      <div class="title">Redis Stream · TaskSpec v3</div>
+      <div class="sub">openbot:workflows 持久化任务，Worker 通过消费者组读取</div>
+    </div>
+  </foreignObject>
+</g>
+
+<!-- 5. Worker rehydrate -->
+<g class="node-group" id="ng-decide" onclick="showDetail('worker')">
+  <rect class="node-rect" x="220" y="545" width="520" height="98" rx="10"
+    fill="#0d2614" stroke="#3fb950" stroke-width="1.5" style="color:#3fb950"/>
+  <foreignObject class="node-fo" x="220" y="545" width="520" height="98">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
+      <div class="icon">⚙️</div>
+      <div class="title">Worker · 恢复任务上下文</div>
+      <div class="sub">取消快检 → 重建事件 → 重新路由 → 加载配置 → 反序列化 classifier_output</div>
+      <div class="hint">失败会重试，超过上限进入 dead stream</div>
+    </div>
+  </foreignObject>
+</g>
+
+<!-- 6. Sandbox Gate -->
+<g class="node-group" id="ng-redis-b" onclick="showDetail('sandbox')">
+  <rect class="node-rect" x="335" y="700" width="290" height="67" rx="10"
+    fill="#2d1500" stroke="#f0883e" stroke-width="1.5" style="color:#f0883e"/>
+  <foreignObject class="node-fo" x="335" y="700" width="290" height="67">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
+      <div class="icon">🧱</div>
+      <div class="title">Sandbox Gate · provision / degrade</div>
+      <div class="sub">静态策略 + classifier 输出合并；缺少 factory 时 handler 无沙箱运行</div>
+    </div>
+  </foreignObject>
+</g>
+
+<!-- 7. execute_handler context -->
+<g class="node-group" id="ng-worker" onclick="showDetail('context')">
+  <rect class="node-rect" x="265" y="812" width="430" height="93" rx="10"
+    fill="#272100" stroke="#e3b341" stroke-width="1.5" style="color:#e3b341"/>
+  <foreignObject class="node-fo" x="265" y="812" width="430" height="93">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
+      <div class="icon">🚦</div>
+      <div class="title">execute_handler · 组装 PreflightContext</div>
+      <div class="sub">注入 adapter / config / redis / check_run / sandbox_handle / checkpointer</div>
+      <div class="hint">当前路径不再重新跑 middleware chain</div>
+    </div>
+  </foreignObject>
+</g>
+
+<!-- 8. execute_handler -->
+<g class="node-group" id="ng-exec" onclick="showDetail('exec')">
+  <rect class="node-rect" x="330" y="952" width="300" height="66" rx="10"
+    fill="#0d2614" stroke="#3fb950" stroke-width="1.5" style="color:#3fb950"/>
+  <foreignObject class="node-fo" x="330" y="952" width="300" height="66">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
+      <div class="icon">🚀</div>
+      <div class="title">进入工作流处理器</div>
+      <div class="sub">triage / review / fix / chat 由各自 handler 决定业务行为</div>
+    </div>
+  </foreignObject>
+</g>
+
+<!-- ─── Workflow Cards ─── -->
+
+<!-- TRIAGE -->
+<g class="node-group" id="ng-triage" onclick="showDetail('triage')">
+  <rect class="node-rect" x="22" y="1078" width="206" height="248" rx="10"
+    fill="rgba(63,185,80,.05)" stroke="#3fb950" stroke-width="1.5" style="color:#3fb950"/>
+  <foreignObject class="node-fo" x="22" y="1078" width="206" height="248">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="wf-content">
+      <div class="wf-title" style="color:#3fb950">🏷️ 问题分类</div>
+      <ul class="wf-steps">
+        <li style="border-color:#3fb950">📌 Issue opened / edited / reopened / label event</li>
+        <li style="border-color:#3fb950">🛡️ 机器人自身操作自动跳过</li>
+        <li style="border-color:#3fb950">💬 当前实现：新建 issue 发布 ACK</li>
+        <li style="border-color:#3fb950">✅ 记录完整处理日志</li>
+        <li style="border-color:#3fb950">🚧 路线图：自动标签 · 优先级判断</li>
+      </ul>
+    </div>
+  </foreignObject>
+</g>
+
+<!-- REVIEW -->
+<g class="node-group" id="ng-review" onclick="showDetail('review')">
+  <rect class="node-rect" x="250" y="1078" width="196" height="248" rx="10"
+    fill="rgba(31,111,235,.05)" stroke="#1f6feb" stroke-width="1.5" style="color:#1f6feb"/>
+  <foreignObject class="node-fo" x="250" y="1078" width="196" height="248">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="wf-content">
+      <div class="wf-title" style="color:#1f6feb">🔬 代码审查</div>
+      <ul class="wf-steps">
+        <li style="border-color:#1f6feb">📌 PR 提交或更新时触发</li>
+        <li style="border-color:#f778ba">🤖 AI 阅读代码差异，识别问题</li>
+        <li style="border-color:#1f6feb">🔽 按严重程度过滤，忽略低优</li>
+        <li style="border-color:#1f6feb">📐 行内注释 + 整体评审意见</li>
+        <li style="border-color:#1f6feb">📋 无问题则批准，有问题则评论</li>
+        <li style="border-color:#1f6feb">🔧 只审查新增改动，不重复旧内容</li>
+      </ul>
+    </div>
+  </foreignObject>
+</g>
+
+<!-- FIX -->
+<g class="node-group" id="ng-fix" onclick="showDetail('fix')">
+  <rect class="node-rect" x="468" y="1078" width="204" height="248" rx="10"
+    fill="rgba(240,136,62,.05)" stroke="#f0883e" stroke-width="1.5" style="color:#f0883e"/>
+  <foreignObject class="node-fo" x="468" y="1078" width="204" height="248">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="wf-content">
+      <div class="wf-title" style="color:#f0883e">🔧 自动修复</div>
+      <ul class="wf-steps">
+        <li style="border-color:#f0883e">📌 Issue 被指派给 OpenBot</li>
+        <li style="border-color:#f0883e">📋 读取 issue 描述和代码版本</li>
+        <li style="border-color:#f0883e">🔑 申请临时访问凭证</li>
+        <li style="border-color:#f0883e">📦 需要 sandbox_handle 才进入修复循环</li>
+        <li style="border-color:#f0883e">🐙 sandbox 内 clone 仓库并执行命令</li>
+        <li style="border-color:#f778ba">🤖 AI 分析问题，尝试修复并测试</li>
+        <li style="border-color:#3fb950">✅ 测试通过 → 自动提交 PR</li>
+        <li style="border-color:#f85149">⚠️ 当前 worker 未注入 factory 时会清晰降级</li>
+      </ul>
+    </div>
+  </foreignObject>
+</g>
+
+<!-- CHAT -->
+<g class="node-group" id="ng-chat" onclick="showDetail('chat')">
+  <rect class="node-rect" x="694" y="1078" width="242" height="248" rx="10"
+    fill="rgba(137,87,229,.05)" stroke="#8957e5" stroke-width="1.5" style="color:#8957e5"/>
+  <foreignObject class="node-fo" x="694" y="1078" width="242" height="248">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="wf-content">
+      <div class="wf-title" style="color:#8957e5">💬 对话交互</div>
+      <ul class="wf-steps">
+        <li style="border-color:#8957e5">📌 评论中 @openbot 开头时触发</li>
+        <li style="border-color:#8957e5">🔍 识别用户意图：帮助/取消/提问</li>
+        <li style="border-color:#8957e5">🚫 取消指令 → 通过 cancellation signal 终止任务</li>
+        <li style="border-color:#8957e5">❓ 帮助请求 → 直接返回使用说明</li>
+        <li style="border-color:#f778ba">🤖 自由提问 → DeepAgentsChatResponder 回答</li>
+        <li style="border-color:#8957e5">📭 空消息 → 回复基础使用说明</li>
+        <li style="border-color:#3fb950">✅ 回复用户并记录处理日志</li>
+      </ul>
+    </div>
+  </foreignObject>
+</g>
+
+</svg>
+</div>
+
+<!-- Detail Panel -->
+<div class="detail-panel hidden" id="detail-panel">
+  <div class="detail-inner" id="detail-content">
+    <!-- filled by JS -->
+  </div>
+</div>
+</div><!-- content -->
+</div><!-- app -->
+
+<script>
+// ─────────────────────────────────────
+// Node detail data — 全部用业务语言
+// ─────────────────────────────────────
+const DETAIL = {
+  github: {
+    type: '事件来源', typeColor: '#1f6feb', typeBg: 'rgba(31,111,235,.12)',
+    title: '🐙 GitHub 仓库', file: '（外部事件源，GitHub App 安装后自动推送）',
+    desc: '用户在仓库进行任何互动时，GitHub 会主动向 OpenBot 推送通知。OpenBot 安装为 GitHub App，只响应已授权安装的仓库。',
+    sections: [{
+      label: '哪些操作会触发 OpenBot',
+      type: 'steps',
+      items: [
+        { num: '①', text: '用户创建、编辑、重开 issue，或给 issue 添加 / 删除标签 → 进入问题分类流程' },
+        { num: '②', text: 'PR 提交、新推送更新、重开或打标签 → 进入代码审查流程' },
+        { num: '③', text: 'Issue 被手动指派给 OpenBot → 进入自动修复流程' },
+        { num: '④', text: '评论中以 @openbot 或 @yibots 开头 → 进入对话交互流程' },
+        { num: '—', text: '代码直接推送、ping 测试、其他无关事件 → 直接忽略，不做任何处理' },
+      ]
+    }]
+  },
+  fastapi: {
+    type: 'HTTP 接收层', typeColor: '#8957e5', typeBg: 'rgba(137,87,229,.12)',
+    title: '⚡ 接收 GitHub 推送 · 安全验证', file: 'openbot/entrypoints/api/routes/github_webhook.py',
+    desc: '纯粹的 HTTP 接收层。它负责读取请求、验证 GitHub 签名、解析事件，然后调用应用层 ingest_webhook；业务编排不放在 route 里。',
+    sections: [{
+      label: '处理步骤',
+      type: 'steps',
+      items: [
+        { num: '①', text: '接收 GitHub 推送的原始数据' },
+        { num: '②', text: '验证消息确实来自 GitHub，防止第三方伪造请求', tag: { label: 'HMAC 签名', cls: 't-gh' } },
+        { num: '③', text: '识别事件类型（issue / PR / 评论）并统一为内部格式' },
+        { num: '④', text: '交给「事件接收与分发」流程处理' },
+        { num: '⑤', text: 'ingest 成功后返回 accepted / duplicate / ignored；队列不可用会抛错，让 GitHub 之后重试' },
+      ]
+    }]
+  },
+  ingest: {
+    type: '事件接收与分发', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
+    title: '🔀 事件接收与 TaskSpec 构造', file: 'openbot/application/use_cases/ingest_webhook.py',
+    desc: '当前代码的接收侧核心路径。它去重、路由、做可选状态机转换，随后直接构造 TaskSpec v3 并写入 Redis Stream；旧的两段队列 / decide_and_enqueue 不再是主路径。',
+    sections: [{
+      label: '接收侧处理步骤',
+      type: 'steps',
+      items: [
+        { num: '①', text: '去重：同一条 GitHub 通知只处理一次，重复推送直接忽略', tag: { label: '防重', cls: 't-redis' } },
+        { num: '②', text: '路由：dispatch_for 判断触发 triage / review / fix / chat；无关事件和 bot 事件直接 ignored', tag: { label: '纯逻辑', cls: 't-pure' } },
+        { num: '③', text: '状态机：有 runs_repo + resource_lock 时，对同一资源做 start / supersede / cancel / ignore 分类', tag: { label: '加锁', cls: 't-lock' } },
+        { num: '↳', text: '判断结果：启动新任务 / 取代旧任务并启动新任务 / 仅发取消信号 / 事件已过期则丢弃' },
+        { num: '④', text: '在 PR 上创建可见的进度标记（GitHub 上方的 ✓ / ✗ 图标）', tag: { label: 'GitHub', cls: 't-gh' } },
+        { num: '⑤', text: 'TaskSpec.from_event_and_dispatch：保存 run / resource / intent / raw event / check_run_id 等字段' },
+        { num: '⑥', text: '写入 Redis Stream；Redis 是必需依赖，失败则让 webhook 返回错误并依赖 GitHub 重试', tag: { label: '队列', cls: 't-redis' } },
+      ]
+    }]
+  },
+  redis: {
+    type: '持久化任务队列', typeColor: '#f0883e', typeBg: 'rgba(240,136,62,.12)',
+    title: '🔴 Redis Stream · TaskSpec v3', file: 'openbot/infrastructure/queue/',
+    desc: '当前只保留一个持久化执行队列 openbot:workflows。消息体是 TaskSpec v3，Worker 消费后重建事件上下文并执行对应工作流。',
+    sections: [{
+      label: '队列机制',
+      type: 'steps',
+      items: [
+        { num: '主队列', text: 'openbot:workflows 保存 TaskSpec v3：delivery、repo、scenario、run_id、event_seq、raw event 等字段', tag: { label: 'TaskSpec', cls: 't-gh' } },
+        { num: '消费', text: 'Worker 通过 Redis Stream 消费者组读取，处理成功后 XACK' },
+        { num: '重试', text: 'Worker 处理失败后，60 秒内自动重新认领，最多重试 3 次' },
+        { num: '兜底', text: '连续失败超过上限后移入 openbot:workflows:dead，等待人工排查' },
+      ]
+    }]
+  },
+  sandbox: {
+    type: 'Sandbox Gate', typeColor: '#f0883e', typeBg: 'rgba(240,136,62,.12)',
+    title: '🧱 Sandbox Gate · provision / degrade', file: 'openbot/application/dispatcher.py',
+    desc: 'execute_handler 会在调用 workflow 前运行统一 sandbox gate：合并静态路由策略与 classifier 输出，决定是否需要 clone repo。当前 worker 尚未把 sandbox_factory 传入 execute_handler，因此需要 sandbox 的路径会进入 graceful degrade。',
+    sections: [
+      {
+        label: '策略与执行',
+        type: 'steps',
+        items: [
+          { num: '①', text: 'derive_sandbox_policy：静态 SandboxPolicy 与 classifier_output 做 OR merge，NO_SANDBOX 优先' },
+          { num: '②', text: 'NO_SANDBOX：label-only / 取消 / 明确不需要读代码的请求直接调用 handler', tag: { label: '跳过 clone', cls: 't-pure' } },
+          { num: '③', text: '需要 sandbox 但 factory 为 None：记录 degrade 指标，handler 收到 ctx.sandbox_handle is None', tag: { label: '当前缺口', cls: 't-lock' } },
+          { num: '④', text: 'factory 可用时：resolve_checkout → get_installation_token → cache acquire → sandbox.clone' },
+          { num: '⑤', text: 'clone 成功后构造 SandboxedHandle，并在 sandbox 生命周期内调用 handler' },
+        ]
+      },
+      {
+        label: '当前代码缺口',
+        type: 'steps',
+        items: [
+          { num: '阻塞', text: 'openbot/infrastructure/queue/worker.py 调用 execute_handler 时未传 sandbox_factory / sandbox_cache' },
+          { num: '影响', text: 'fix.py 在 ctx.sandbox_handle is None 时不会跑修复循环，会给用户发 no-sandbox 降级评论' },
+          { num: '已有', text: 'DaytonaSandboxAdapter、SandboxPort、SandboxCachePort 与 dispatcher gate 已存在，缺的是 worker composition root wiring' },
+        ]
+      }
+    ]
+  },
+  worker: {
+    type: '后台 Worker', typeColor: '#e3b341', typeBg: 'rgba(227,179,65,.12)',
+    title: '⚙️ Worker · 恢复任务上下文', file: 'openbot/infrastructure/queue/worker.py',
+    desc: '持续运行的后台进程，从 Redis Stream 读取 TaskSpec v3，恢复 UnifiedEvent 和 Dispatch，再调用 execute_handler。它负责消费确认、重试、死信和取消生命周期。',
+    sections: [{
+      label: '每条任务的处理流程',
+      type: 'steps',
+      items: [
+        { num: '①', text: '取消快检：任务执行前先检查是否已被用户取消，已取消则直接跳过' },
+        { num: '②', text: 'TaskSpec.to_event：从队列 payload 重建 UnifiedEvent' },
+        { num: '③', text: 'dispatch_for：重新计算要调用的工作流；若事件已不再可路由则 XACK 跳过', tag: { label: '纯逻辑', cls: 't-pure' } },
+        { num: '④', text: 'load_for_repo：加载仓库最新 .openbot/config.yaml 配置', tag: { label: 'GitHub', cls: 't-gh' } },
+        { num: '⑤', text: 'parse_classifier_output：把 TaskSpec 中的 dict 还原为 typed classifier output' },
+        { num: '⑥', text: '注册 cancellation slot，调用 execute_handler，结束后 deregister' },
+        { num: '—', text: '成功后：PR review 会记录 reviewed head SHA，随后 XACK 删除队列消息' },
+        { num: '—', text: '失败时：最多重试 3 次，仍失败则移入死信队列等待人工处理' },
+      ]
+    }]
+  },
+  context: {
+    type: '工作流调度', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
+    title: '🚀 execute_handler · 工作流调度', file: 'openbot/application/dispatcher.py',
+    desc: '当前 TaskSpec v3 worker 路径在这里组装 PreflightContext，然后经过 sandbox gate 调用具体 workflow handler。这个函数还负责 GitHub Check Run 成功 / 失败更新。',
+    sections: [{
+      label: '执行过程',
+      type: 'steps',
+      items: [
+        { num: '①', text: '组装 PreflightContext：event、dispatch、config、adapter、redis、check_run_id、classifier_output、checkpointer' },
+        { num: '②', text: '运行 sandbox gate：决定 provision / cache acquire / clone / degrade' },
+        { num: '③', text: '调用对应工作流处理器：问题分类 / 代码审查 / 自动修复 / 对话交互' },
+        { num: '④', text: '成功后：将 PR 上的 Check Run 更新为 success', tag: { label: 'GitHub', cls: 't-gh' } },
+        { num: '⑤', text: '失败后：将 Check Run 更新为 failure，并记录详细错误日志' },
+      ]
+    }]
+  },
+  exec: {
+    type: '工作流入口', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
+    title: '🚀 进入工作流处理器', file: 'openbot/application/use_cases/',
+    desc: 'dispatcher 最终调用四类 workflow handler。每个 handler 只关心业务行为，通过 PreflightContext 读取事件、配置、适配器、check run、sandbox handle 和 agent checkpointer。',
+    sections: [{
+      label: '处理器边界',
+      type: 'steps',
+      items: [
+        { num: 'triage', text: 'maybe_run_triage：当前只在新建 issue 时发布 ACK' },
+        { num: 'review', text: 'maybe_run_review：读取 diff，调用 DeepAgentsReviewResponder，发布 PR Review' },
+        { num: 'fix', text: 'maybe_run_fix：需要 sandbox_handle；缺失时发布 no-sandbox 降级说明' },
+        { num: 'chat', text: 'maybe_run_chat：解析 help / cancel / freeform，调用 DeepAgentsChatResponder' },
+      ]
+    }]
+  },
+  triage: {
+    type: '工作流：问题分类', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
+    title: '🏷️ 问题分类（Triage）', file: 'openbot/application/use_cases/triage.py',
+    desc: 'Issue 事件的第一响应。当前实现只在新建 issue 时发布确认评论；编辑、重开和标签事件进入路由但不会做完整自动分类。',
+    sections: [{
+      label: '处理流程',
+      type: 'steps',
+      items: [
+        { num: '①', text: '触发：用户创建、编辑、重开 issue，或给 issue 添加 / 删除标签' },
+        { num: '②', text: '过滤：只在新建 issue 时主动回复；机器人自身操作自动跳过，防止死循环' },
+        { num: '③', text: '在 issue 下发布确认评论，通知用户 OpenBot 已收到并将处理' },
+        { num: '④', text: '记录完整处理日志（开始时间、结束时间、评论 ID 等）' },
+        { num: '🚧', text: '路线图：自动打标签 · 优先级判断 · 自动复现问题步骤' },
+      ]
+    }]
+  },
+  review: {
+    type: '工作流：代码审查', typeColor: '#1f6feb', typeBg: 'rgba(31,111,235,.12)',
+    title: '🔬 代码审查（Review）', file: 'openbot/application/use_cases/review.py',
+    desc: 'PR 提交时触发 AI 代码审查。当前实现会拉取 diff，调用 DeepAgentsReviewResponder，过滤低优意见，并通过 GitHub PR Review API 发布行内或整体意见。',
+    sections: [{
+      label: '处理流程',
+      type: 'steps',
+      items: [
+        { num: '①', text: '触发：PR 提交、有新推送更新、重开或打标签' },
+        { num: '②', text: '读取 PR diff，并交给 DeepAgentsReviewResponder 生成结构化审查意见', tag: { label: 'AI', cls: 't-llm' } },
+        { num: '③', text: '按严重程度过滤审查意见，忽略配置阈值以下的低优问题' },
+        { num: '④', text: '将意见分两类：有代码行位置的 → 行内注释；通用性意见 → 统一写在审查总结里' },
+        { num: '⑤', text: '智能范围：只审查本次新增的改动，不重复已审查过的旧内容' },
+        { num: '⑥', text: '提交审查：没有问题则批准，有问题则仅评论（OpenBot 不阻止合并）', tag: { label: 'GitHub', cls: 't-gh' } },
+        { num: '⑦', text: 'AI 调用失败时：发布 fallback COMMENT review，PR 作者可见，不静默失败' },
+      ]
+    }]
+  },
+  fix: {
+    type: '工作流：自动修复', typeColor: '#f0883e', typeBg: 'rgba(240,136,62,.12)',
+    title: '🔧 自动修复（Fix）', file: 'openbot/application/use_cases/fix.py',
+    desc: 'Issue 被手动指派给 OpenBot 时触发。handler 已经实现 sandbox-backed 修复循环：读 issue、跑 DeepAgentsFixResponder、测试、push 分支并开 PR；但当前 worker 还没有注入 sandbox_factory，因此生产队列路径会先降级为 no-sandbox 回复。',
+    sections: [{
+      label: '处理流程',
+      type: 'steps',
+      items: [
+        { num: '①', text: '触发：仓库维护者将 issue 指派给 OpenBot' },
+        { num: '②', text: '读取 issue 描述内容，以及当前仓库的代码版本信息', tag: { label: 'GitHub', cls: 't-gh' } },
+        { num: '③', text: '如果 ctx.sandbox_handle is None：直接评论 sandbox not configured，不触碰仓库' },
+        { num: '④', text: '如果 sandbox 可用：读取 sandbox checkout，调用 DeepAgentsFixResponder 修复并测试', tag: { label: 'AI', cls: 't-llm' } },
+        { num: '✓', text: '测试全部通过：创建分支、commit_and_push、open PR，并在 issue 下评论 PR 链接' },
+        { num: '✗', text: '测试失败：评论详细失败信息；执行中会检查 cancellation checkpoint' },
+      ]
+    }]
+  },
+  chat: {
+    type: '工作流：对话交互', typeColor: '#8957e5', typeBg: 'rgba(137,87,229,.12)',
+    title: '💬 对话交互（Chat）', file: 'openbot/application/use_cases/chat.py',
+    desc: '评论中以 @openbot 或 @yibots 开头时触发。当前实现支持 help、cancel 和自由问答；自由问答走 DeepAgentsChatResponder，但还不是完整 repo-grounded 编程助手。',
+    sections: [{
+      label: '处理流程',
+      type: 'steps',
+      items: [
+        { num: '①', text: '触发：在 issue 或 PR 的评论中以 @openbot 或 @yibots 开头' },
+        { num: '②', text: '解析用户意图：是要帮助说明、取消任务，还是自由提问' },
+        { num: '③', text: '取消指令 → 发 cancellation signal，目标任务在 checkpoint 处停止' },
+        { num: '④', text: '帮助请求（@openbot help / 帮助 / ?）→ 直接返回使用说明，无需调用 AI' },
+        { num: '⑤', text: '自由提问 → DeepAgentsChatResponder 生成回答；当前还没有完整仓库工具注入', tag: { label: 'AI', cls: 't-llm' } },
+        { num: '⑥', text: '空消息（只 @了但没说话）→ 回复基础使用说明' },
+        { num: '⑦', text: '将回复发布为评论，并记录完整处理日志' },
+      ]
+    }]
+  },
+};
+
+// ─────────────────────────────────────
+// Render detail panel
+// ─────────────────────────────────────
+function showDetail(id) {
+  const d = DETAIL[id];
+  if (!d) return;
+
+  document.querySelectorAll('.node-group.active').forEach(n => n.classList.remove('active'));
+  const NODE_FOR_DETAIL = {
+    redis: 'redis-a',
+    worker: 'decide',
+    sandbox: 'redis-b',
+    context: 'worker',
+  };
+  const ng = document.getElementById('ng-' + (NODE_FOR_DETAIL[id] || id));
+  if (ng) ng.classList.add('active');
+
+  const panel = document.getElementById('detail-panel');
+  const content = document.getElementById('detail-content');
+  panel.classList.remove('hidden');
+
+  let html = `<button class="detail-close" onclick="closePanel()">✕ 关闭</button>`;
+  html += `<div class="detail-type" style="background:${d.typeBg};color:${d.typeColor}">${d.type}</div>`;
+  html += `<div class="detail-title">${d.title}</div>`;
+  html += `<div class="detail-file">${d.file}</div>`;
+  html += `<div class="detail-desc">${d.desc}</div>`;
+
+  for (const sec of d.sections) {
+    html += `<div class="detail-section">${sec.label}</div>`;
+    if (sec.type === 'steps') {
+      html += `<ul class="detail-steps">`;
+      for (const item of sec.items) {
+        const tag = item.tag ? `<span class="stag ${item.tag.cls}">${item.tag.label}</span>` : '';
+        html += `<li><span class="snum">${item.num || '—'}</span><span>${item.text}</span>${tag}</li>`;
+      }
+      html += `</ul>`;
+    } else if (sec.type === 'mw') {
+      html += `<div class="detail-mw">`;
+      for (const mw of sec.items) {
+        html += `<div class="detail-mw-item">
+          <span class="mw-num">${mw.num}</span>
+          <span class="mw-name">${mw.name}</span>
+          <span class="mw-desc" style="flex:2;color:var(--muted)">${mw.desc}</span>
+          <span class="${mw.cls}">${mw.action}</span>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+  }
+
+  content.innerHTML = html;
+}
+
+function closePanel() {
+  document.getElementById('detail-panel').classList.add('hidden');
+  document.querySelectorAll('.node-group.active').forEach(n => n.classList.remove('active'));
+}
+
+// ─────────────────────────────────────
+// Animation toggle
+// ─────────────────────────────────────
+let animPaused = false;
+function toggleAnim() {
+  animPaused = !animPaused;
+  const btn = document.getElementById('btn-anim');
+  const svg = document.getElementById('diagram');
+  if (animPaused) {
+    svg.pauseAnimations();
+    btn.textContent = '▶ 恢复流动';
+    btn.classList.remove('active');
+  } else {
+    svg.unpauseAnimations();
+    btn.textContent = '⏸ 暂停流动';
+    btn.classList.add('active');
+  }
+}
+
+// ─────────────────────────────────────
+// Simulate: walk through nodes in sequence
+// ─────────────────────────────────────
+const SIM_SEQUENCE = [
+  { id: 'github',  detail: 'github',  label: 'GitHub 检测到仓库事件，主动推送通知' },
+  { id: 'fastapi', detail: 'fastapi', label: '验证消息来源真实，识别事件类型' },
+  { id: 'ingest',  detail: 'ingest',  label: '去重 → 路由 → 状态机 → Check Run → 构造 TaskSpec v3' },
+  { id: 'redis-a', detail: 'redis',   label: 'TaskSpec v3 写入 Redis Stream' },
+  { id: 'decide',  detail: 'worker',  label: 'Worker 消费任务，恢复事件、路由和配置' },
+  { id: 'redis-b', detail: 'sandbox', label: 'Sandbox Gate 按策略 provision、跳过或降级' },
+  { id: 'worker',  detail: 'context', label: 'execute_handler 组装 PreflightContext 并调用 handler' },
+  { id: 'exec',    detail: 'exec',    label: '进入对应工作流，更新 Check Run' },
+  { id: 'review',  detail: 'review',  label: 'AI 审查代码，过滤意见，提交 PR Review' },
+];
+
+let simTimer = null;
+let simIdx = 0;
+function runSimulate() {
+  const btn = document.getElementById('btn-sim');
+  if (simTimer) {
+    clearInterval(simTimer);
+    simTimer = null;
+    btn.textContent = '▶ 模拟一次请求';
+    btn.classList.remove('running');
+    document.querySelectorAll('.node-group.simulating').forEach(n => n.classList.remove('simulating'));
+    simIdx = 0;
+    return;
+  }
+  btn.textContent = '⏹ 停止模拟';
+  btn.classList.add('running');
+  simIdx = 0;
+
+  function step() {
+    document.querySelectorAll('.node-group.simulating').forEach(n => n.classList.remove('simulating'));
+    if (simIdx >= SIM_SEQUENCE.length) {
+      clearInterval(simTimer);
+      simTimer = null;
+      btn.textContent = '▶ 模拟一次请求';
+      btn.classList.remove('running');
+      simIdx = 0;
+      return;
+    }
+    const s = SIM_SEQUENCE[simIdx];
+    const ng = document.getElementById('ng-' + s.id);
+    if (ng) ng.classList.add('simulating');
+    showDetail(s.detail);
+    simIdx++;
+  }
+  step();
+  simTimer = setInterval(step, 1800);
+}
+</script>
+</body>
+</html>

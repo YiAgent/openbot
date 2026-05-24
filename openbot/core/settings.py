@@ -114,6 +114,39 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ─── Sandbox snapshot cache (PRD §3 / sandbox-snapshot-cache-plan.md) ───
+    # Phase 1 default: OFF. Enable per-feature with
+    #   OPENBOT_SANDBOX_CACHE_ENABLED=true
+    #   OPENBOT_SANDBOX_CACHE_FEATURES=chat,fix
+    sandbox_cache_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable the sandbox snapshot cache (DaytonaSnapshotCache). "
+            "Requires OPENBOT_DAYTONA_API_KEY to be set. Default OFF "
+            "(Phase 1 rollout — enable per-feature via "
+            "OPENBOT_SANDBOX_CACHE_FEATURES)."
+        ),
+    )
+    sandbox_cache_features: str = Field(
+        default="",
+        description=(
+            "Comma-separated list of features that use the snapshot cache "
+            "when sandbox_cache_enabled=True. "
+            "Example: 'chat,fix'. Empty string = no features enabled. "
+            "Parsed into a set by build_sandbox_cache in openbot.application.sandbox_cache_deps."
+        ),
+    )
+    sandbox_cache_max_entries: int = Field(
+        default=50,
+        ge=1,
+        description="Maximum number of cached snapshots per installation (LRU eviction).",
+    )
+    sandbox_cache_ttl_seconds: int = Field(
+        default=86_400,
+        ge=60,
+        description="Snapshot age limit in seconds. Entries older than this are treated as miss.",
+    )
+
     # ─── Worker queue (PRD §5.1 / harness spec §9.3) ───
     # Single-process worker with N asyncio consumers. v0.1 defaults to
     # 4 — fine for individual maintainer scale (<10 events/day). At
@@ -161,12 +194,13 @@ class Settings(BaseSettings):
 
     # ─── LLM ───
     # LiteLLM / Anthropic base URL. When set, routes Anthropic model calls
-    # to this endpoint (e.g. GLM proxy). Reads from env var
-    # CLAUDE_SWITCH_GLM_BASE_URL (bypasses the OPENBOT_ prefix via alias).
+    # to this endpoint (e.g. BigModel GLM proxy). Reads from the standard
+    # ANTHROPIC_BASE_URL env var — the same variable langchain_anthropic picks
+    # up natively, so a single env var drives both LiteLLM and langchain paths.
     anthropic_api_base: str | None = Field(
         default=None,
-        alias="CLAUDE_SWITCH_GLM_BASE_URL",
-        description="Base URL for Anthropic-compatible models (e.g. GLM proxy).",
+        alias="ANTHROPIC_BASE_URL",
+        description="Base URL for Anthropic-compatible models (e.g. BigModel GLM proxy).",
     )
 
     # ─── Sentry ───
@@ -210,10 +244,9 @@ class Settings(BaseSettings):
     def _validate_proxy_url(cls, v: str | None) -> str | None:
         """Reject non-HTTPS and private-network URLs to prevent SSRF.
 
-        CLAUDE_SWITCH_GLM_BASE_URL is passed directly to litellm as
-        ``api_base``. Without validation, any value (file://, internal IPs,
-        cloud metadata endpoints) would cause litellm to POST all LLM
-        messages to that host.
+        ANTHROPIC_BASE_URL is passed directly to litellm as ``api_base``.
+        Without validation, any value (file://, internal IPs, cloud metadata
+        endpoints) would cause litellm to POST all LLM messages to that host.
         """
         if v is None:
             return v

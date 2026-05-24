@@ -30,11 +30,10 @@ would force a circular-import dance via the payload module.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
-from openbot.application.dispatcher import execute_handler, run_dispatch
+from openbot.application.dispatcher import execute_handler
 from openbot.application.router import dispatch_for, upgrade_dispatch
 
 # TODO(phase-2c): route through CancellationPort once worker composition root lands.
@@ -44,11 +43,9 @@ from openbot.application.state.cancellation import (
 from openbot.application.state.cancellation import (
     register as cancellation_register,
 )
-from openbot.application.state.cancellation import (
-    signal as cancellation_signal,
-)
 from openbot.application.state.runs_repo import store_reviewed_sha
 from openbot.core.metrics import queue_depth
+from openbot.dispatcher.classifier import classify_for_dispatch, parse_classifier_output
 from openbot.infrastructure.config_loader import load_for_repo
 from openbot.infrastructure.persistence.db import session_scope
 from openbot.infrastructure.queue.payload import (
@@ -56,8 +53,6 @@ from openbot.infrastructure.queue.payload import (
     GROUP_NAME,
     MAX_STREAM_LEN,
     STREAM_NAME,
-    QueuePayload,
-    deserialize_payload,
 )
 from openbot.infrastructure.queue.task_spec import TaskSpec, deserialize_task_spec
 
@@ -95,41 +90,6 @@ def _retry_key(entry_id: str) -> str:
     return f"openbot:workflows:retries:{entry_id}"
 
 
-def _is_v3_spec(blob: str | bytes | None) -> bool:
-    """Peek at the stream entry's JSON to see if it is a TaskSpec v3.
-
-    Returns True only when ``spec_version == 3`` is found, without
-    attempting a full deserialisation. Keeps the v2 path fast for the
-    existing majority of entries during the rolling migration.
-    """
-    if blob is None:
-        return False
-    try:
-        text = blob.decode("utf-8") if isinstance(blob, (bytes, bytearray)) else blob
-        data = json.loads(text)
-        return isinstance(data, dict) and data.get("spec_version") == 3
-    except Exception:
-        return False
-
-
-def _attach_sentry_tags(payload: QueuePayload) -> None:
-    """Push delivery context to the Sentry scope for the current dispatch.
-
-    Tags appear in the Sentry UI as filterable dimensions, allowing ops to
-    jump from a Sentry issue directly to the originating GitHub delivery_id.
-    Wrapped in try/except so a missing sentry_sdk dep (slim CI image) never
-    crashes the consumer loop.
-    """
-    try:
-        import sentry_sdk
-
-        sentry_sdk.set_tag("delivery_id", payload.delivery_id)
-        sentry_sdk.set_tag("feature", payload.feature)
-        sentry_sdk.set_tag("repo", payload.repo)
-    except Exception:
-        pass  # Sentry tagging is best-effort; never crash the dispatch loop
-
-
 async def _execute_task_spec(
     spec: TaskSpec,
     *,
@@ -137,6 +97,7 @@ async def _execute_task_spec(
     redis: redis_async.Redis,
     adapter: GitHubAdapter,
     session_factory: async_sessionmaker[AsyncSession] | None,
+    agent_checkpointer: Any | None = None,
 ) -> None:
     """W1-W8: Process one TaskSpec v3 entry.
 
@@ -185,6 +146,50 @@ async def _execute_task_spec(
     # W4: Load effective config (adapter needed for GitHub API calls in config loader).
     config = await load_for_repo(adapter, event)
 
+    # W4.5: Resolve typed classifier output for the handler's policy gate.
+    #
+    # Two paths:
+    #   a) spec.classifier_output is not None — the webhook already ran the
+    #      classifier and stored the result as a dict on the TaskSpec. Rehydrate
+    #      it into the typed union (TriageClassifierOutput | ReviewClassifierOutput
+    #      | …) that ``derive_sandbox_policy`` expects.
+    #   b) spec.classifier_output is None (``classifier_skipped`` is True) — the
+    #      webhook deliberately deferred classification to avoid blocking the 202
+    #      response within GitHub's 10 s deadline.  Run ``classify_for_dispatch``
+    #      here; the worker has no deadline.
+    #
+    # Both paths are fail-open: any exception yields ``None``, which
+    # ``derive_sandbox_policy`` treats as "respect the static SandboxPolicy".
+    from dataclasses import asdict
+
+    classifier_output = None
+    if spec.classifier_output is not None:
+        # Path (a): rehydrate the pre-computed dict.
+        try:
+            classifier_output = parse_classifier_output(
+                new_dispatch.feature, spec.classifier_output
+            )
+        except Exception:
+            _logger.warning(
+                "queue_v3_classifier_output_rehydrate_failed",
+                extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
+                exc_info=True,
+            )
+    else:
+        # Path (b): run the classifier now that we're off the webhook fast path.
+        try:
+            raw = await classify_for_dispatch(
+                event=event, feature=new_dispatch.feature, redis=redis
+            )
+            if raw is not None:
+                classifier_output = parse_classifier_output(new_dispatch.feature, asdict(raw))
+        except Exception:
+            _logger.warning(
+                "queue_v3_classifier_dispatch_failed",
+                extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
+                exc_info=True,
+            )
+
     # W5-W8: Attempt counter + cancellation lifecycle.
     attempts = await _bump_attempt_counter(redis, entry_id)
     active_run_id = new_dispatch.run_id or new_dispatch.task_id
@@ -200,6 +205,8 @@ async def _execute_task_spec(
                 session_factory=session_factory,
                 redis=redis,
                 check_run_id=spec.check_run_id,
+                classifier_output=classifier_output,
+                agent_checkpointer=agent_checkpointer,
             )
         except Exception:
             _logger.exception(
@@ -268,6 +275,7 @@ async def consume_loop(
     consumer_name: str,
     shutdown: asyncio.Event | None = None,
     read_block_ms: int = _READ_BLOCK_MS,
+    agent_checkpointer: Any | None = None,
 ) -> None:
     """One async consumer. Run N copies concurrently for parallelism.
 
@@ -293,6 +301,7 @@ async def consume_loop(
                 adapter=adapter,
                 session_factory=session_factory,
                 consumer_name=consumer_name,
+                agent_checkpointer=agent_checkpointer,
             )
             await _read_and_dispatch(
                 redis=redis,
@@ -300,6 +309,7 @@ async def consume_loop(
                 session_factory=session_factory,
                 consumer_name=consumer_name,
                 read_block_ms=read_block_ms,
+                agent_checkpointer=agent_checkpointer,
             )
         except asyncio.CancelledError:
             raise
@@ -329,6 +339,7 @@ async def _read_and_dispatch(
     session_factory: async_sessionmaker[AsyncSession] | None,
     consumer_name: str,
     read_block_ms: int = _READ_BLOCK_MS,
+    agent_checkpointer: Any | None = None,
 ) -> None:
     """One XREADGROUP round."""
     response = await redis.xreadgroup(
@@ -356,6 +367,7 @@ async def _read_and_dispatch(
                 session_factory=session_factory,
                 entry_id=_as_str(entry_id),
                 fields=fields,
+                agent_checkpointer=agent_checkpointer,
             )
 
 
@@ -365,6 +377,7 @@ async def _reclaim_abandoned(
     adapter: GitHubAdapter,
     session_factory: async_sessionmaker[AsyncSession] | None,
     consumer_name: str,
+    agent_checkpointer: Any | None = None,
 ) -> None:
     """XAUTOCLAIM idle entries from dead consumers."""
     try:
@@ -395,6 +408,7 @@ async def _reclaim_abandoned(
             session_factory=session_factory,
             entry_id=_as_str(entry_id),
             fields=fields,
+            agent_checkpointer=agent_checkpointer,
         )
 
 
@@ -405,151 +419,26 @@ async def _process_entry(
     session_factory: async_sessionmaker[AsyncSession] | None,
     entry_id: str,
     fields: dict,
+    agent_checkpointer: Any | None = None,
 ) -> None:
-    """Deserialize → dispatch → ack/dlq one entry."""
+    """Deserialize TaskSpec v3 → dispatch → ack/dlq one entry."""
     blob = _extract_payload_blob(fields)
     if blob is None:
         await _ack_and_dlq(redis, entry_id, reason="payload_unreadable")
         return
 
-    # Route TaskSpec v3 entries through the new path; fall through to the
-    # legacy QueuePayload path for v1/v2 entries still in the queue.
-    if _is_v3_spec(blob):
-        spec = deserialize_task_spec(blob)
-        if spec is None:
-            await _ack_and_dlq(redis, entry_id, reason="task_spec_v3_unreadable")
-            return
-        await _execute_task_spec(
-            spec,
-            entry_id=entry_id,
-            redis=redis,
-            adapter=adapter,
-            session_factory=session_factory,
-        )
+    spec = deserialize_task_spec(blob)
+    if spec is None:
+        await _ack_and_dlq(redis, entry_id, reason="task_spec_unreadable")
         return
 
-    payload = deserialize_payload(blob)
-    if payload is None:
-        await _ack_and_dlq(redis, entry_id, reason="payload_unreadable")
-        return
-
-    # Re-derive Dispatch from the persisted payload. Router is pure so
-    # we don't need a network call to reconstruct.
-    event = payload.to_event()
-    new_dispatch = dispatch_for(event)
-    if new_dispatch is None:
-        # Router decided the event is no longer relevant. Could happen
-        # if the payload was enqueued by an older version of the router
-        # whose dispatch table has since narrowed. Drop quietly.
-        _logger.info(
-            "queue_entry_no_longer_routable",
-            extra={"entry_id": entry_id, "delivery_id": payload.delivery_id},
-        )
-        await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
-        return
-
-    # State-machine slice (v2 payload): carry the receive-side's
-    # classification through to the handler. v1 payloads have
-    # ``intent`` / ``run_id`` / ``resource_key`` defaulted by the
-    # deserializer, so this branch is safe to take unconditionally.
-    if payload.resource_key is not None and payload.intent is not None:
-        new_dispatch = upgrade_dispatch(
-            new_dispatch,
-            intent=payload.intent,
-            run_id=payload.run_id or payload.task_id,
-            prev_run_id=payload.prev_run_id,
-            event_seq=payload.event_seq,
-            resource_key=payload.resource_key,
-        )
-
-    # Cross-dyno cancellation: if this entry's intent supersedes or
-    # cancels a prior run, signal that run before we touch the handler.
-    # The receive side already signalled — this is the belt-and-suspenders
-    # path that catches the case where the queue lagged enough for the
-    # prev_run_id flag to expire between receive and dequeue (very
-    # unlikely with the 1-hour flag TTL, but cheap to do).
-    if payload.prev_run_id and payload.intent in {"supersede", "cancel"}:
-        try:
-            await cancellation_signal(redis, payload.prev_run_id)
-        except Exception:
-            _logger.exception(
-                "queue_cancellation_signal_failed",
-                extra={
-                    "entry_id": entry_id,
-                    "prev_run_id": payload.prev_run_id,
-                    "intent": payload.intent,
-                },
-            )
-
-    # A CANCEL intent only stops the prior run — there's no new run
-    # to invoke. XACK and move on; the audit row was written on the
-    # receive side via the state-machine row write.
-    if payload.intent == "cancel":
-        await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
-        _logger.info(
-            "queue_entry_cancel_only",
-            extra={
-                "entry_id": entry_id,
-                "delivery_id": payload.delivery_id,
-                "prev_run_id": payload.prev_run_id,
-            },
-        )
-        return
-
-    attempts = await _bump_attempt_counter(redis, entry_id)
-    # Register the current task under the new run_id so a future
-    # SUPERSEDE/CANCEL arriving on this same dyno can ``.cancel()``
-    # us. ``deregister`` in finally guarantees no stale entry survives
-    # the handler exit (success OR exception).
-    active_run_id = new_dispatch.run_id or new_dispatch.task_id
-    cancellation_register(active_run_id)
-
-    # Attach delivery context to Sentry for this dispatch so any
-    # uncaught exception carries the delivery_id / repo / feature tags.
-    # push_scope() is async-safe: the tags are scoped to this coroutine's
-    # Sentry hub and don't bleed into concurrent dispatches.
-    _attach_sentry_tags(payload)
-
-    try:
-        try:
-            await run_dispatch(
-                adapter=adapter,
-                event=event,
-                dispatch=new_dispatch,
-                session_factory=session_factory,
-                redis=redis,
-                check_run_id=payload.check_run_id,
-            )
-        except Exception:
-            # `run_dispatch` already swallows its own errors; this is a
-            # belt-and-suspenders catch for any crash that escapes (e.g.
-            # OOM during a future code path). The entry is recoverable
-            # via PEL on next XAUTOCLAIM.
-            _logger.exception(
-                "queue_run_dispatch_escaped",
-                extra={"entry_id": entry_id, "delivery_id": payload.delivery_id},
-            )
-            # Don't XACK — let the next reclaim cycle pick it up.
-            if attempts >= _MAX_ATTEMPTS:
-                await _ack_and_dlq(redis, entry_id, reason="max_attempts", payload=payload)
-            return
-    finally:
-        # Always free the registry slot, even on exception or early return.
-        # Leaving a stale entry would let a future SUPERSEDE cancel a task
-        # that has already exited — usually harmless, but the spurious
-        # ``CancelledError`` would noise up logs.
-        cancellation_deregister(active_run_id)
-
-    await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
-    _logger.info(
-        "queue_entry_dispatched",
-        extra={
-            "entry_id": entry_id,
-            "delivery_id": payload.delivery_id,
-            "repo": payload.repo,
-            "feature": payload.feature,
-            "attempts": attempts,
-        },
+    await _execute_task_spec(
+        spec,
+        entry_id=entry_id,
+        redis=redis,
+        adapter=adapter,
+        session_factory=session_factory,
+        agent_checkpointer=agent_checkpointer,
     )
 
 
@@ -572,15 +461,11 @@ async def _ack_and_dlq(
     entry_id: str,
     *,
     reason: str,
-    payload: QueuePayload | None = None,
 ) -> None:
     """Move an entry to the DLQ stream and XACK so it stops circulating."""
     fields = {
         "reason": reason,
         "src_entry_id": entry_id,
-        # If we have the payload, re-attach the JSON so the DLQ entry
-        # is self-contained (ops doesn't have to grep the main stream).
-        **({"json": payload.to_json()} if payload is not None else {}),
     }
     try:
         await redis.xadd(DEAD_STREAM, fields, maxlen=MAX_STREAM_LEN, approximate=True)

@@ -24,6 +24,7 @@ from inspect_ai import Task, task
 from inspect_ai.scorer import Score, Target, mean, scorer, stderr
 from inspect_ai.solver import Solver, TaskState
 
+from evals.common.config import get_eval_config
 from evals.common.datasets import langsmith_dataset
 from evals.inspect.langsmith import LangSmithExperiment, configure_tracing_for_dataset
 from evals.scorers.review_judge import (
@@ -35,8 +36,6 @@ from evals.scorers.review_judge import (
 )
 from evals.scorers.review_overlap import Finding, JudgeVerdict, compute_review_overlap
 from evals.solvers.review import deepagents_baseline_review_solver
-
-_DATASET_VERSION = "martian_2026w20"
 
 JudgeFn = Callable[[Finding, Finding], JudgeVerdict]
 
@@ -91,10 +90,13 @@ def _build_task(
     judge_prompt_version: int | None,
 ) -> Task:
     """Shared task constructor — only solver / judge differ per ``@task``."""
+    catalog = get_eval_config().catalog
+    dataset_version = catalog.review.dataset_version
+
     # PRD §13.2: route this run's traces to the public / internal LangSmith
     # project based on the dataset manifest. Also a no-op when the LangSmith
     # API key is absent.
-    configure_tracing_for_dataset(_DATASET_VERSION)
+    configure_tracing_for_dataset(dataset_version)
 
     # solver_family is the LangSmith Experiment grouping key. Use the same
     # deepagents_baseline vocabulary across all v0.1 task agents so the
@@ -106,27 +108,27 @@ def _build_task(
     # ``state.sample_id`` back to the LangSmith Example via ``inputs.id``
     # (see evals/scripts/build_review_martian_dataset.py).
     experiment = LangSmithExperiment.start(
-        dataset_name=_DATASET_VERSION,
+        dataset_name=dataset_version,
         solver_family=solver_family,
         instance_id_field="id",
     )
 
     return Task(
-        dataset=langsmith_dataset(_DATASET_VERSION),
+        dataset=langsmith_dataset(dataset_version),
         solver=solver,
         scorer=experiment.wrap(
             _build_overlap_scorer(judge),
             metrics=[mean(), stderr()],
             scorer_name="review_overlap_f1",
             feedback_key="review_overlap_f1",
-            feedback_config={"type": "continuous", "min": 0.0, "max": 1.0},
+            feedback_config=catalog.unit_feedback_config,
         ),
         # No task-level sandbox: review is closed-form over the diff in
         # ``state.input_text``. Patch/test tasks use Docker at the solver
         # layer (see evals/sandboxes/docker_backend.py); review doesn't need
         # repo access because the diff IS the input.
         metadata={
-            "dataset_version": _DATASET_VERSION,
+            "dataset_version": dataset_version,
             "solver_id": solver_id,
             "solver_family": solver_family,
             "judge_label": judge_label,

@@ -1,4 +1,4 @@
-"""Integration: GitHub Check Run lifecycle (webhook → worker)."""
+"""Integration: GitHub Check Run lifecycle (webhook -> worker)."""
 
 from __future__ import annotations
 
@@ -6,11 +6,13 @@ import json
 from collections.abc import Iterator
 from unittest.mock import AsyncMock
 
+import fakeredis.aioredis
 import pytest
 from fastapi.testclient import TestClient
 
 from openbot.core.settings import get_settings
 from openbot.entrypoints.api.app import app
+from openbot.infrastructure.queue.enqueue import RedisStreamQueue
 
 
 @pytest.fixture
@@ -21,6 +23,10 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setenv("OPENBOT_GITHUB_APP_PRIVATE_KEY_PEM", "-----BEGIN RSA PRIVATE KEY-----")
     get_settings.cache_clear()
     with TestClient(app) as c:
+        # Inject a fakeredis instance so ingest_webhook can enqueue.
+        fake_redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+        c.app.state.redis = fake_redis
+        c.app.state.queue = RedisStreamQueue(fake_redis)
         yield c
     get_settings.cache_clear()
 
@@ -68,11 +74,11 @@ def test_webhook_creates_check_run_for_pr_event(
 
 
 @pytest.mark.asyncio
-async def test_run_dispatch_updates_check_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    from openbot.application.dispatcher import run_dispatch
+async def test_execute_handler_updates_check_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openbot.application.dispatcher import execute_handler
     from openbot.application.router import Dispatch
     from openbot.domain.events import EventKind, UnifiedEvent
-    from openbot.infrastructure.llm.model_router import Feature
+    from openbot.domain.workflows import Feature
 
     adapter = AsyncMock()
     event = UnifiedEvent(
@@ -90,28 +96,18 @@ async def test_run_dispatch_updates_check_run(monkeypatch: pytest.MonkeyPatch) -
 
     dispatch = Dispatch(feature=Feature.REVIEW, task_id="t1", handler=fake_handler)
 
-    # Mock config loading
-    monkeypatch.setattr(
-        "openbot.application.dispatcher.load_for_repo", AsyncMock(return_value=AsyncMock())
-    )
-    # Mock preflight
-    from openbot.application.middleware import MiddlewareDecision
-
-    monkeypatch.setattr(
-        "openbot.application.dispatcher.run_preflight",
-        AsyncMock(return_value=MiddlewareDecision.proceed()),
-    )
-
-    await run_dispatch(
+    await execute_handler(
         adapter=adapter,
         event=event,
         dispatch=dispatch,
+        config=AsyncMock(),
         session_factory=None,
         redis=None,
         check_run_id=888,
     )
 
-    # Verify update_check_run was called with success
+    # Verify update_check_run was called with success.
+    # Message matches execute_handler's actual summary format.
     adapter.update_check_run.assert_called_with(
         event,
         888,
@@ -119,17 +115,19 @@ async def test_run_dispatch_updates_check_run(monkeypatch: pytest.MonkeyPatch) -
         conclusion="success",
         output={
             "title": "Analysis Complete",
-            "summary": "Workflow `review` finished successfully.",
+            "summary": "Workflow `review` finished.",
         },
     )
 
 
 @pytest.mark.asyncio
-async def test_run_dispatch_updates_check_run_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    from openbot.application.dispatcher import run_dispatch
+async def test_execute_handler_updates_check_run_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openbot.application.dispatcher import execute_handler
     from openbot.application.router import Dispatch
     from openbot.domain.events import EventKind, UnifiedEvent
-    from openbot.infrastructure.llm.model_router import Feature
+    from openbot.domain.workflows import Feature
 
     adapter = AsyncMock()
     event = UnifiedEvent(
@@ -147,28 +145,18 @@ async def test_run_dispatch_updates_check_run_on_failure(monkeypatch: pytest.Mon
 
     dispatch = Dispatch(feature=Feature.REVIEW, task_id="t1", handler=crashing_handler)
 
-    # Mock config loading
-    monkeypatch.setattr(
-        "openbot.application.dispatcher.load_for_repo", AsyncMock(return_value=AsyncMock())
-    )
-    # Mock preflight
-    from openbot.application.middleware import MiddlewareDecision
-
-    monkeypatch.setattr(
-        "openbot.application.dispatcher.run_preflight",
-        AsyncMock(return_value=MiddlewareDecision.proceed()),
-    )
-
-    await run_dispatch(
+    await execute_handler(
         adapter=adapter,
         event=event,
         dispatch=dispatch,
+        config=AsyncMock(),
         session_factory=None,
         redis=None,
         check_run_id=777,
     )
 
-    # Verify update_check_run was called with failure
+    # Verify update_check_run was called with failure.
+    # Message matches execute_handler's actual summary format.
     adapter.update_check_run.assert_called_with(
         event,
         777,
@@ -176,6 +164,6 @@ async def test_run_dispatch_updates_check_run_on_failure(monkeypatch: pytest.Mon
         conclusion="failure",
         output={
             "title": "Handler Crash",
-            "summary": "The `review` handler raised an unhandled exception.",
+            "summary": "Handler `review` raised unexpectedly.",
         },
     )

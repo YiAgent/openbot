@@ -1,6 +1,6 @@
 [project]
 name = "openbot"
-version = "0.0.1"
+version = "0.1.0"
 description = "Open-source, self-hosted, BYO-API-key GitHub maintenance bot for individual OSS maintainers."
 readme = "README.md"
 license = "Apache-2.0"
@@ -32,10 +32,12 @@ dependencies = [
     "redis>=5",
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.30",
+    "langgraph-checkpoint-postgres>=2.0",
     "alembic>=1.13",
     # LLM — multi-vendor LiteLLM (PRD §13 #10)
     "litellm>=1.50",
     "langsmith>=0.8.4",
+    "langfuse>=3.0.0",
     # Eval runner (PRD §8.3) — inspect-ai harness + reference task suites
     "inspect-ai>=0.3.220",
     "inspect-evals[swe_bench]>=0.12.0",
@@ -171,12 +173,20 @@ quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
 
+# ─────── pyright ───────
+[tool.pyright]
+pythonVersion = "3.12"
+pythonPlatform = "Linux"
+extraPaths = ["."]
+
 # ─────── pytest ───────
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
 addopts = ["-q", "--strict-markers", "--strict-config"]
 filterwarnings = [
     "error",                          # warnings are bugs in tests
     "ignore::DeprecationWarning:httpx.*",
+    "ignore::DeprecationWarning:daytona.*",  # Daytona SDK has deprecated server_url field
 ]

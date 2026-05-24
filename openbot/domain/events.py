@@ -77,6 +77,24 @@ class UnifiedEvent:
     # sentinel (no ``updated_at`` available); the classifier treats 0 as
     # "never older than the high-water mark" so we never spuriously drop.
     event_seq: int = 0
+    # Promoted clone / ref hints used by the unified sandbox checkout
+    # resolver (PRD §3 / plan ``2026-05-21-unified-sandbox-entry``).
+    # ──
+    # ``clone_url`` — HTTPS clone URL from ``repository.clone_url``. Adapters
+    # populate this when the webhook carries repository metadata; the
+    # resolver falls back to building the URL from ``repo`` if missing.
+    clone_url: str | None = None
+    # ``review_commit_id`` — exact commit SHA an inline PR review comment
+    # was left on (``comment.commit_id`` on ``pull_request_review_comment``
+    # events). The review workflow checks out *this* SHA, not the PR HEAD,
+    # so line-anchored comments resolve against the file the reviewer saw.
+    review_commit_id: str | None = None
+    # ``last_reviewed_sha`` — the SHA most recently reviewed by OpenBot on
+    # this PR, hydrated from the dispatch state DB. Used by incremental
+    # review to diff only the *new* commits since the last pass. ``None``
+    # means "no prior review on record" → full diff. The webhook itself
+    # never carries this; the dispatcher injects it before workflow run.
+    last_reviewed_sha: str | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @property

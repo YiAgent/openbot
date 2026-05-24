@@ -1,50 +1,42 @@
-"""DeepAgent-backed fix responder — slice C.
+# openbot/infrastructure/agents/deepagents_fix.py
+"""Fix profile and compatibility wrapper — migrated to BaseDeepAgentRuntime.
 
-What it owns:
+The public class ``DeepAgentsFixResponder`` keeps its original signature
+so use cases need no changes. Internally it delegates to BaseDeepAgentRuntime.
 
-  - Build a per-event DeepAgent with tools that close over a live
-    sandbox handle (see C.6 — ``make_fix_tools``).
-  - Pass the issue body to the model and read back the structured
-    answer via ``response_format=FixOutcomeSchema``.
-  - Convert the pydantic object to a domain ``FixOutcome`` and return
-    it. Nothing else.
-
-What it does NOT own:
-
-  - GitHub PR creation, branch creation, push (use case).
-  - Sandbox lifecycle (the use case creates and closes the sandbox).
-  - Issue fetching (the use case fetches via the channel adapter).
-  - Comment templating for failures (the use case owns the templates).
-
-This separation matches ``deepagents_review.py``: the responder is a
-pure ``UnifiedEvent + side-effecting tools → FixOutcome`` function.
+FixProfile owns: system_prompt, user_message, tools, response_schema, parser.
+The runtime owns: model construction, middleware, checkpoint wiring, telemetry.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from deepagents import create_deep_agent
+from langchain_core.tools import BaseTool
 
 from openbot.application.ports.sandbox import SandboxPort
-from openbot.domain.events import UnifiedEvent
 from openbot.domain.fix import FixOutcome
+from openbot.domain.workflows import Feature
 from openbot.infrastructure.agents._fix_schema import (
     FixOutcomeSchema,
     parse_structured_response,
 )
-from openbot.infrastructure.agents._fix_tools import make_fix_tools
-from openbot.infrastructure.llm.model_router import Feature, primary_model_for
+from openbot.infrastructure.agents.profiles import (
+    AgentRequest,
+    AgentRunLimits,
+    AgentSandboxRequiredError,
+    AgentStructuredOutputError,
+    SandboxRequirement,
+)
+from openbot.infrastructure.agents.runtime import BaseDeepAgentRuntime
 
 if TYPE_CHECKING:
-    from openbot.application.ports.channel_adapter import ChannelAdapterPort
+    from langgraph.checkpoint.base import BaseCheckpointSaver
 
-# Same value used by the review responder. LangGraph counts every node
-# visit; a fix loop with 20 tool calls visits ~50 nodes (20 ToolCall +
-# 20 ToolMessage + alternating LLM nodes), so the budget is the real cap.
-# 25 here is a defensive ceiling against unbounded reasoning loops the
-# tool-side budget can't see.
-_RECURSION_LIMIT = 25
+    from openbot.application.ports.channel_adapter import ChannelAdapterPort
+    from openbot.domain.events import UnifiedEvent
 
 _SYSTEM_PROMPT = """You are OpenBot, a senior engineer. You will fix the bug \
 described in the GitHub issue below by editing files in the sandbox and \
@@ -82,72 +74,80 @@ dialogue, or markdown prose outside the schema.
 to ~2000 chars; the use case will truncate further if needed for GitHub).
 """
 
-
-def _normalize_model_name(model: str) -> str:
-    """Map ``provider/name`` (LiteLLM) → ``provider:name`` (langchain_litellm).
-
-    Same helper as ``deepagents_review.py``. Duplicated rather than
-    shared because the rule is small and keeping responders independent
-    helps when one needs to evolve faster than the other.
-    """
-    if ":" in model:
-        return model
-    if "/" in model:
-        provider, name = model.split("/", 1)
-        return f"{provider}:{name}"
-    return model
+# recursion_limit=60: fix loops with 20 tool calls visit ~50 LangGraph nodes
+# (ToolCall + ToolMessage + alternating LLM nodes). 60 gives headroom.
+# tool_call_limit=20: matches retired ToolBudget value; enforced by middleware.
+_FIX_LIMITS = AgentRunLimits(
+    recursion_limit=60,
+    tool_call_limit=20,
+    model_call_limit=20,
+    wall_seconds=1800,  # 30-minute hard ceiling for fix loops
+    model_timeout_s=300,
+    max_retries=2,
+    max_output_tokens=16_384,
+)
 
 
-def _user_prompt(
-    event: UnifiedEvent,
-    *,
-    issue_title: str,
-    issue_body: str,
-    base_sha: str,
-) -> str:
-    """Format the user-turn prompt for the fix agent.
+@dataclass
+class FixProfile:
+    """Profile for the issue-fix agent."""
 
-    Issue title and body are passed as plain text — the agent reads them
-    to form a hypothesis. ``base_sha`` is included so the agent has a
-    stable reference point for ``git_diff`` and so tool calls that
-    reference commits can ground themselves.
-    """
-    body = issue_body.strip() or "(no description provided)"
-    return (
-        "GitHub context:\n"
-        f"- repository: {event.repo}\n"
-        f"- issue: #{event.issue_number}\n"
-        f"- actor: {event.actor}\n"
-        f"- base commit: {base_sha}\n\n"
-        f"Issue title: {issue_title}\n\n"
-        "Issue body:\n"
-        f"{body}\n\n"
-        "Fix the bug. Run the project's tests until they pass. Return one "
-        "structured object matching the schema."
-    )
+    feature: Feature = field(default=Feature.FIX, init=False)
+    agent_name: str = field(default="fix", init=False)
+    response_schema: type[Any] | None = field(default=FixOutcomeSchema, init=False)
+    limits: AgentRunLimits = field(default_factory=lambda: _FIX_LIMITS, init=False)
+    sandbox_requirement: SandboxRequirement = field(default=SandboxRequirement.REQUIRED, init=False)
+    checkpoint_enabled: bool = field(default=True, init=False)
+    extra_middleware: Sequence[Any] = field(default_factory=list, init=False)
 
+    def system_prompt(self, request: AgentRequest) -> str:
+        return _SYSTEM_PROMPT
 
-def _extract_outcome(result: dict[str, Any]) -> FixOutcome:
-    """Read DeepAgents' structured-output channel and coerce to the domain type.
+    def user_message(self, request: AgentRequest) -> str:
+        event = request.event
+        body = str(request.input.get("issue_body", "")).strip() or "(no description provided)"
+        return (
+            "GitHub context:\n"
+            f"- repository: {event.repo}\n"
+            f"- issue: #{event.issue_number}\n"
+            f"- actor: {event.actor}\n"
+            f"- base commit: {request.input.get('base_sha', '')}\n\n"
+            f"Issue title: {request.input.get('issue_title', '')}\n\n"
+            "Issue body:\n"
+            f"{body}\n\n"
+            "Fix the bug. Run the project's tests until they pass. Return one "
+            "structured object matching the schema."
+        )
 
-    Mirrors ``_extract_findings`` in ``deepagents_review.py``: structured
-    response is the contract; missing it is a programmer error, not a
-    user error, so we raise rather than returning a default.
-    """
-    structured = result.get("structured_response")
-    if structured is None:
-        raise ValueError("deepagents_fix_result_missing_structured_response")
-    return parse_structured_response(structured)
+    def build_tools(self, request: AgentRequest) -> Sequence[BaseTool]:
+        # sandbox_requirement=REQUIRED so the runtime already raised
+        # AgentSandboxRequiredError if sandbox is None. Cast is safe here.
+        sandbox = request.sandbox
+        if sandbox is None:  # pragma: no cover — runtime guard fires first
+            raise AgentSandboxRequiredError(
+                "FixProfile.build_tools requires a SandboxPort in request.sandbox"
+            )
+        from openbot.infrastructure.agents._fix_tools import make_fix_tools
+
+        return make_fix_tools(sandbox=sandbox, event=request.event)
+
+    def parse_result(self, result: Mapping[str, Any]) -> FixOutcome:
+        structured = result.get("structured_response")
+        if structured is None:
+            raise AgentStructuredOutputError("deepagents_fix_result_missing_structured_response")
+        return parse_structured_response(structured)
 
 
 class DeepAgentsFixResponder:
-    """Stateless fix responder — a fresh agent is built per call.
+    """Compatibility wrapper — delegates to BaseDeepAgentRuntime.
 
-    Tools close over ``(sandbox, event)`` so the agent must be rebuilt
-    per call. Caching by model alone would let a previous tenant's
-    sandbox handle leak into the next event — a multi-tenant correctness
-    bug, not a perf issue.
+    Tools close over ``(sandbox, event)`` so the agent is rebuilt per call inside
+    the runtime. Caching by model alone would let a previous tenant's sandbox
+    handle leak into the next event — a multi-tenant correctness bug.
     """
+
+    def __init__(self, runtime: BaseDeepAgentRuntime | None = None) -> None:
+        self._runtime = runtime or BaseDeepAgentRuntime()
 
     async def fix_for_event(
         self,
@@ -156,6 +156,8 @@ class DeepAgentsFixResponder:
         adapter: ChannelAdapterPort,
         sandbox: SandboxPort,
         issue: dict[str, Any],
+        run_id: str | None = None,
+        checkpointer: BaseCheckpointSaver | None = None,
     ) -> FixOutcome:
         """Run the fix loop and return a domain outcome.
 
@@ -169,33 +171,23 @@ class DeepAgentsFixResponder:
         ``title``, ``body``, and ``base_sha`` only; extra keys are
         ignored so the dict can grow without breaking this signature.
         """
-        del adapter  # unused — see docstring
         if event.issue_number is None:
             raise ValueError("deepagents_fix_requires_issue_number")
-        tools = make_fix_tools(sandbox=sandbox, event=event)
-        agent = create_deep_agent(
-            model=_normalize_model_name(primary_model_for(Feature.FIX)),
-            tools=tools,
-            system_prompt=_SYSTEM_PROMPT,
-            response_format=FixOutcomeSchema,
+        return await self._runtime.run(
+            FixProfile(),
+            AgentRequest(
+                event=event,
+                adapter=adapter,
+                sandbox=sandbox,
+                run_id=run_id,
+                checkpointer=checkpointer,
+                input={
+                    "issue_title": str(issue.get("title", "")),
+                    "issue_body": str(issue.get("body", "")),
+                    "base_sha": str(issue.get("base_sha", "")),
+                },
+            ),
         )
-        result = await agent.ainvoke(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": _user_prompt(
-                            event,
-                            issue_title=str(issue.get("title", "")),
-                            issue_body=str(issue.get("body", "")),
-                            base_sha=str(issue.get("base_sha", "")),
-                        ),
-                    }
-                ]
-            },
-            config={"recursion_limit": _RECURSION_LIMIT},
-        )
-        return _extract_outcome(result)
 
 
-__all__ = ["DeepAgentsFixResponder"]
+__all__ = ["DeepAgentsFixResponder", "FixProfile"]
