@@ -14,10 +14,10 @@ from openbot.infrastructure.llm import Feature, fallback_model, primary_model_fo
 @pytest.mark.parametrize(
     ("feature", "expected"),
     [
-        (Feature.TRIAGE, "anthropic/GLM-5.1"),
-        (Feature.CHAT, "anthropic/GLM-5.1"),
-        (Feature.REVIEW, "anthropic/GLM-5.1"),
-        (Feature.FIX, "anthropic/GLM-5.1"),
+        (Feature.TRIAGE, "anthropic/glm-5.1"),
+        (Feature.CHAT, "anthropic/glm-5.1"),
+        (Feature.REVIEW, "anthropic/glm-5.1"),
+        (Feature.FIX, "anthropic/glm-5.1"),
     ],
 )
 def test_primary_routes_lock_prd_13_2(feature: Feature, expected: str) -> None:
