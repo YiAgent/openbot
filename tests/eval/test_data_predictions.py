@@ -34,3 +34,23 @@ def test_predictions_api(name: str) -> None:
 @pytest.mark.parametrize("name", SAMPLE_NAMES)
 def test_samples_api(name: str) -> None:
     assert hasattr(_samples, name)
+
+
+# ---------------------------------------------------------------------------
+# Task 2: _utils API
+# ---------------------------------------------------------------------------
+
+
+def test_utils_exports() -> None:
+    from evals.data import _utils
+
+    for name in (
+        "git_sha",
+        "resolve_model_label",
+        "ensure_feedback_config",
+        "reset_feedback_cache_for_tests",
+    ):
+        assert hasattr(_utils, name), f"_utils missing {name!r}"
+    # Confirm eliminated names are NOT present
+    for name in ("LangSmithExperiment", "configure_tracing_for_dataset", "build_export_experiment"):
+        assert not hasattr(_utils, name), f"_utils must NOT contain {name!r}"
