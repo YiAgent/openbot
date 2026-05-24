@@ -210,6 +210,19 @@ async def _execute_task_spec(
                 agent_checkpointer=agent_checkpointer,
                 sandbox_factory=sandbox_factory,
             )
+        except asyncio.CancelledError:
+            # SUPERSEDE / explicit cancel / shutdown. ``execute_handler``
+            # already finalized the GitHub check run as ``cancelled`` and
+            # re-raised so this branch can XACK — letting the entry sit in
+            # the PEL would have reclaim re-run a deliberately-cancelled
+            # task ~60 s later. Cancellation is not a failure, so the DLQ
+            # is intentionally left alone.
+            _logger.info(
+                "queue_v3_entry_cancelled",
+                extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
+            )
+            await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
+            return
         except Exception:
             _logger.exception(
                 "queue_v3_execute_handler_escaped",
