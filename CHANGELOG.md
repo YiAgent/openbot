@@ -34,6 +34,53 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 - `tests/architecture/test_egress_boundary.py` enforces that use cases never
   import the raw `GitHubAdapter`; egress is decorator-bound at composition root.
+## [0.1.1] - 2026-05-24
+
+### Added
+
+- `openbot.evaluation` facade: `EvalChannelAdapter` (read-only GitHub port for eval harness),
+  `run_review_sample`, `run_fix_sample`, `run_chat_sample` — single entry points that wire
+  the full production workflow without side effects (no real PRs/comments created)
+- `build_sandbox_factory` composition-root helper in `openbot.application.sandbox_factory_deps`;
+  wired through the worker `consume_loop` → `execute_handler` path
+- `evals/runtime/` package: merges former `evals/common/` + `evals/inspect/` into one canonical
+  location; exposes `config`, `datasets`, `environment`, `hf_datasets`, `langsmith`,
+  `prediction_export`, `predictions`
+- Thin eval solvers: `evals.solvers.fix`, `evals.solvers.chat`, `evals.solvers.test_generation`
+  delegate directly to `openbot.evaluation` — no DeepAgents runtime dependency
+
+### Changed
+
+- Evals sandbox lifecycle decoupled from eval config: `SandboxSettings` and all
+  `OPENBOT_SANDBOX_BACKEND` / `OPENBOT_DAYTONA_*` / `OPENBOT_MODAL_*` env-var constants
+  removed from `evals/runtime/config.py` (sandbox is an OpenBot product concern, not eval-owned)
+- `solver_family_baseline` renamed from `"deepagents_baseline"` → `"openbot_agent"` across
+  all tasks, LangSmith experiment entries, and test fixtures
+- Review solver severity mapping extended: domain `"critical"` now maps to eval `"high"`
+  (previously only `"nit"` → `"low"` was handled; silent pass-through could corrupt scorer rows)
+- `fix.py` solver hoists `Settings()` + `build_sandbox_factory()` to solver scope (once per task
+  instead of once per sample — avoids hundreds of redundant `.env` reads on large SWE-bench runs)
+
+### Removed
+
+- `evals/agents/` (7 files): `BaseDeepAgentRuntime`, `AgentProfile`, `deepagents_*` driver code
+  — all solver logic now lives in `openbot.evaluation`
+- `evals/sandboxes/` (6 files): Daytona / Docker / Modal backend implementations and factory —
+  sandbox lifecycle now owned by `openbot.application.sandbox_factory_deps`
+- 9 obsolete test files (`test_agents_layer`, `test_convergence_middleware`,
+  `test_deepagents_budgets`, `test_deepagents_resilience`, `test_docker_backend`,
+  `test_sandbox_factory`, `test_structured_finalizer`, `test_termination`, `test_review_solver`)
+
+### Fixed
+
+- Classifier: strip markdown code fences from LLM JSON response before parsing
+  (GLM-5.1 wraps JSON in ```json``` blocks; caused silent triage failures)
+- Classifier: use model router + GLM proxy `api_base` (hardcoded model was bypassing routing)
+- Agent recursion limits: review 25 → 100, chat 10 → 30 to prevent `GraphRecursionError` on
+  complex PRs and multi-turn conversations
+- `ToolCallLimitMiddleware.exit_behavior` reverted to `'continue'` after `'end'` truncated
+  agent responses mid-thought
+
 ## [0.1.0] - 2026-05-23
 
 ### Added
