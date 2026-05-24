@@ -6,6 +6,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 ## [Unreleased]
 
+### Added
+
+- Chat freeform replies now call three read-only tools — `read_file`,
+  `grep_repo`, `list_files` — instead of an empty tool list.
+- Path allowlist on chat tools: rejects absolute paths, `..` segments, and
+  secret-shaped globs (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `*.cert`).
+- 8 KB output cap per tool with explicit `[truncated 8KB cap]` marker so the
+  model does not misread partial output as the full file.
+- System prompt now refuses state-changing requests ("open a PR", "merge")
+  and points the user to issue assignment instead.
+
 ### Fixed
 
 - Re-point broken closure-spec and evals-runtime-redesign links in

@@ -438,6 +438,7 @@ async def webhook_harness(
         user_request: str,
         run_id: str | None = None,
         checkpointer: Any = None,
+        adapter: Any = None,
     ) -> str:
         return f"DeepAgents test reply: {user_request}"
 
