@@ -123,3 +123,26 @@ def test_review_build_task_has_no_langsmith_imports(monkeypatch: pytest.MonkeyPa
     task = r.build_task(solver=MagicMock(), scorer=_noop_scorer())
     for v in (task.metadata or {}).values():
         assert not hasattr(v, "create_run"), "LangSmith object leaked into Task metadata"
+
+
+# ---------------------------------------------------------------------------
+# Task 6: ChatDataset
+# ---------------------------------------------------------------------------
+
+
+def test_chat_attrs() -> None:
+    from evals.data.chat import ChatDataset
+
+    assert ChatDataset.suite == "chat"
+    assert ChatDataset.dataset_version == "chat_swe_qa_pro_v1"
+
+
+def test_chat_build_task_raises_without_scorer(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+
+    from evals.data.chat import ChatDataset
+
+    c = ChatDataset()
+    monkeypatch.setattr(c, "load_for_inspect", MagicMock(return_value=MagicMock()))
+    with pytest.raises(ValueError, match="scorer"):
+        c.build_task(solver=MagicMock())
