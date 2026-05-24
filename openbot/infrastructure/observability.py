@@ -246,21 +246,27 @@ def get_langfuse_handler() -> object | None:
     A new instance is created per call so concurrent agent runs get
     independent traces — sharing one handler across requests mixes spans.
 
-    Trace name and session grouping are controlled via LangChain's
-    ``RunnableConfig.metadata`` dict, not via this function.  Callers
-    should add the following keys to the config metadata before calling
-    ``agent.ainvoke()``:
+    A **fresh random UUID** is passed as ``trace_context={"trace_id": ...}``
+    so all LangGraph sub-operations (LLM calls, tool calls, chain steps)
+    become nested observations under the same root trace rather than
+    floating as separate root traces with ``Session: None``.  Without this,
+    the LangChain ``CallbackHandler`` creates a new Langfuse trace for every
+    root ``RunnableLambda`` / ``ChatAnthropic`` call in the graph, scattering
+    GENERATION and TOOL spans across dozens of disconnected traces.
+
+    A UUID is generated fresh on every call (never seeded from a fixed
+    input) to guarantee that repeated eval runs of the same sample each
+    produce their own distinct, non-overlapping trace in Langfuse.
+
+    Trace name and session grouping travel via LangChain's
+    ``RunnableConfig.metadata`` dict (set in the calling runtime), not
+    via this function.  Callers should include:
 
     - ``"langfuse_trace_name"`` — human-readable label shown in the
       Langfuse UI (e.g. ``"review-openbot_review_responder"``).
     - ``"langfuse_session_id"`` — groups related traces under one session.
       Use the agent ``run_id`` so all invocations for the same logical
-      job (including evals that re-run the same sample) appear together
-      without merging their individual spans.
-
-    Each call returns a handler with a **fresh** trace ID, ensuring that
-    separate eval runs for the same sample produce separate, non-overlapping
-    traces in Langfuse.
+      job appear together without merging their spans.
 
     Returns ``None`` when:
       - ``langfuse`` is not installed, or
@@ -272,6 +278,7 @@ def get_langfuse_handler() -> object | None:
         config["callbacks"] = callbacks
     """
     import os
+    import uuid
 
     try:
         from langfuse.langchain import CallbackHandler
@@ -281,11 +288,15 @@ def get_langfuse_handler() -> object | None:
     if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
         return None
 
-    # No trace_context: let Langfuse assign a fresh UUID per invocation.
-    # trace_name and session_id reach the handler via LangChain metadata keys
-    # "langfuse_trace_name" / "langfuse_session_id" (see CallbackHandler source,
-    # lines ~351-364: it reads those keys from the LangChain run metadata dict).
-    return CallbackHandler()
+    # Fresh UUID per call: LangGraph sub-operations (LLM, tools) are nested
+    # under this trace_id rather than floating as separate root traces.
+    # Using a random UUID (never seeded) guarantees no cross-run merging.
+    # trace_name and session_id still come from RunnableConfig metadata keys.
+    #
+    # Langfuse SDK parses trace_id via int(trace_id, 16), so the hex string
+    # must be dash-free (uuid.hex gives "8d6b5df03cc3..." vs str() gives
+    # "8d6b5df0-3cc3-..." which raises ValueError in the SDK).
+    return CallbackHandler(trace_context={"trace_id": uuid.uuid4().hex})
 
 
 def create_langfuse_root_span(
