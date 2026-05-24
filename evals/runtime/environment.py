@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from evals.runtime.config import get_eval_config
 from evals.runtime.langsmith import LangSmithExperiment
-from evals.runtime.prediction_export import prediction_exporter
+from evals.runtime.predictions import prediction_exporter
 
 
 @dataclass(frozen=True)

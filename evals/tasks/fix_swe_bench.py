@@ -4,7 +4,7 @@ Architecture:
 
 - Solver runs the OpenBot fix workflow in a Daytona sandbox cloned at
   ``base_commit`` (see :mod:`evals.solvers.fix`).
-- The "scorer" is :func:`evals.runtime.prediction_export.prediction_exporter`,
+- The "scorer" is :func:`evals.runtime.predictions.prediction_exporter`,
   which validates the agent's :class:`SweBenchPrediction` against the
   official schema and appends it to
   ``evals/outputs/fix_swe_bench/<run-label>.predictions.jsonl``.
