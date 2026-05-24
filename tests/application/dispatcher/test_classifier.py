@@ -209,3 +209,67 @@ async def test_classify_fix_returns_none() -> None:
     """FIX feature has no D10 classifier in v0.1."""
     result = await classify_event(feature=Feature.FIX, body="fix it", redis=None)
     assert result is None
+
+
+# ── _strip_markdown_fences ────────────────────────────────────────────────────
+
+
+def test_strip_markdown_fences_plain_json() -> None:
+    """Plain JSON (no fences) is returned unchanged."""
+    from openbot.dispatcher.classifier import _strip_markdown_fences
+
+    raw = '{"type": "bug"}'
+    assert _strip_markdown_fences(raw) == raw
+
+
+def test_strip_markdown_fences_json_fence() -> None:
+    """```json ... ``` fences are stripped."""
+    from openbot.dispatcher.classifier import _strip_markdown_fences
+
+    raw = '```json\n{"type": "bug"}\n```'
+    assert _strip_markdown_fences(raw) == '{"type": "bug"}'
+
+
+def test_strip_markdown_fences_plain_fence() -> None:
+    """``` ... ``` (no language tag) fences are stripped."""
+    from openbot.dispatcher.classifier import _strip_markdown_fences
+
+    raw = '```\n{"type": "bug"}\n```'
+    assert _strip_markdown_fences(raw) == '{"type": "bug"}'
+
+
+def test_strip_markdown_fences_multiline() -> None:
+    """Multi-line JSON inside fences is fully extracted."""
+    from openbot.dispatcher.classifier import _strip_markdown_fences
+
+    raw = '```json\n{\n  "change_size_class": "xs",\n  "is_breaking": false\n}\n```'
+    result = _strip_markdown_fences(raw)
+    assert result.startswith("{")
+    assert '"change_size_class"' in result
+    assert "```" not in result
+
+
+@pytest.mark.asyncio
+async def test_classify_review_strips_markdown_fences(monkeypatch) -> None:
+    """Classifier parses GLM-style ```json ... ``` wrapped review response."""
+    import json as _json
+
+    from openbot.dispatcher.classifier import ReviewClassifierOutput, classify_event
+    from openbot.domain.workflows import Feature
+
+    payload = {
+        "change_size_class": "xs",
+        "touches_security_paths": False,
+        "is_breaking": False,
+        "suggested_subagents": ["correctness"],
+    }
+    response = MagicMock()
+    # Simulate GLM-5.1 wrapping JSON in markdown fences
+    response.choices[0].message.content = f"```json\n{_json.dumps(payload)}\n```"
+
+    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=response):
+        result = await classify_event(feature=Feature.REVIEW, body="small docs change", redis=None)
+
+    assert isinstance(result, ReviewClassifierOutput)
+    assert result.change_size_class == "xs"
+    assert result.is_breaking is False

@@ -99,6 +99,25 @@ _CHAT_INTENTS: Final[frozenset[str]] = frozenset(
 )
 
 
+def _strip_markdown_fences(text: str) -> str:
+    """Remove ` ```json … ``` ` and ` ``` … ``` ` wrappers from LLM output.
+
+    Some models (e.g. GLM-5.1) wrap their JSON response in Markdown code
+    fences even when explicitly instructed not to. Stripping them makes the
+    classifier robust across LLM providers without changing the prompt.
+    """
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        # Drop the opening fence (```json, ```JSON, ``` …)
+        first_newline = stripped.find("\n")
+        if first_newline != -1:
+            stripped = stripped[first_newline + 1 :]
+        # Drop the closing fence if present
+        if stripped.endswith("```"):
+            stripped = stripped[: stripped.rfind("```")]
+    return stripped.strip()
+
+
 def _build_prompt(feature: Feature, body: str) -> str:
     body = body[:_BODY_MAX_CHARS]
     if feature is Feature.TRIAGE:
@@ -225,7 +244,11 @@ async def classify_event(
             **extra_kwargs,
         )
         content: str = response.choices[0].message.content or ""
-        data: dict[str, Any] = json.loads(content.strip())
+        # Some models (e.g. GLM-5.1) wrap JSON in markdown fences despite
+        # being told "no markdown". Strip ```json ... ``` and ``` ... ```
+        # before parsing so the classifier is robust across LLM providers.
+        content = _strip_markdown_fences(content)
+        data: dict[str, Any] = json.loads(content)
         result = parse_classifier_output(feature, data)
         if redis is not None:
             await _set_cached(redis, key, data)
