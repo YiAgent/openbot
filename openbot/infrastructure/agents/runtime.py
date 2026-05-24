@@ -206,7 +206,29 @@ class BaseDeepAgentRuntime:
         # Inject a fresh Langfuse callback so every agent run gets its own
         # trace with all steps + tool calls visible. No-op when
         # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
-        lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
+        # Pass run_id to generate a deterministic trace_id so all operations
+        # within the same agent run belong to the same Langfuse trace.
+        trace_metadata = {
+            "feature": profile.feature.value,
+            "agent_profile": profile.agent_name,
+            "run_id": request.run_id,
+            "task_id": request.event.delivery_id,
+            "repo": request.event.repo,
+            "actor": request.event.actor,
+            "model": display_name(model),
+            **dict(request.metadata),
+        }
+        lf_callbacks = [
+            h
+            for h in [
+                get_langfuse_handler(
+                    run_id=request.run_id,
+                    trace_name=f"{profile.feature.value}-{profile.agent_name}",
+                    metadata=trace_metadata,
+                )
+            ]
+            if h is not None
+        ]
         if lf_callbacks:
             config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
 
