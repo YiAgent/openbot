@@ -439,6 +439,8 @@ async def webhook_harness(
         run_id: str | None = None,
         checkpointer: Any = None,
         adapter: Any = None,
+        per_task_cap_usd: Any = None,
+        session_factory: Any = None,
     ) -> str:
         return f"DeepAgents test reply: {user_request}"
 
@@ -455,6 +457,8 @@ async def webhook_harness(
         adapter: Any,
         run_id: Any = None,
         checkpointer: Any = None,
+        per_task_cap_usd: Any = None,
+        session_factory: Any = None,
     ) -> _ReviewFindings:
         # E2E doesn't exercise the real reviewer — only the audit + PR Review
         # API plumbing. PRD §8.3: prompt-quality assertions live in evals/.
@@ -496,6 +500,8 @@ async def webhook_harness(
         issue: dict[str, Any],
         run_id: str | None = None,
         checkpointer: Any = None,
+        per_task_cap_usd: Any = None,
+        session_factory: Any = None,
     ) -> _FixOutcome:
         # Default: tests passed. Demos that need the tests-failed branch
         # flip ``harness.fix_outcome_tests_passed = False`` before dispatch.

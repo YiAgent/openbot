@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from openbot.domain.events import EventKind, UnifiedEvent
+
+# Default budget sentinel for tests that don't exercise the budget path.
+_CAP = Decimal("5.00")
 
 
 def _event_simple() -> UnifiedEvent:
@@ -59,7 +63,9 @@ async def test_deepagents_chat_responder_builds_agent_with_chat_model(
     from openbot.infrastructure.agents.deepagents_chat import DeepAgentsChatResponder
 
     responder = DeepAgentsChatResponder()
-    reply = await responder.reply_for_event(_event(), user_request="summarize this")
+    reply = await responder.reply_for_event(
+        _event(), user_request="summarize this", per_task_cap_usd=_CAP, session_factory=None
+    )
 
     assert reply == "Final answer from DeepAgents"
     # Runtime uses normalize_for_langchain("anthropic/GLM-5.1") → "anthropic:GLM-5.1"
@@ -95,7 +101,9 @@ async def test_deepagents_chat_responder_extracts_text_from_block_content(
     from openbot.infrastructure.agents.deepagents_chat import DeepAgentsChatResponder
 
     responder = DeepAgentsChatResponder()
-    reply = await responder.reply_for_event(_event(), user_request="summarize this")
+    reply = await responder.reply_for_event(
+        _event(), user_request="summarize this", per_task_cap_usd=_CAP, session_factory=None
+    )
 
     assert reply == "First. Second."
 
@@ -132,6 +140,8 @@ async def test_chat_responder_passes_checkpointer_and_thread_id(
         user_request="hello",
         run_id="run-chat-1",
         checkpointer=saver,
+        per_task_cap_usd=_CAP,
+        session_factory=None,
     )
 
     # ChatProfile.checkpoint_enabled is False → runtime ignores checkpointer
@@ -167,7 +177,9 @@ async def test_chat_responder_no_checkpointer_no_thread_id(
     monkeypatch.setattr(runtime_mod, "create_deep_agent", fake_create)
 
     responder = DeepAgentsChatResponder()
-    await responder.reply_for_event(_event(), user_request="hi")
+    await responder.reply_for_event(
+        _event(), user_request="hi", per_task_cap_usd=_CAP, session_factory=None
+    )
 
     assert captured["checkpointer"] is None
     # Bug fix: config must never be None — recursion_limit is always set
@@ -197,8 +209,12 @@ async def test_chat_responder_rebuilds_agent_per_call(
     monkeypatch.setattr(runtime_mod, "create_deep_agent", fake_create)
 
     responder = DeepAgentsChatResponder()
-    await responder.reply_for_event(_event(), user_request="a")
-    await responder.reply_for_event(_event(), user_request="b")
+    await responder.reply_for_event(
+        _event(), user_request="a", per_task_cap_usd=_CAP, session_factory=None
+    )
+    await responder.reply_for_event(
+        _event(), user_request="b", per_task_cap_usd=_CAP, session_factory=None
+    )
 
     assert len(builds) == 2, "Agent must be rebuilt per call — no caching"
 
@@ -219,7 +235,9 @@ async def test_chat_profile_sets_recursion_limit(monkeypatch: pytest.MonkeyPatch
 
     from openbot.infrastructure.agents.deepagents_chat import DeepAgentsChatResponder
 
-    await DeepAgentsChatResponder().reply_for_event(_event_simple(), user_request="Hello!")
+    await DeepAgentsChatResponder().reply_for_event(
+        _event_simple(), user_request="Hello!", per_task_cap_usd=_CAP, session_factory=None
+    )
 
     assert captured.get("config") is not None, "config must not be None"
     assert "recursion_limit" in captured["config"], "recursion_limit must be set in config"
@@ -239,7 +257,9 @@ async def test_chat_responder_delegates_to_runtime(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(BaseDeepAgentRuntime, "run", fake_run)
 
-    result = await DeepAgentsChatResponder().reply_for_event(_event_simple(), user_request="Hello!")
+    result = await DeepAgentsChatResponder().reply_for_event(
+        _event_simple(), user_request="Hello!", per_task_cap_usd=_CAP, session_factory=None
+    )
 
     assert len(run_calls) == 1
     assert isinstance(run_calls[0][0], ChatProfile)
