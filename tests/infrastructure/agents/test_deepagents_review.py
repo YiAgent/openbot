@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -10,6 +11,9 @@ from openbot.infrastructure.agents._review_schema import (
     FindingSchema,
     ReviewFindingsSchema,
 )
+
+# Default budget sentinel for tests that don't exercise the budget path.
+_CAP = Decimal("5.00")
 
 
 def _event(*, repo: str = "YiAgent/openbot", pr_number: int | None = 42) -> UnifiedEvent:
@@ -64,7 +68,12 @@ async def test_review_responder_builds_agent_with_review_model(monkeypatch) -> N
     import openbot.infrastructure.agents.deepagents_review as mod
 
     adapter = _StubAdapter("diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b\n")
-    result = await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)  # type: ignore[arg-type]
+    result = await mod.DeepAgentsReviewResponder().review_for_event(
+        _event(),
+        adapter=adapter,
+        per_task_cap_usd=_CAP,
+        session_factory=None,  # type: ignore[arg-type]
+    )
 
     assert isinstance(result, ReviewFindings)
     assert result.summary == "Reviewed: no blocking findings."
@@ -108,6 +117,8 @@ async def test_review_responder_returns_findings_from_structured_response(monkey
     result = await mod.DeepAgentsReviewResponder().review_for_event(
         _event(),
         adapter=_StubAdapter("d"),  # type: ignore[arg-type]
+        per_task_cap_usd=_CAP,
+        session_factory=None,
     )
 
     assert result == ReviewFindings(
@@ -136,7 +147,12 @@ async def test_review_responder_handles_empty_diff(monkeypatch) -> None:
     import openbot.infrastructure.agents.deepagents_review as mod
 
     adapter = _StubAdapter("")  # closed / deleted PR
-    result = await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)  # type: ignore[arg-type]
+    result = await mod.DeepAgentsReviewResponder().review_for_event(
+        _event(),
+        adapter=adapter,
+        per_task_cap_usd=_CAP,
+        session_factory=None,  # type: ignore[arg-type]
+    )
 
     assert result.summary == "No diff available."
     prompt = seen["payload"]["messages"][0]["content"]
@@ -161,7 +177,12 @@ async def test_review_responder_truncates_huge_diffs(monkeypatch) -> None:
 
     huge = "x" * 2_000_000  # 2MB
     adapter = _StubAdapter(huge)
-    await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=adapter)  # type: ignore[arg-type]
+    await mod.DeepAgentsReviewResponder().review_for_event(
+        _event(),
+        adapter=adapter,
+        per_task_cap_usd=_CAP,
+        session_factory=None,  # type: ignore[arg-type]
+    )
 
     prompt = seen["payload"]["messages"][0]["content"]
     assert len(prompt) < 300_000  # well under any sane LLM context
@@ -191,6 +212,8 @@ async def test_review_responder_raises_on_missing_structured_response(monkeypatc
         await mod.DeepAgentsReviewResponder().review_for_event(
             _event(),
             adapter=_StubAdapter("d"),  # type: ignore[arg-type]
+            per_task_cap_usd=_CAP,
+            session_factory=None,
         )
 
 
@@ -201,6 +224,8 @@ async def test_review_responder_requires_pr_number(monkeypatch) -> None:
         await mod.DeepAgentsReviewResponder().review_for_event(
             _event(pr_number=None),
             adapter=_StubAdapter("d"),  # type: ignore[arg-type]
+            per_task_cap_usd=_CAP,
+            session_factory=None,
         )
 
 
@@ -225,8 +250,18 @@ async def test_review_responder_rebuilds_agent_per_event(monkeypatch) -> None:
     import openbot.infrastructure.agents.deepagents_review as mod
 
     responder = mod.DeepAgentsReviewResponder()
-    await responder.review_for_event(_event(), adapter=_StubAdapter("a"))  # type: ignore[arg-type]
-    await responder.review_for_event(_event(), adapter=_StubAdapter("b"))  # type: ignore[arg-type]
+    await responder.review_for_event(
+        _event(),
+        adapter=_StubAdapter("a"),
+        per_task_cap_usd=_CAP,
+        session_factory=None,  # type: ignore[arg-type]
+    )
+    await responder.review_for_event(
+        _event(),
+        adapter=_StubAdapter("b"),
+        per_task_cap_usd=_CAP,
+        session_factory=None,  # type: ignore[arg-type]
+    )
 
     # Two distinct builds — tools cannot leak between events.
     assert len(builds) == 2
@@ -250,7 +285,12 @@ async def test_review_responder_passes_recursion_limit(monkeypatch) -> None:
 
     import openbot.infrastructure.agents.deepagents_review as mod
 
-    await mod.DeepAgentsReviewResponder().review_for_event(_event(), adapter=_StubAdapter("d"))  # type: ignore[arg-type]
+    await mod.DeepAgentsReviewResponder().review_for_event(
+        _event(),
+        adapter=_StubAdapter("d"),
+        per_task_cap_usd=_CAP,
+        session_factory=None,  # type: ignore[arg-type]
+    )
 
     # Freeze the explicit limit so a future bump is intentional.
     assert seen["config"]["recursion_limit"] == 25
@@ -293,6 +333,8 @@ async def test_review_responder_passes_checkpointer_and_thread_id(
         adapter=_StubAdapter("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new"),  # type: ignore[arg-type]
         run_id="run-review-1",
         checkpointer=saver,
+        per_task_cap_usd=_CAP,
+        session_factory=None,
     )
 
     assert captured["checkpointer"] is saver
@@ -331,6 +373,8 @@ async def test_review_responder_no_checkpointer_no_thread_id(
     await responder.review_for_event(
         _event(),
         adapter=_StubAdapter("d"),  # type: ignore[arg-type]
+        per_task_cap_usd=_CAP,
+        session_factory=None,
         # run_id and checkpointer intentionally omitted
     )
 
@@ -367,7 +411,12 @@ async def test_review_responder_delegates_to_runtime(monkeypatch: pytest.MonkeyP
         pr_number=1,
         installation_id=1,
     )
-    result = await DeepAgentsReviewResponder().review_for_event(event, adapter=_StubAdapter())  # type: ignore[arg-type]
+    result = await DeepAgentsReviewResponder().review_for_event(
+        event,
+        adapter=_StubAdapter(),
+        per_task_cap_usd=_CAP,
+        session_factory=None,  # type: ignore[arg-type]
+    )
 
     assert len(run_calls) == 1
     assert isinstance(run_calls[0][0], ReviewProfile)

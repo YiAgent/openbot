@@ -57,6 +57,8 @@ def _patch_findings(monkeypatch: pytest.MonkeyPatch, findings: ReviewFindings | 
         adapter: Any,
         run_id: str | None = None,
         checkpointer: Any = None,
+        per_task_cap_usd: Any = None,
+        session_factory: Any = None,
     ) -> ReviewFindings:
         if isinstance(findings, Exception):
             raise findings
@@ -324,6 +326,8 @@ async def test_review_use_case_passes_run_id_and_checkpointer_to_responder(
         adapter: Any,
         run_id: str | None = None,
         checkpointer: Any = None,
+        per_task_cap_usd: Any = None,
+        session_factory: Any = None,
     ) -> ReviewFindings:
         captured["run_id"] = run_id
         captured["checkpointer"] = checkpointer

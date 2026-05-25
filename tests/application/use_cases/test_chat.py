@@ -71,6 +71,8 @@ async def test_freeform_chat_uses_deepagents_reply(monkeypatch) -> None:
         run_id: str | None = None,
         checkpointer: Any = None,
         adapter: Any = None,
+        per_task_cap_usd: Any = None,
+        session_factory: Any = None,
     ) -> str:
         assert user_request == "summarize this thread"
         return "DeepAgents says hello."
@@ -98,6 +100,8 @@ async def test_freeform_chat_falls_back_to_error_reply_when_agent_fails(
         run_id: str | None = None,
         checkpointer: Any = None,
         adapter: Any = None,
+        per_task_cap_usd: Any = None,
+        session_factory: Any = None,
     ) -> str:
         raise RuntimeError("missing llm credentials")
 
@@ -129,6 +133,8 @@ async def test_chat_passes_checkpointer_and_run_id_to_responder(
         run_id: str | None = None,
         checkpointer: Any = None,
         adapter: Any = None,
+        per_task_cap_usd: Any = None,
+        session_factory: Any = None,
     ) -> str:
         captured["run_id"] = run_id
         captured["checkpointer"] = checkpointer
@@ -169,6 +175,8 @@ async def test_chat_cancellation_checkpoint_fires_after_llm(
         run_id: str | None = None,
         checkpointer: Any = None,
         adapter: Any = None,
+        per_task_cap_usd: Any = None,
+        session_factory: Any = None,
     ) -> str:
         calls.append("llm")
         return "answer"

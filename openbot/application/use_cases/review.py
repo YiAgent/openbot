@@ -21,7 +21,8 @@ its own attempts.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Literal
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Literal
 
 from openbot.application.ports.channel_adapter import ChannelAdapterPort
 from openbot.application.use_cases._lifecycle import audit_lifecycle
@@ -58,10 +59,17 @@ async def _generate_review_findings(
     adapter: ChannelAdapterPort,
     run_id: str | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
+    per_task_cap_usd: Decimal,
+    session_factory: Any,
 ) -> ReviewFindings:
     """Module-level seam — E2E tests monkeypatch this to avoid LLM calls."""
     return await _RESPONDER.review_for_event(
-        event, adapter=adapter, run_id=run_id, checkpointer=checkpointer
+        event,
+        adapter=adapter,
+        run_id=run_id,
+        checkpointer=checkpointer,
+        per_task_cap_usd=per_task_cap_usd,
+        session_factory=session_factory,
     )
 
 
@@ -154,6 +162,8 @@ async def maybe_run_review(ctx: PreflightContext) -> None:
                 adapter=ctx.adapter,
                 run_id=run_id,
                 checkpointer=checkpointer,
+                per_task_cap_usd=ctx.config.budget.per_task_cap_usd,
+                session_factory=ctx.session_factory,
             )
         except Exception:
             _logger.exception(

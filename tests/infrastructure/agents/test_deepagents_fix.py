@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.fix import FixAttempt, FixOutcome
+
+# Default budget sentinel for tests that don't exercise the budget path.
+_CAP = Decimal("5.00")
 
 
 async def test_fix_responder_delegates_to_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -54,6 +58,8 @@ async def test_fix_responder_delegates_to_runtime(monkeypatch: pytest.MonkeyPatc
         adapter=_StubAdapter(),  # type: ignore[arg-type]
         sandbox=_StubSandbox(),  # type: ignore[arg-type]
         issue={"title": "Bug", "body": "It's broken", "base_sha": "abc123"},
+        per_task_cap_usd=_CAP,
+        session_factory=None,
     )
 
     assert len(run_calls) == 1
@@ -159,6 +165,8 @@ async def test_returns_fix_outcome_when_agent_succeeds(monkeypatch: pytest.Monke
             "body": "Last item is dropped when total % page_size == 0.",
             "base_sha": "abc1234",
         },
+        per_task_cap_usd=_CAP,
+        session_factory=None,
     )
 
     assert isinstance(outcome, FixOutcome)
@@ -208,6 +216,8 @@ async def test_includes_issue_context_in_prompt(monkeypatch: pytest.MonkeyPatch)
             "body": "Last item is dropped when total % page_size == 0.",
             "base_sha": "abc1234",
         },
+        per_task_cap_usd=_CAP,
+        session_factory=None,
     )
 
     user_msg = captured["payload"]["messages"][0]["content"]
@@ -244,6 +254,8 @@ async def test_returns_failure_outcome_when_tests_failed(monkeypatch: pytest.Mon
         adapter=_StubAdapter(),  # type: ignore[arg-type]
         sandbox=_StubSandbox(),  # type: ignore[arg-type]
         issue={"title": "t", "body": "b", "base_sha": "abc1234"},
+        per_task_cap_usd=_CAP,
+        session_factory=None,
     )
 
     # Tests-failed is a *legitimate* terminal outcome — the responder
@@ -280,6 +292,8 @@ async def test_raises_when_structured_response_missing(monkeypatch: pytest.Monke
             adapter=_StubAdapter(),  # type: ignore[arg-type]
             sandbox=_StubSandbox(),  # type: ignore[arg-type]
             issue={"title": "t", "body": "b", "base_sha": "abc1234"},
+            per_task_cap_usd=_CAP,
+            session_factory=None,
         )
 
 
@@ -315,6 +329,8 @@ async def test_raises_when_issue_number_missing(monkeypatch: pytest.MonkeyPatch)
             adapter=_StubAdapter(),  # type: ignore[arg-type]
             sandbox=_StubSandbox(),  # type: ignore[arg-type]
             issue={"title": "t", "body": "b", "base_sha": "abc1234"},
+            per_task_cap_usd=_CAP,
+            session_factory=None,
         )
 
 
@@ -360,6 +376,8 @@ async def test_fix_responder_passes_checkpointer_and_thread_id(
         issue={"title": "t", "body": "b", "base_sha": "abc1234"},
         run_id="run-abc",
         checkpointer=saver,
+        per_task_cap_usd=_CAP,
+        session_factory=None,
     )
 
     assert captured["checkpointer"] is saver
@@ -403,6 +421,8 @@ async def test_fix_responder_no_checkpointer_no_thread_id(
         adapter=_StubAdapter(),  # type: ignore[arg-type]
         sandbox=_StubSandbox(),  # type: ignore[arg-type]
         issue={"title": "t", "body": "b", "base_sha": "abc1234"},
+        per_task_cap_usd=_CAP,
+        session_factory=None,
         # no run_id, no checkpointer
     )
 
@@ -438,12 +458,16 @@ async def test_responder_rebuilds_agent_per_event(monkeypatch: pytest.MonkeyPatc
         adapter=_StubAdapter(),  # type: ignore[arg-type]
         sandbox=_StubSandbox(),  # type: ignore[arg-type]
         issue={"title": "t", "body": "b", "base_sha": "abc1234"},
+        per_task_cap_usd=_CAP,
+        session_factory=None,
     )
     await responder.fix_for_event(
         _event(),
         adapter=_StubAdapter(),  # type: ignore[arg-type]
         sandbox=_StubSandbox(),  # type: ignore[arg-type]
         issue={"title": "t", "body": "b", "base_sha": "abc1234"},
+        per_task_cap_usd=_CAP,
+        session_factory=None,
     )
 
     # Two distinct builds — tools cannot leak between events.

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool
@@ -149,6 +150,8 @@ class DeepAgentsChatResponder:
         run_id: str | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         adapter: Any | None = None,
+        per_task_cap_usd: Decimal,
+        session_factory: Any,
     ) -> str:
         return await self._runtime.run(
             ChatProfile(),
@@ -158,6 +161,10 @@ class DeepAgentsChatResponder:
                 checkpointer=checkpointer,
                 input={"user_request": user_request},
                 event_adapter=adapter,
+                metadata={
+                    "per_task_cap_usd": per_task_cap_usd,
+                    "session_factory": session_factory,
+                },
             ),
         )
 
