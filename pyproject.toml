@@ -123,6 +123,7 @@ dev = [
     "aiosqlite>=0.20",          # in-memory SQLite via SQLAlchemy for unit tests
     "import-linter>=2.0",       # hexagonal layer boundary enforcement
     "pytest-cov>=7.1.0",
+    "respx>=0.23",
 ]
 
 [build-system]
