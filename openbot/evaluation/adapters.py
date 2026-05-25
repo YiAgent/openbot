@@ -10,7 +10,13 @@ Design notes:
   - ``pr_diff`` is the raw diff text the review responder reads via
     ``get_pr_diff``; set it to the sample's diff before calling the runner.
   - ``files`` maps repo-relative paths → file contents, used by
-    ``read_file`` and ``grep_repo``.
+    ``read_file`` and ``grep_repo``.  Acts as a priority cache: explicit
+    entries in ``files`` always win over the ``file_reader`` fallback.
+  - ``file_reader`` is an optional ``GitHubFileReader`` injected by the
+    solver.  When set, ``read_file`` delegates cache misses to it and
+    ``grep_repo`` delegates entirely when ``files`` is empty.  This keeps
+    file-fetching inside OpenBot's GitHub infrastructure layer instead of
+    duplicating it in Inspect AI eval code.
   - ``issue`` is the dict shape returned by ``get_issue``; the fix
     responder reads ``title``, ``body``, and ``base_sha``.
 """
@@ -19,9 +25,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from openbot.domain.events import EventKind, UnifiedEvent
+
+if TYPE_CHECKING:
+    from openbot.evaluation.github_file_reader import GitHubFileReader
 
 
 class EvalSideEffectError(RuntimeError):
@@ -44,7 +53,12 @@ class EvalChannelAdapter:
     # The raw diff text for the PR being evaluated.
     pr_diff: str
     # Optional repo file map for read_file / grep_repo.
+    # Acts as a priority cache: entries here win over file_reader.
     files: dict[str, str] = field(default_factory=dict)
+    # Optional GitHub file reader injected by the solver.  When set, read_file
+    # falls back to it on cache misses and grep_repo delegates entirely when
+    # files is empty — keeping GitHub fetching inside OpenBot's infra layer.
+    file_reader: GitHubFileReader | None = field(default=None)
     # Optional issue dict for get_issue.
     issue: dict[str, Any] = field(
         default_factory=lambda: {
@@ -96,7 +110,12 @@ class EvalChannelAdapter:
         return self.pr_diff
 
     async def read_file(self, event: UnifiedEvent, path: str) -> str:
-        return self.files.get(path, "")
+        """Return file content, preferring the ``files`` cache then ``file_reader``."""
+        if path in self.files:
+            return self.files[path]
+        if self.file_reader is not None:
+            return await self.file_reader.read_file(path)
+        return ""
 
     async def grep_repo(
         self,
@@ -106,19 +125,33 @@ class EvalChannelAdapter:
         path_glob: str | None = None,
         max_matches: int = 20,
     ) -> list[str]:
-        """Return lines matching ``pattern`` across ``self.files``."""
-        results: list[str] = []
-        try:
-            rx = re.compile(pattern)
-        except re.error:
-            return []
-        for path, content in self.files.items():
-            for lineno, line in enumerate(content.splitlines(), start=1):
-                if rx.search(line):
-                    results.append(f"{path}:{lineno}:{line}")
-                    if len(results) >= max_matches:
-                        return results
-        return results
+        """Search for ``pattern``.
+
+        When ``files`` is populated (unit-test fixtures or explicit overrides)
+        the in-memory regex scan runs.  Otherwise delegates to ``file_reader``
+        which uses GitHub Code Search — keeping file-fetching inside OpenBot's
+        GitHub infrastructure layer.
+        """
+        if self.files:
+            results: list[str] = []
+            try:
+                rx = re.compile(pattern)
+            except re.error:
+                return []
+            for path, content in self.files.items():
+                for lineno, line in enumerate(content.splitlines(), start=1):
+                    if rx.search(line):
+                        results.append(f"{path}:{lineno}:{line}")
+                        if len(results) >= max_matches:
+                            return results
+            return results
+        if self.file_reader is not None:
+            return await self.file_reader.grep_repo(
+                pattern=pattern,
+                path_glob=path_glob,
+                max_matches=max_matches,
+            )
+        return []
 
     async def get_issue(self, event: UnifiedEvent, issue_number: int) -> dict[str, Any]:
         return dict(self.issue)

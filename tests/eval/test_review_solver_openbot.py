@@ -127,3 +127,83 @@ async def test_solver_stores_findings_json_in_metadata(monkeypatch) -> None:
     parsed = json.loads(raw_json)
     assert "findings" in parsed
     assert parsed["findings"][0]["body"] == "minor"
+
+
+# ── pr_url parsing + file_reader wiring ──────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_solver_parses_github_repo_from_pr_url(monkeypatch) -> None:
+    """Solver extracts owner/repo from pr_url and passes it to run_review_sample."""
+    captured: dict = {}
+
+    async def fake_run(*, repo, pr_number, pr_diff, **kwargs):
+        captured["repo"] = repo
+        captured["pr_number"] = pr_number
+        return ReviewFindings(summary="ok", findings=())
+
+    monkeypatch.setattr("evals.solvers.review.run_review_sample", fake_run)
+
+    state = MagicMock()
+    state.input_text = "diff text"
+    state.metadata = {
+        "repo": "cal_dot_com",  # alias — should NOT be used
+        "pr_url": "https://github.com/calcom/cal.com/pull/8087",
+        "base_sha": "ba9688a04a8398c9a8332ee7061bfae2f2efd524",
+    }
+    state.sample_id = "s3"
+
+    await openbot_review_solver()(state, MagicMock())
+
+    assert captured["repo"] == "calcom/cal.com"
+    assert captured["pr_number"] == 8087
+
+
+@pytest.mark.asyncio
+async def test_solver_passes_file_reader_when_pr_url_and_base_sha_present(monkeypatch) -> None:
+    """Solver builds a GitHubFileReader and passes it to run_review_sample."""
+    from openbot.evaluation.github_file_reader import GitHubFileReader
+
+    captured: dict = {}
+
+    async def fake_run(*, repo, pr_number, pr_diff, file_reader=None, **kwargs):
+        captured["file_reader"] = file_reader
+        return ReviewFindings(summary="ok", findings=())
+
+    monkeypatch.setattr("evals.solvers.review.run_review_sample", fake_run)
+
+    state = MagicMock()
+    state.input_text = "diff"
+    state.metadata = {
+        "pr_url": "https://github.com/calcom/cal.com/pull/8087",
+        "base_sha": "ba9688a04a8398c9a8332ee7061bfae2f2efd524",
+    }
+    state.sample_id = "s4"
+
+    await openbot_review_solver()(state, MagicMock())
+
+    fr = captured["file_reader"]
+    assert isinstance(fr, GitHubFileReader)
+    assert fr.repo == "calcom/cal.com"
+    assert fr.ref == "ba9688a04a8398c9a8332ee7061bfae2f2efd524"
+
+
+@pytest.mark.asyncio
+async def test_solver_passes_no_file_reader_when_pr_url_missing(monkeypatch) -> None:
+    """Solver passes file_reader=None when pr_url is absent from metadata."""
+    captured: dict = {}
+
+    async def fake_run(*, repo, pr_number, pr_diff, file_reader=None, **kwargs):
+        captured["file_reader"] = file_reader
+        return ReviewFindings(summary="ok", findings=())
+
+    monkeypatch.setattr("evals.solvers.review.run_review_sample", fake_run)
+
+    state = MagicMock()
+    state.input_text = "diff"
+    state.metadata = {"repo": "org/repo", "pr_number": 1}
+    state.sample_id = "s5"
+
+    await openbot_review_solver()(state, MagicMock())
+
+    assert captured["file_reader"] is None

@@ -108,3 +108,63 @@ async def test_get_issue_returns_preset_issue() -> None:
     )
     result = await adapter.get_issue(_event(), 1)
     assert result["title"] == "Bug report"
+
+
+# ── file_reader delegation ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_read_file_delegates_to_file_reader_when_not_in_files(monkeypatch) -> None:
+    """When a path is absent from ``files``, read_file falls back to file_reader."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_reader = MagicMock()
+    mock_reader.read_file = AsyncMock(return_value="export const x = 1;\n")
+
+    adapter = EvalChannelAdapter(pr_diff="", file_reader=mock_reader)
+    result = await adapter.read_file(_event(), "src/x.ts")
+    assert result == "export const x = 1;\n"
+    mock_reader.read_file.assert_called_once_with("src/x.ts")
+
+
+@pytest.mark.asyncio
+async def test_read_file_prefers_files_cache_over_reader(monkeypatch) -> None:
+    """When path is in ``files``, the cache is used and file_reader is not called."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_reader = MagicMock()
+    mock_reader.read_file = AsyncMock(return_value="from reader")
+
+    adapter = EvalChannelAdapter(
+        pr_diff="",
+        files={"README.md": "from cache"},
+        file_reader=mock_reader,
+    )
+    result = await adapter.read_file(_event(), "README.md")
+    assert result == "from cache"
+    mock_reader.read_file.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_grep_repo_delegates_to_file_reader_when_files_empty(monkeypatch) -> None:
+    """When ``files`` is empty, grep_repo delegates to file_reader."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_reader = MagicMock()
+    mock_reader.grep_repo = AsyncMock(return_value=["src/foo.ts: forEach(async booking"])
+
+    adapter = EvalChannelAdapter(pr_diff="", file_reader=mock_reader)
+    hits = await adapter.grep_repo(_event(), pattern="forEach")
+    assert hits == ["src/foo.ts: forEach(async booking"]
+    mock_reader.grep_repo.assert_called_once_with(pattern="forEach", path_glob=None, max_matches=20)
+
+
+@pytest.mark.asyncio
+async def test_grep_repo_uses_files_dict_when_populated() -> None:
+    """Existing in-memory grep behaviour is preserved when ``files`` is non-empty."""
+    adapter = EvalChannelAdapter(
+        pr_diff="",
+        files={"main.py": "def foo():\n    pass\n"},
+    )
+    matches = await adapter.grep_repo(_event(), pattern="def ")
+    assert any("main.py" in m for m in matches)

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from openbot.application.ports.sandbox import SandboxPort
     from openbot.domain.fix import FixOutcome
     from openbot.domain.review import ReviewFindings
+    from openbot.evaluation.github_file_reader import GitHubFileReader
 
 
 def _make_event(
@@ -63,17 +64,21 @@ async def run_review_sample(
     pr_diff: str,
     actor: str = "eval-harness",
     files: dict[str, str] | None = None,
+    file_reader: GitHubFileReader | None = None,
     run_id: str | None = None,
 ) -> ReviewFindings:
     """Run the production review responder on a synthetic PR.
 
     Args:
-        repo:     ``"owner/name"`` — used in the LLM prompt context.
-        pr_number: The PR number (embedded in context; no real API call).
-        pr_diff:  The full unified diff for the PR.
-        actor:    Reviewer persona (defaults to "eval-harness").
-        files:    Optional repo file map for read_file / grep_repo.
-        run_id:   Optional LangSmith run ID for tracing.
+        repo:        ``"owner/name"`` — used in the LLM prompt context.
+        pr_number:   The PR number (embedded in context; no real API call).
+        pr_diff:     The full unified diff for the PR.
+        actor:       Reviewer persona (defaults to "eval-harness").
+        files:       Optional repo file map (priority cache for read_file / grep_repo).
+        file_reader: Optional ``GitHubFileReader`` for live GitHub file access.
+                     Cache misses in ``files`` fall through to this reader, keeping
+                     file-fetching inside OpenBot's GitHub infrastructure layer.
+        run_id:      Optional LangSmith run ID for tracing.
 
     Returns:
         ``ReviewFindings`` — the responder's structured output.
@@ -84,7 +89,7 @@ async def run_review_sample(
         kind=EventKind.PR_OPENED,
         pr_number=pr_number,
     )
-    adapter = EvalChannelAdapter(pr_diff=pr_diff, files=files or {})
+    adapter = EvalChannelAdapter(pr_diff=pr_diff, files=files or {}, file_reader=file_reader)
     return await DeepAgentsReviewResponder().review_for_event(event, adapter=adapter, run_id=run_id)
 
 
