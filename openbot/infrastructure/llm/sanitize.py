@@ -33,6 +33,7 @@ surface (``"issuue_body"``) and silently lose attribution.
 
 from __future__ import annotations
 
+import re as _re
 from enum import StrEnum
 from typing import Final
 
@@ -120,8 +121,43 @@ def wrap_user_input(text: str | None, *, source: UserInputSource) -> str:
     return f'<user_input source="{source.value}">\n{escaped}\n</user_input>'
 
 
+# Patterns for common secrets that should be redacted before LLM ingestion.
+_SECRET_PATTERNS: tuple[tuple[_re.Pattern[str], str], ...] = (
+    # GitHub App / PAT tokens  (ghs_, ghp_, gho_ prefixes)
+    (_re.compile(r"gh[spo]_[A-Za-z0-9]{36,}"), "[REDACTED:GH_TOKEN]"),
+    # AWS access key IDs (AKIA prefix = standard, ASIA = temporary)
+    (_re.compile(r"(?:AKIA|ASIA)[A-Z0-9]{16}"), "[REDACTED:AWS_KEY]"),
+    # PEM-encoded private key blocks (real or test fixtures)
+    (
+        _re.compile(
+            r"-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----.*?-----END (?:RSA |EC |OPENSSH |)PRIVATE KEY-----",
+            _re.DOTALL,
+        ),
+        "[REDACTED:PEM]",
+    ),
+    # Test-fixture marker used in unit tests
+    (_re.compile(r"<FAKE_RSA_PRIVATE_KEY_FOR_TEST>"), "[REDACTED:PEM]"),
+)
+
+
+def sanitize_user_text(text: str) -> str:
+    """Redact known secret patterns from user-supplied text before LLM ingestion.
+
+    Covers GitHub tokens (``ghs_*``), AWS key IDs (``AKIA*``), and PEM private
+    key blocks. Returns the cleaned string — never raises.
+
+    Defence-in-depth only: does NOT replace the egress scanner
+    (``openbot.infrastructure.agents.egress_scan``) which gates LLM *output*
+    before posting back to GitHub.
+    """
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 __all__ = [
     "SYSTEM_PROMPT_PREAMBLE",
     "UserInputSource",
+    "sanitize_user_text",
     "wrap_user_input",
 ]

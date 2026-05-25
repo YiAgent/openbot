@@ -129,6 +129,11 @@ def _build_standard_middleware(limits: AgentRunLimits) -> list[AgentMiddleware]:
             stack.append(
                 ToolCallLimitMiddleware(
                     thread_limit=limits.tool_call_limit,
+                    # "continue" blocks exceeded tools but lets the model make
+                    # one final call to produce the structured response.
+                    # "end" is avoided because it terminates the graph at a
+                    # tool-call node — before the model can emit the final
+                    # structured output — causing AgentStructuredOutputError.
                     exit_behavior="continue",
                 )
             )

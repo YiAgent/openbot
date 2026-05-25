@@ -38,6 +38,7 @@ from typing import Final
 
 from openbot.domain.events import EventKind, UnifiedEvent
 from openbot.domain.intents import EventClassification, Intent, State
+from openbot.domain.workflows import Feature
 
 # The chat-mention prefixes the classifier accepts. Kept in sync with
 # ``openbot.application.router._get_chat_prefix`` — when that grows to read settings,
@@ -56,6 +57,48 @@ def _is_bot_assignee(event: UnifiedEvent) -> bool:
     is a Bot. PRD §4.3 trigger contract."""
     assignee = (event.raw.get("assignee") or {}) if event.raw else {}
     return assignee.get("type") == "Bot"
+
+
+_FIX_PREFIXES: Final = tuple(p + "fix" for p in _CHAT_PREFIXES)
+
+
+def classify_pure(event: UnifiedEvent) -> Feature | None:
+    """Map ``event → Feature`` without needing ``current_state``.
+
+    Pure feature-routing gate — returns the Feature the event belongs to,
+    or ``None`` when the bot should ignore this event entirely (bot author,
+    unknown kind, cancel/label events, unmentioned comments).
+
+    This is intentionally simpler than ``classify``: it answers *which
+    workflow*, not *what intent* (START/SUPERSEDE/CANCEL). Callers that
+    also need intent must use the full ``classify(event, current_state)``.
+    """
+    # Cheap drops — same as classify().
+    if event.is_from_bot or event.kind is EventKind.UNKNOWN:
+        return None
+
+    kind = event.kind
+
+    # Triage events.
+    if kind in (EventKind.ISSUE_OPENED, EventKind.ISSUE_REOPENED, EventKind.ISSUE_ASSIGNED):
+        return Feature.TRIAGE
+
+    # Review events.
+    if kind in (EventKind.PR_OPENED, EventKind.PR_REOPENED, EventKind.PR_SYNCHRONIZED):
+        return Feature.REVIEW
+
+    # Chat / fix commands (comment events require a @mention).
+    if kind in (EventKind.ISSUE_COMMENT_CREATED, EventKind.PR_REVIEW_COMMENT_CREATED):
+        body = event.comment_body or ""
+        if not _is_chat_mention(event):
+            return None
+        # "@openbot fix …" routes to FIX; any other mention routes to CHAT.
+        if any(body.startswith(p) for p in _FIX_PREFIXES):
+            return Feature.FIX
+        return Feature.CHAT
+
+    # Everything else (cancel, label, ping, …) is not routed.
+    return None
 
 
 def classify(event: UnifiedEvent, current_state: State) -> EventClassification:

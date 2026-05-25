@@ -21,6 +21,7 @@ TARGET_URL := http://$(HOST):$(PORT)/webhook/github
 SMEE_URL := $(shell sed -n 's/^OPENBOT_GITHUB_WEBHOOK_PROXY_URL=\(.*\)$$/\1/p' .env 2>/dev/null)
 
 .PHONY: help install sync hooks test test-fast lint lint-fix lint-imports fmt fmt-check check \
+        test-unit test-contract test-integration test-smoke test-e2e test-real-service \
         dev dev-server dev-smee run worker smoke setup secret-scan doctor db-init \
         compose-up compose-down compose-logs compose-ps clean distclean
 
@@ -59,6 +60,25 @@ test: ## Run pytest (excludes evals/ per PRD §8.3)
 
 test-fast: ## pytest, fail fast, quiet
 	$(PYTEST) -q -x --ignore=evals
+
+# ─── Per-layer test targets (six-layer pyramid) ──────────────────
+test-unit: ## Unit layer only (< 1 s target)
+	$(PYTEST) tests/unit -m unit -q
+
+test-contract: ## Contract layer only — fake+real parametrized
+	$(PYTEST) tests/contract -m contract -q
+
+test-integration: ## Integration layer only — multi-port orchestration
+	$(PYTEST) tests/integration -m integration -q
+
+test-smoke: ## Smoke layer only — app boot + liveness probes
+	$(PYTEST) tests/smoke -m smoke -q
+
+test-e2e: ## E2E layer only — full HTTP pipeline with fakes
+	$(PYTEST) tests/e2e -m e2e -q
+
+test-real-service: ## Real-service layer (skips without env vars)
+	$(PYTEST) tests/real_service -m real_service -q
 
 check: fmt-check lint lint-imports test ## Full local CI gate
 

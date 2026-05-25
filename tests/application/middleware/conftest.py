@@ -1,26 +1,13 @@
-"""Shared fixtures for middleware tests (slice B+).
+"""Compat shim — provides ``make_event`` for legacy flat test files.
 
-`make_ctx` builds a PreflightContext with sensible defaults; tests
-override the bits they care about (feature, redis, session_factory,
-adapter mock surface, rate_limiter).
+PR #87 deleted the original ``tests/application/middleware/conftest.py``
+(its helpers were no longer used by restructured tests). Flat test files
+from main that haven't been restructured yet import through this shim.
 """
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import AsyncMock
-
-import pytest
-
-from openbot.application.middleware import PreflightContext
-from openbot.application.router import Dispatch, derive_task_id
-from openbot.application.use_cases import maybe_run_chat, maybe_run_triage
 from openbot.domain.events import EventKind, UnifiedEvent
-from openbot.domain.workflows import Feature
-from openbot.infrastructure.config_loader import baked_in_defaults
-from openbot.infrastructure.persistence.rate_limiter_redis import RedisRateLimiter
-
-_SENTINEL = object()
 
 
 def make_event(
@@ -49,45 +36,3 @@ def make_event(
         comment_body=comment_body,
         raw=raw or {},
     )
-
-
-def make_ctx(
-    event: UnifiedEvent | None = None,
-    *,
-    feature: Feature = Feature.TRIAGE,
-    adapter: Any | None = None,
-    redis: Any | None = None,
-    session_factory: Any | None = None,
-    config: Any = None,
-    rate_limiter: Any = _SENTINEL,
-) -> PreflightContext:
-    """Build a PreflightContext with a default adapter mock.
-
-    `rate_limiter` defaults to a `RedisRateLimiter` wrapping whatever
-    `redis` was passed (so existing tests that supply a fakeredis instance
-    continue to exercise the full INCR path). Pass an explicit
-    `FakeRateLimiter` or `None` to override.
-    """
-    event = event or make_event()
-    handler = maybe_run_chat if feature is Feature.CHAT else maybe_run_triage
-    resolved_rate_limiter = RedisRateLimiter(redis) if rate_limiter is _SENTINEL else rate_limiter
-    return PreflightContext(
-        event=event,
-        dispatch=Dispatch(feature, handler, derive_task_id(event)),
-        config=config or baked_in_defaults(),
-        adapter=adapter or AsyncMock(),
-        session_factory=session_factory,
-        redis=redis,
-        rate_limiter=resolved_rate_limiter,
-    )
-
-
-@pytest.fixture
-def event_factory():
-    """Test-local factory exposing make_event for fluent overrides."""
-    return make_event
-
-
-@pytest.fixture
-def ctx_factory():
-    return make_ctx

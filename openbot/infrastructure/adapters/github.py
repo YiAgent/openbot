@@ -93,6 +93,20 @@ _RETRY_BACKOFF_MAX: Final = 4.0
 _RETRYABLE_STATUSES: Final = frozenset({502, 503, 504})
 
 
+def verify_webhook_signature(body: bytes, signature: str, *, secret: bytes) -> None:
+    """Free-function HMAC-SHA256 verifier (testable without a full GitHubAdapter).
+
+    Raises ``SignatureError`` on mismatch or missing/malformed header value.
+    Delegates to ``gidgethub.sansio.validate_event`` for constant-time comparison.
+    """
+    if not signature or not signature.startswith(_SIGNATURE_PREFIX):
+        raise SignatureError("missing or malformed X-Hub-Signature-256")
+    try:
+        validate_event(body, signature=signature, secret=secret.decode())
+    except ValidationFailure as exc:
+        raise SignatureError("signature mismatch") from exc
+
+
 def _extract_event_seq(pull_request: dict[str, Any], issue: dict[str, Any]) -> int:
     """Epoch-ms of the resource's ``updated_at`` — monotonic ordering hint.
 

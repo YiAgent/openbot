@@ -27,3 +27,17 @@ ignore_imports =
 
     # config_loader: dispatcher uses infra load_for_repo directly (port injection pending)
     openbot.application.dispatcher -> openbot.infrastructure.config_loader
+
+[importlinter:contract:no-testing-in-runtime]
+name = Production code must not import openbot.testing
+type = forbidden
+source_modules =
+    openbot.domain
+    openbot.application
+    openbot.infrastructure
+    openbot.entrypoints
+    openbot.core
+    openbot.dispatcher
+    openbot.evaluation
+forbidden_modules =
+    openbot.testing
