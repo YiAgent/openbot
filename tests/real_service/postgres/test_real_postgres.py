@@ -57,7 +57,10 @@ class TestRealPostgresRunsRepo:
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         try:
             runs_repo = SqlRunsRepo(session_factory=session_factory)
-            event = build_issue_opened_event(issue_number=9999)
+            # Use a random issue_number so each run starts with a fresh resource
+            # key — avoids stale RUNNING rows from previous test runs.
+            issue_number = int(uuid.uuid4().hex[:6], 16) + 1_000_000
+            event = build_issue_opened_event(issue_number=issue_number)
             run_id = f"rs-{uuid.uuid4().hex[:16]}"
             result = await runs_repo.transition(event=event, new_run_id=run_id)
             assert result.run_id == run_id
