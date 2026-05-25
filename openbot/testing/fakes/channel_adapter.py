@@ -50,6 +50,15 @@ class BranchRecord:
 
 
 @dataclass(frozen=True)
+class UpdateCommentRecord:
+    """Snapshot of one update_comment() call."""
+
+    repo: str | None
+    comment_id: int
+    message: str
+
+
+@dataclass(frozen=True)
 class CheckRunRecord:
     """Snapshot of one update_check_run() call."""
 
@@ -143,6 +152,7 @@ class FakeChannelAdapter:
     fail_with: type[Exception] = RuntimeError
 
     _replies: list[ReplyRecord] = field(default_factory=list, init=False)
+    _comment_updates: list[UpdateCommentRecord] = field(default_factory=list, init=False)
     _labels_added: list[LabelRecord] = field(default_factory=list, init=False)
     _check_run_updates: list[CheckRunRecord] = field(default_factory=list, init=False)
     _posted_reviews: list[ReviewRecord] = field(default_factory=list, init=False)
@@ -155,6 +165,10 @@ class FakeChannelAdapter:
     @property
     def replies(self) -> tuple[ReplyRecord, ...]:
         return tuple(self._replies)
+
+    @property
+    def comment_updates(self) -> tuple[UpdateCommentRecord, ...]:
+        return tuple(self._comment_updates)
 
     @property
     def labels_added(self) -> tuple[LabelRecord, ...]:
@@ -235,7 +249,17 @@ class FakeChannelAdapter:
         """See :class:`openbot.application.ports.channel_adapter.ChannelAdapterPort`."""
         self._maybe_fail()
         self._replies.append(ReplyRecord(repo=event.repo, message=message))
-        return {}
+        return {"id": 10_000 + len(self._replies)}
+
+    async def update_comment(
+        self, event: UnifiedEvent, comment_id: int, message: str
+    ) -> dict[str, Any]:
+        """See :class:`openbot.application.ports.channel_adapter.ChannelAdapterPort`."""
+        self._maybe_fail()
+        self._comment_updates.append(
+            UpdateCommentRecord(repo=event.repo, comment_id=comment_id, message=message)
+        )
+        return {"id": comment_id}
 
     async def add_label(self, event: UnifiedEvent, *labels: str) -> list[dict[str, Any]]:
         """See :class:`openbot.application.ports.channel_adapter.ChannelAdapterPort`."""
