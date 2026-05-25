@@ -34,7 +34,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
 - `tests/architecture/test_egress_boundary.py` enforces that use cases never
   import the raw `GitHubAdapter`; egress is decorator-bound at composition root.
-
 ## [0.1.0] - 2026-05-23
 
 ### Added
