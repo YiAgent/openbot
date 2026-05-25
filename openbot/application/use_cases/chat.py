@@ -16,7 +16,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from openbot.application.state.cancellation import checkpoint
-from openbot.application.use_cases._lifecycle import audit_lifecycle
+from openbot.application.use_cases._lifecycle import audit_lifecycle, sticky_reply
 from openbot.application.use_cases._tracing import observe as _observe
 from openbot.application.use_cases._tracing import traceable as _traceable
 from openbot.application.use_cases.chat_parser import parse as parse_chat_command
@@ -35,6 +35,10 @@ _ACK_TEMPLATE = (
     ":robot: Hi @{actor} — OpenBot received your message and is thinking.\n\n"
     "_v0.1 alpha: only the ACK is automated so far. Tool-using chat agent "
     "(read_file / grep / web_fetch / search) lands in an upcoming commit._"
+)
+_THINKING_TEMPLATE = (
+    ":robot: Hi @{actor} — OpenBot received your message and is thinking…\n\n"
+    "_This comment will be updated with the response._"
 )
 _ERROR_TEMPLATE = (
     ":robot: I couldn't complete that request right now.\n\n"
@@ -104,8 +108,9 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
     # Branch on structural intent:
     #   is_cancel   → never reached in practice (CancelCommentMiddleware
     #                 short-circuits earlier); defensive no-op.
-    #   is_help     → canned help reply (cheap, no LLM call).
-    #   freeform    → LLM ACK stub.
+    #   is_help     → canned reply (instant, no LLM call).
+    #   no body     → ACK only (instant).
+    #   freeform    → sticky: post placeholder first, update after LLM.
     if command.is_cancel:
         _logger.info(
             "chat_cancel_reached_workflow_unexpected",
@@ -113,39 +118,88 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
         )
         return
 
-    if command.is_help:
-        message = _HELP_TEMPLATE
-    elif not command.body_after_mention:
-        message = _ACK_TEMPLATE.format(actor=event.actor or "there")
-    else:
+    adapter = ctx.adapter
+
+    if command.is_freeform and command.body_after_mention:
+        # Freeform LLM request — use sticky comment so the LLM response
+        # replaces the placeholder in-place rather than posting a new thread.
+        initial = _THINKING_TEMPLATE.format(actor=event.actor or "there")
         try:
+            async with sticky_reply(adapter, event, initial=initial) as sticky:
+                try:
+                    message = await _generate_freeform_reply(
+                        event=event,
+                        user_request=command.body_after_mention,
+                        run_id=run_id,
+                        checkpointer=checkpointer,
+                        adapter=ctx.adapter,
+                        per_task_cap_usd=ctx.config.budget.per_task_cap_usd,
+                        session_factory=ctx.session_factory,
+                    )
+                except Exception:
+                    _logger.exception(
+                        "chat_agent_reply_failed",
+                        extra={"delivery_id": event.delivery_id, "repo": event.repo},
+                    )
+                    message = _ERROR_TEMPLATE
+
+                if run_id:
+                    await checkpoint(ctx.redis, run_id)
+
+                try:
+                    async with audit_lifecycle(ctx, workflow=Workflow.CHAT) as audit:
+                        await sticky.update(message)
+                        audit.outcome = f"intent=freeform comment_id={sticky.comment_id}"
+                        _logger.info(
+                            "chat_freeform_posted",
+                            extra={
+                                "delivery_id": event.delivery_id,
+                                "repo": event.repo,
+                                "target": target_number,
+                                "comment_id": sticky.comment_id,
+                            },
+                        )
+                        if run_id and checkpointer is not None:
+                            try:
+                                await checkpointer.adelete_thread(run_id)
+                            except Exception:
+                                _logger.warning(
+                                    "chat_checkpoint_delete_failed",
+                                    extra={"delivery_id": event.delivery_id, "run_id": run_id},
+                                )
+                except Exception:
+                    _logger.exception(
+                        "chat_freeform_post_failed",
+                        extra={"delivery_id": event.delivery_id, "repo": event.repo},
+                    )
             message = await _generate_freeform_reply(
                 event=event,
                 user_request=command.body_after_mention,
                 run_id=run_id,
                 checkpointer=checkpointer,
-                adapter=ctx.adapter,
-                per_task_cap_usd=ctx.config.budget.per_task_cap_usd,
-                session_factory=ctx.session_factory,
             )
         except Exception:
             _logger.exception(
-                "chat_agent_reply_failed",
+                "chat_freeform_failed",
                 extra={"delivery_id": event.delivery_id, "repo": event.repo},
             )
-            message = _ERROR_TEMPLATE
+        return
 
-    # Cancellation checkpoint: after message is determined (or falls back to
-    # error template) but before we open the audit row.  RunCancelledError is
-    # a BaseException so it propagates through the outer ``except Exception``
-    # guard unimpeded.
+    # Instant paths (help / bare @mention): message is known immediately,
+    # no sticky needed — single POST is cleaner than placeholder + PATCH.
+    if command.is_help:
+        message = _HELP_TEMPLATE
+    else:
+        message = _ACK_TEMPLATE.format(actor=event.actor or "there")
+
+    # Cancellation checkpoint before the audit row.
     if run_id:
         await checkpoint(ctx.redis, run_id)
 
     try:
         async with audit_lifecycle(ctx, workflow=Workflow.CHAT) as audit:
-            result = await ctx.adapter.reply(event, message)
-            outcome_intent = "help" if command.is_help else "freeform"
+            result = await adapter.reply(event, message)
+            outcome_intent = "help" if command.is_help else "ack"
             audit.outcome = f"intent={outcome_intent} comment_id={result.get('id')}"
             _logger.info(
                 "chat_ack_posted",
@@ -157,7 +211,6 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
                     "comment_id": result.get("id"),
                 },
             )
-            # Clean up checkpoint state now that the reply has landed.
             if run_id and checkpointer is not None:
                 try:
                     await checkpointer.adelete_thread(run_id)

@@ -291,6 +291,21 @@ class GitHubAdapter(ChannelAdapter):
         url = f"{self._api_base}/repos/{event.repo}/issues/{number}/comments"
         return await self._authed_json("POST", url, event, json_body={"body": message})
 
+    async def update_comment(
+        self,
+        event: UnifiedEvent,
+        comment_id: int,
+        message: str,
+    ) -> dict[str, Any]:
+        """Edit an existing issue/PR comment body in-place (sticky UX).
+
+        Endpoint: PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}
+        GitHub's comment API is unified — the same endpoint covers both
+        issue comments and PR comments.
+        """
+        url = f"{self._api_base}/repos/{event.repo}/issues/comments/{comment_id}"
+        return await self._authed_json("PATCH", url, event, json_body={"body": message})
+
     async def add_label(self, event: UnifiedEvent, *labels: str) -> list[dict[str, Any]]:
         """Add one or more labels to the issue/PR. PRD §4.1 triage / §4.2 review."""
         if not labels:

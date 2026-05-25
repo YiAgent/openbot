@@ -57,12 +57,18 @@ Langfuse
     invocation — re-using one handler across concurrent requests mixes traces.
     Returns ``None`` when Langfuse is not configured; callers guard with
     ``[h for h in [get_langfuse_handler()] if h is not None]``.
+  - Trace name and session grouping are set via LangChain ``RunnableConfig``
+    metadata keys ``"langfuse_trace_name"`` / ``"langfuse_session_id"`` so
+    Langfuse's ``CallbackHandler`` picks them up automatically from the run
+    context.  This keeps each invocation's spans in its own fresh trace while
+    still grouping retries / eval re-runs by session.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from openbot.core.settings import Settings
@@ -235,10 +241,15 @@ def init_langfuse() -> None:
 
 
 def get_langfuse_handler() -> object | None:
-    """Return a fresh Langfuse CallbackHandler for one DeepAgents invocation.
+    """Return a fresh Langfuse CallbackHandler for one agent invocation.
 
-    A new instance is created per call so concurrent agent runs get
-    independent traces — sharing one handler across requests mixes spans.
+    **Must be called inside an active** ``langfuse_agent_trace()`` **context.**
+    When the handler is created inside that context, it automatically inherits
+    the active OpenTelemetry span via ``ContextVar`` and nests all LangGraph
+    sub-operations (LLM calls, tool calls, chain steps) under the root trace.
+
+    If called outside a ``langfuse_agent_trace()`` context, each LangChain root
+    runnable creates its own Langfuse trace — the 36-root-trace problem.
 
     Returns ``None`` when:
       - ``langfuse`` is not installed, or
@@ -246,8 +257,10 @@ def get_langfuse_handler() -> object | None:
 
     Callers inject the result via::
 
-        callbacks = [h for h in [get_langfuse_handler()] if h is not None]
-        config["callbacks"] = callbacks
+        with langfuse_agent_trace(name=..., session_id=...):
+            callbacks = [h for h in [get_langfuse_handler()] if h is not None]
+            config["callbacks"] = callbacks
+            await agent.ainvoke(..., config=config)
     """
     import os
 
@@ -259,7 +272,130 @@ def get_langfuse_handler() -> object | None:
     if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
         return None
 
+    # No trace_context — the handler inherits the current OTel ContextVar
+    # set by langfuse_agent_trace().  That context manager calls
+    # langfuse.start_as_current_observation() which sets the active span,
+    # and CallbackHandler() reads it via get_current_observation_id().
     return CallbackHandler()
 
 
-__all__ = ["get_langfuse_handler", "init_langfuse", "init_langsmith", "init_sentry"]
+@contextlib.contextmanager
+def langfuse_agent_trace(
+    *,
+    name: str,
+    session_id: str = "",
+) -> contextlib.AbstractContextManager[object]:
+    """Sync context manager that creates a Langfuse root agent trace.
+
+    **This is the canonical entry-point for Langfuse tracing.** It must wrap
+    every agent invocation so that all LangGraph sub-operations (LLM calls,
+    tool calls, chain steps) nest under one unified trace rather than
+    scattering as 30-40 separate root traces.
+
+    How it works (per Langfuse docs):
+
+      1. ``propagate_attributes()`` attaches ``trace_name`` and ``session_id``
+         at the OTel baggage level so they propagate to every child span.
+      2. ``langfuse.start_as_current_observation(as_type="agent")`` creates the
+         root agent span and sets it as the *current* OTel span via ContextVar.
+      3. ``get_langfuse_handler()`` called inside this context reads the current
+         ContextVar and makes the handler a child of this root span.
+      4. All subsequent LangGraph callbacks inherit the parent via OTel context
+         propagation within the same asyncio task.
+
+    Uses ``with`` (sync context manager) in async code — valid in Python because
+    the OTel ContextVar propagates correctly across ``await`` in the same task.
+
+    No-ops (yields ``None``) when Langfuse is not installed or not configured.
+
+    Usage::
+
+        with langfuse_agent_trace(name="review-review", session_id=run_id):
+            handler = get_langfuse_handler()  # inherits root trace
+            await agent.ainvoke(  # all spans nest under root
+                {"messages": [...]},
+                config={"callbacks": [h for h in [handler] if h]},
+            )
+    """
+    import os
+
+    try:
+        from langfuse import Langfuse, propagate_attributes
+    except ImportError:
+        yield None
+        return
+
+    if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
+        yield None
+        return
+
+    lf = Langfuse()
+    with (
+        propagate_attributes(trace_name=name, session_id=session_id),
+        lf.start_as_current_observation(as_type="agent", name=name) as obs,
+    ):
+        yield obs
+
+
+def create_langfuse_root_span(
+    *,
+    name: str,
+    run_id: str,
+    metadata: dict[str, Any] | None = None,
+) -> contextlib.AbstractContextManager[object] | None:
+    """Create a root Langfuse span to unify all operations in one trace.
+
+    This returns a sync context manager that should wrap the agent invocation.
+    All LangChain/LangGraph operations within this context will become
+    child spans of this root span, resulting in a single unified trace
+    instead of many scattered traces.
+
+    Returns ``None`` when Langfuse is not configured.
+
+    Usage::
+
+        with create_langfuse_root_span(name="fix-issue", run_id=..., metadata=...) as root:
+            if root is not None:
+                root.span.update(input=...)
+            result = await agent.ainvoke(...)
+            if root is not None:
+                root.span.update(output=...)
+    """
+    import os
+
+    try:
+        from langfuse import Langfuse
+    except ImportError:
+        return None
+
+    if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
+        return None
+
+    lf = Langfuse()
+
+    # Create a deterministic trace_id from run_id
+    trace_id = Langfuse.create_trace_id(seed=run_id)
+
+    @contextlib.contextmanager
+    def _root_span_context():
+        """Context manager that creates a root span and yields it."""
+        root_span = lf.start_as_current_observation(
+            name=name,
+            as_type="agent",
+            trace_context={"trace_id": trace_id},
+            metadata=metadata,
+        )
+        with root_span as span:
+            yield span
+
+    return _root_span_context()
+
+
+__all__ = [
+    "create_langfuse_root_span",
+    "get_langfuse_handler",
+    "init_langfuse",
+    "init_langsmith",
+    "init_sentry",
+    "langfuse_agent_trace",
+]
