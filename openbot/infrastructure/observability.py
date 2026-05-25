@@ -241,32 +241,15 @@ def init_langfuse() -> None:
 
 
 def get_langfuse_handler() -> object | None:
-    """Return a fresh Langfuse CallbackHandler for one DeepAgents invocation.
+    """Return a fresh Langfuse CallbackHandler for one agent invocation.
 
-    A new instance is created per call so concurrent agent runs get
-    independent traces — sharing one handler across requests mixes spans.
+    **Must be called inside an active** ``langfuse_agent_trace()`` **context.**
+    When the handler is created inside that context, it automatically inherits
+    the active OpenTelemetry span via ``ContextVar`` and nests all LangGraph
+    sub-operations (LLM calls, tool calls, chain steps) under the root trace.
 
-    A **fresh random UUID** is passed as ``trace_context={"trace_id": ...}``
-    so all LangGraph sub-operations (LLM calls, tool calls, chain steps)
-    become nested observations under the same root trace rather than
-    floating as separate root traces with ``Session: None``.  Without this,
-    the LangChain ``CallbackHandler`` creates a new Langfuse trace for every
-    root ``RunnableLambda`` / ``ChatAnthropic`` call in the graph, scattering
-    GENERATION and TOOL spans across dozens of disconnected traces.
-
-    A UUID is generated fresh on every call (never seeded from a fixed
-    input) to guarantee that repeated eval runs of the same sample each
-    produce their own distinct, non-overlapping trace in Langfuse.
-
-    Trace name and session grouping travel via LangChain's
-    ``RunnableConfig.metadata`` dict (set in the calling runtime), not
-    via this function.  Callers should include:
-
-    - ``"langfuse_trace_name"`` — human-readable label shown in the
-      Langfuse UI (e.g. ``"review-openbot_review_responder"``).
-    - ``"langfuse_session_id"`` — groups related traces under one session.
-      Use the agent ``run_id`` so all invocations for the same logical
-      job appear together without merging their spans.
+    If called outside a ``langfuse_agent_trace()`` context, each LangChain root
+    runnable creates its own Langfuse trace — the 36-root-trace problem.
 
     Returns ``None`` when:
       - ``langfuse`` is not installed, or
@@ -274,11 +257,12 @@ def get_langfuse_handler() -> object | None:
 
     Callers inject the result via::
 
-        callbacks = [h for h in [get_langfuse_handler()] if h is not None]
-        config["callbacks"] = callbacks
+        with langfuse_agent_trace(name=..., session_id=...):
+            callbacks = [h for h in [get_langfuse_handler()] if h is not None]
+            config["callbacks"] = callbacks
+            await agent.ainvoke(..., config=config)
     """
     import os
-    import uuid
 
     try:
         from langfuse.langchain import CallbackHandler
@@ -288,15 +272,69 @@ def get_langfuse_handler() -> object | None:
     if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
         return None
 
-    # Fresh UUID per call: LangGraph sub-operations (LLM, tools) are nested
-    # under this trace_id rather than floating as separate root traces.
-    # Using a random UUID (never seeded) guarantees no cross-run merging.
-    # trace_name and session_id still come from RunnableConfig metadata keys.
-    #
-    # Langfuse SDK parses trace_id via int(trace_id, 16), so the hex string
-    # must be dash-free (uuid.hex gives "8d6b5df03cc3..." vs str() gives
-    # "8d6b5df0-3cc3-..." which raises ValueError in the SDK).
-    return CallbackHandler(trace_context={"trace_id": uuid.uuid4().hex})
+    # No trace_context — the handler inherits the current OTel ContextVar
+    # set by langfuse_agent_trace().  That context manager calls
+    # langfuse.start_as_current_observation() which sets the active span,
+    # and CallbackHandler() reads it via get_current_observation_id().
+    return CallbackHandler()
+
+
+@contextlib.contextmanager
+def langfuse_agent_trace(
+    *,
+    name: str,
+    session_id: str = "",
+) -> contextlib.AbstractContextManager[object]:
+    """Sync context manager that creates a Langfuse root agent trace.
+
+    **This is the canonical entry-point for Langfuse tracing.** It must wrap
+    every agent invocation so that all LangGraph sub-operations (LLM calls,
+    tool calls, chain steps) nest under one unified trace rather than
+    scattering as 30-40 separate root traces.
+
+    How it works (per Langfuse docs):
+
+      1. ``propagate_attributes()`` attaches ``trace_name`` and ``session_id``
+         at the OTel baggage level so they propagate to every child span.
+      2. ``langfuse.start_as_current_observation(as_type="agent")`` creates the
+         root agent span and sets it as the *current* OTel span via ContextVar.
+      3. ``get_langfuse_handler()`` called inside this context reads the current
+         ContextVar and makes the handler a child of this root span.
+      4. All subsequent LangGraph callbacks inherit the parent via OTel context
+         propagation within the same asyncio task.
+
+    Uses ``with`` (sync context manager) in async code — valid in Python because
+    the OTel ContextVar propagates correctly across ``await`` in the same task.
+
+    No-ops (yields ``None``) when Langfuse is not installed or not configured.
+
+    Usage::
+
+        with langfuse_agent_trace(name="review-review", session_id=run_id):
+            handler = get_langfuse_handler()  # inherits root trace
+            await agent.ainvoke(  # all spans nest under root
+                {"messages": [...]},
+                config={"callbacks": [h for h in [handler] if h]},
+            )
+    """
+    import os
+
+    try:
+        from langfuse import Langfuse, propagate_attributes
+    except ImportError:
+        yield None
+        return
+
+    if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
+        yield None
+        return
+
+    lf = Langfuse()
+    with (
+        propagate_attributes(trace_name=name, session_id=session_id),
+        lf.start_as_current_observation(as_type="agent", name=name) as obs,
+    ):
+        yield obs
 
 
 def create_langfuse_root_span(
@@ -359,4 +397,5 @@ __all__ = [
     "init_langfuse",
     "init_langsmith",
     "init_sentry",
+    "langfuse_agent_trace",
 ]

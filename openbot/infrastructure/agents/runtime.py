@@ -31,7 +31,7 @@ from openbot.infrastructure.agents.profiles import (
     SandboxRequirement,
 )
 from openbot.infrastructure.llm.model_router import primary_model_for
-from openbot.infrastructure.observability import get_langfuse_handler
+from openbot.infrastructure.observability import get_langfuse_handler, langfuse_agent_trace
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import AgentMiddleware
@@ -234,16 +234,6 @@ class BaseDeepAgentRuntime:
             checkpointer=effective_checkpointer,
         )
 
-        # Langfuse reads "langfuse_trace_name" and "langfuse_session_id" from
-        # the LangChain run metadata dict (CallbackHandler source lines ~351-364).
-        # Setting them here — alongside the regular observability fields — keeps
-        # config assembly in one place and avoids a duplicate trace_metadata dict.
-        #
-        # langfuse_session_id = run_id groups all traces for the same logical job
-        # (e.g. all eval runs of the same sample, or all retries of one webhook)
-        # under a single Langfuse session while keeping each run's spans in its
-        # own trace.  This replaces the old deterministic trace_id approach, which
-        # caused every re-run of the same sample to merge into one trace.
         config = RunnableConfig(
             recursion_limit=profile.limits.recursion_limit,
             metadata={
@@ -256,46 +246,47 @@ class BaseDeepAgentRuntime:
                 "model": display_name(model),
                 "checkpoint_enabled": effective_checkpointer is not None,
                 "sandbox_present": request.sandbox is not None,
-                # Langfuse-specific: trace label and session grouping.
-                "langfuse_trace_name": (f"{profile.feature.value}-{profile.agent_name}"),
-                "langfuse_session_id": request.run_id or "",
                 **dict(request.metadata),
             },
         )
         if effective_checkpointer is not None:
             config["configurable"] = {"thread_id": request.run_id}
 
-        # Inject a fresh Langfuse callback so every agent run gets its own
-        # trace with all steps + tool calls visible.  No-op when
-        # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
-        # trace_name and session_id are conveyed via the metadata keys above.
-        lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
-        if lf_callbacks:
-            config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
+        # Langfuse root trace: wraps the entire agent invocation so all
+        # LangGraph sub-operations (LLM calls, tool calls, chain steps) nest
+        # under ONE root "agent" span instead of scattering as 30-40 separate
+        # root traces.  The CallbackHandler is created INSIDE the context so
+        # it inherits the active OTel ContextVar set by start_as_current_observation.
+        # No-op when LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
+        trace_name = f"{profile.feature.value}-{profile.agent_name}"
+        with langfuse_agent_trace(name=trace_name, session_id=request.run_id or ""):
+            lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
+            if lf_callbacks:
+                config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
 
-        invoke_coro = agent.ainvoke(
-            {"messages": [{"role": "user", "content": profile.user_message(request)}]},
-            config=config,
-        )
+            invoke_coro = agent.ainvoke(
+                {"messages": [{"role": "user", "content": profile.user_message(request)}]},
+                config=config,
+            )
 
-        try:
-            if profile.limits.wall_seconds is not None:
-                raw = await asyncio.wait_for(invoke_coro, timeout=profile.limits.wall_seconds)
-            else:
-                raw = await invoke_coro
-        except TimeoutError as exc:
-            raise AgentTimeoutError(
-                f"Agent '{profile.agent_name}' exceeded wall_seconds={profile.limits.wall_seconds}"
-            ) from exc
-        except Exception as exc:
-            exc_type_name = type(exc).__name__
-            if "Termination" in exc_type_name or "Budget" in exc_type_name:
-                raise AgentBudgetExhaustedError(
-                    f"Agent '{profile.agent_name}' budget exhausted"
+            try:
+                if profile.limits.wall_seconds is not None:
+                    raw = await asyncio.wait_for(invoke_coro, timeout=profile.limits.wall_seconds)
+                else:
+                    raw = await invoke_coro
+            except TimeoutError as exc:
+                raise AgentTimeoutError(
+                    f"Agent '{profile.agent_name}' exceeded wall_seconds={profile.limits.wall_seconds}"
                 ) from exc
-            raise AgentExecutionError(
-                f"Agent '{profile.agent_name}' failed: {type(exc).__name__}"
-            ) from exc
+            except Exception as exc:
+                exc_type_name = type(exc).__name__
+                if "Termination" in exc_type_name or "Budget" in exc_type_name:
+                    raise AgentBudgetExhaustedError(
+                        f"Agent '{profile.agent_name}' budget exhausted"
+                    ) from exc
+                raise AgentExecutionError(
+                    f"Agent '{profile.agent_name}' failed: {type(exc).__name__}"
+                ) from exc
 
         # Surface the budget verdict so callers can flip partial=True.
         if budget_state is not None and budget_state.partial:
