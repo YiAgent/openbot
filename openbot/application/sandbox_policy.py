@@ -14,9 +14,11 @@ Merge rule (NO_SANDBOX wins):
      unsupported feature), respect the static decision. This is the
      fail-open contract: classifier outages must not block legitimate
      events.
-  3. Otherwise apply per-feature bypass rules:
-       - TRIAGE: ``looks_like_spam`` OR (``type ∈ {spam, question}``
-         AND ``not has_reproduction_info``) → bypass.
+  3. Otherwise apply per-feature predicates:
+       - TRIAGE: REQUIRED iff ``type == "bug" AND has_reproduction_info
+         AND NOT looks_like_spam`` (the reproduce loop is the only
+         triage codepath that needs a sandbox in v0.1 — see spec §A7).
+         Every other triage payload bypasses.
        - CHAT: ``intent ∈ {unclear, out_of_scope}`` → bypass.
        - REVIEW / FIX: never bypass on classifier alone. Review needs
          the sandbox to produce evidence for findings; fix is
@@ -27,7 +29,9 @@ handler can specialize its reply on the bypass path (e.g. "Could you
 share reproduction steps?" rather than a silent drop).
 
 Pure function. No I/O. See spec section 'Intent classification
-integration' for the design rationale.
+integration' and reproduce-agent spec §A7 for the rationale behind the
+TRIAGE predicate flip from "REQUIRED unless narrowly bypassed" to
+"REQUIRED iff bug-with-repro".
 """
 
 from __future__ import annotations
@@ -40,15 +44,22 @@ from openbot.dispatcher.classifier import (
 )
 from openbot.domain.workflows import Feature
 
-# Triage types that warrant skipping the sandbox when no repro info is
-# provided. ``type=bug`` without repro still goes through the sandbox
-# so the responder can attempt its own reproduction.
-_TRIAGE_BYPASS_TYPES_WITHOUT_REPRO: frozenset[str] = frozenset({"spam", "question"})
-
 # Chat intents that need no code grounding — handler can reply from
 # the classifier output alone (ask-for-clarification / out-of-scope
 # message).
 _CHAT_BYPASS_INTENTS: frozenset[str] = frozenset({"unclear", "out_of_scope"})
+
+
+def _triage_wants_sandbox(out: TriageClassifierOutput) -> bool:
+    """A7 predicate — only bug reports with repro info justify the sandbox.
+
+    The reproduce loop is the sole triage codepath in v0.1 that needs to
+    execute anything against the repo. Without ``has_reproduction_info``
+    the loop has nothing to chew on (the responder will ask for repro
+    steps instead), and non-bug types never enter the loop at all.
+    ``looks_like_spam`` short-circuits regardless of type/repro.
+    """
+    return out.type == "bug" and out.has_reproduction_info and not out.looks_like_spam
 
 
 def derive_sandbox_policy(
@@ -70,15 +81,13 @@ def derive_sandbox_policy(
     if classifier_output is None:
         return static
 
-    # Rule 3: per-feature dynamic rules.
+    # Rule 3: per-feature predicates.
     if feature is Feature.TRIAGE and isinstance(classifier_output, TriageClassifierOutput):
-        if classifier_output.looks_like_spam:
-            return SandboxPolicy.NO_SANDBOX
-        if (
-            classifier_output.type in _TRIAGE_BYPASS_TYPES_WITHOUT_REPRO
-            and not classifier_output.has_reproduction_info
-        ):
-            return SandboxPolicy.NO_SANDBOX
+        return (
+            SandboxPolicy.REQUIRED
+            if _triage_wants_sandbox(classifier_output)
+            else SandboxPolicy.NO_SANDBOX
+        )
 
     if (
         feature is Feature.CHAT

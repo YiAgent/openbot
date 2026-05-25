@@ -114,3 +114,119 @@ async def test_sticky_reply_multiple_updates_all_applied() -> None:
     assert len(adapter.replies) == 1
     assert len(adapter.comment_updates) == 3
     assert adapter.comment_updates[-1]["message"] == "✅ All done"
+
+
+# ── fallback_on_update_error ─────────────────────────────────────────────────
+#
+# Used by the reproduce responder (spec §A2 / R1.3): when PATCH fails or the
+# initial placeholder never landed, post a fresh comment so high-stakes results
+# (REPRODUCED outcomes with command + repro script) reach the audit row even
+# if the sticky channel is broken.
+#
+# The fallback is opt-in (default ``False``) so fix.py / chat.py callers keep
+# their existing silent-failure semantics — only the reproduce flow wants
+# louder degradation.
+
+
+@pytest.mark.asyncio
+async def test_sticky_reply_fallback_posts_new_comment_when_patch_fails() -> None:
+    """fallback_on_update_error=True + PATCH fails → fresh reply() carries the message."""
+
+    class PatchBrokenAdapter(FakeChannelAdapter):
+        async def update_comment(self, event, comment_id, message):  # type: ignore[override]
+            raise RuntimeError("PATCH failed")
+
+    adapter = PatchBrokenAdapter()
+    event = _event()
+
+    async with sticky_reply(
+        adapter, event, initial="⏳ Working…", fallback_on_update_error=True
+    ) as sticky:
+        await sticky.update("✅ Done")
+
+    # Two POSTs: the initial placeholder + the fallback message
+    assert len(adapter.replies) == 2
+    assert adapter.replies[0][1] == "⏳ Working…"
+    assert adapter.replies[1][1] == "✅ Done"
+    # PATCH attempt was made but raised, so no recorded update
+    assert adapter.comment_updates == []
+
+
+@pytest.mark.asyncio
+async def test_sticky_reply_fallback_posts_new_comment_when_initial_failed() -> None:
+    """fallback_on_update_error=True + initial POST failed → update() still posts."""
+
+    class FlakyAdapter(FakeChannelAdapter):
+        calls: int = 0
+
+        async def reply(self, event, message):  # type: ignore[override]
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("first reply unavailable")
+            return await super().reply(event, message)
+
+    adapter = FlakyAdapter()
+    event = _event()
+
+    async with sticky_reply(
+        adapter, event, initial="⏳ Working…", fallback_on_update_error=True
+    ) as sticky:
+        # Initial POST raised → comment_id is None
+        assert sticky.comment_id is None
+        # update() falls back to a fresh reply()
+        await sticky.update("✅ Done")
+
+    # Only the fallback POST landed (initial was rejected by the flaky adapter)
+    assert len(adapter.replies) == 1
+    assert adapter.replies[0][1] == "✅ Done"
+
+
+@pytest.mark.asyncio
+async def test_sticky_reply_fallback_itself_failing_still_silent() -> None:
+    """Even when both PATCH and the fallback reply() raise, caller does not see it."""
+
+    class FullyBrokenAdapter(FakeChannelAdapter):
+        post_count: int = 0
+
+        async def reply(self, event, message):  # type: ignore[override]
+            self.post_count += 1
+            if self.post_count == 1:
+                # initial placeholder succeeds so we exercise the PATCH path
+                return await super().reply(event, message)
+            raise RuntimeError("fallback POST also fails")
+
+        async def update_comment(self, event, comment_id, message):  # type: ignore[override]
+            raise RuntimeError("PATCH failed")
+
+    adapter = FullyBrokenAdapter()
+    event = _event()
+
+    async with sticky_reply(
+        adapter, event, initial="⏳ Working…", fallback_on_update_error=True
+    ) as sticky:
+        # Must not raise even though every channel is broken
+        await sticky.update("✅ Done")
+
+    # Only the initial placeholder landed; PATCH + fallback both raised
+    assert len(adapter.replies) == 1
+    assert adapter.comment_updates == []
+
+
+@pytest.mark.asyncio
+async def test_sticky_reply_no_fallback_by_default() -> None:
+    """Default behavior unchanged: PATCH failure stays silent, no new comment."""
+
+    class PatchBrokenAdapter(FakeChannelAdapter):
+        async def update_comment(self, event, comment_id, message):  # type: ignore[override]
+            raise RuntimeError("PATCH failed")
+
+    adapter = PatchBrokenAdapter()
+    event = _event()
+
+    # No fallback_on_update_error argument → uses False default
+    async with sticky_reply(adapter, event, initial="⏳ Working…") as sticky:
+        await sticky.update("✅ Done")
+
+    # Only the initial POST; PATCH failed silently with no fallback
+    assert len(adapter.replies) == 1
+    assert adapter.comment_updates == []
