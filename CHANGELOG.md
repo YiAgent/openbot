@@ -24,7 +24,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
   fails-safe by replacing the chunk with a fixed audit string.
 - New `safety` config section and `budget.per_task_cap_usd` field
   (PRD §4.5/§4.8).
-
 ### Fixed
 
 - Re-point broken closure-spec and evals-runtime-redesign links in
