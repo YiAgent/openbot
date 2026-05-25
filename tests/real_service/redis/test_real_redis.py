@@ -23,10 +23,10 @@ env = _env_or_skip("OPENBOT_REDIS_URL")
 class TestRealRedisDedup:
     async def test_fresh_delivery_is_fresh(self) -> None:
         """FRESH on first check_and_mark with a real Redis store."""
-        from openbot.infrastructure.persistence.dedup_redis import WebhookDedup
-
         import redis.asyncio as redis_async
+
         from openbot.domain.dedup import DedupOutcome
+        from openbot.infrastructure.persistence.dedup import WebhookDedup
 
         client = redis_async.from_url(env["OPENBOT_REDIS_URL"])
         try:
@@ -39,10 +39,10 @@ class TestRealRedisDedup:
 
     async def test_duplicate_delivery_is_duplicate(self) -> None:
         """DUPLICATE on second check_and_mark with a real Redis store."""
-        from openbot.infrastructure.persistence.dedup_redis import WebhookDedup
-
         import redis.asyncio as redis_async
+
         from openbot.domain.dedup import DedupOutcome
+        from openbot.infrastructure.persistence.dedup import WebhookDedup
 
         client = redis_async.from_url(env["OPENBOT_REDIS_URL"])
         try:
@@ -57,6 +57,7 @@ class TestRealRedisDedup:
     async def test_cancellation_signal_persists(self) -> None:
         """Signal then check returns True with a real Redis store."""
         import redis.asyncio as redis_async
+
         from openbot.infrastructure.persistence.cancellation_redis import RedisCancellation
 
         client = redis_async.from_url(env["OPENBOT_REDIS_URL"])
