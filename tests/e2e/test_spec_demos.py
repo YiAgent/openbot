@@ -46,8 +46,19 @@ def _phases(rows: list, /) -> list[WorkflowPhase]:
 # ───────────────────────── demo 01: issue triage ack ─────────────────────────
 
 
-async def test_demo_01_issue_opens_triage_acks(webhook_harness: WebhookHarness) -> None:
-    """Issue opens → STARTED + COMPLETED audit rows; one triage ACK reply."""
+async def test_demo_01_issue_opens_triage_acks(
+    webhook_harness: WebhookHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue opens → STARTED + COMPLETED audit rows; sticky thinking → ACK.
+
+    R4 replaced the single-reply ACK with a sticky-reply flow: a thinking
+    placeholder is posted first (``reply()``), then patched with the ACK
+    template (``update_comment()``) when no sandbox is present.
+    """
+    # Block the reproduce agent so this demo exercises the ack-only path.
+    from openbot.application.use_cases import triage as triage_mod
+
+    monkeypatch.setattr(triage_mod, "_should_run_reproduce", lambda ctx: False)
     event = webhook_harness.make_event(
         kind=EventKind.ISSUE_OPENED,
         delivery_id="d-triage-1",
@@ -58,11 +69,20 @@ async def test_demo_01_issue_opens_triage_acks(webhook_harness: WebhookHarness) 
     rows = await webhook_harness.audit_rows(delivery_id="d-triage-1")
     assert _phases(rows) == [WorkflowPhase.STARTED, WorkflowPhase.COMPLETED]
     assert all(row.workflow is Workflow.TRIAGE for row in rows)
+
+    # Sticky-reply: thinking placeholder posted first.
     assert len(webhook_harness.adapter.replies) == 1
-    repo, number, body = webhook_harness.adapter.replies[0]
+    repo, number, thinking_body = webhook_harness.adapter.replies[0]
     assert repo == webhook_harness.repo
     assert number == 7
-    assert "OpenBot received this issue" in body
+    assert "reproducing this issue" in thinking_body
+
+    # Then PATCH'd with the ACK template.
+    assert len(webhook_harness.adapter.comment_updates) == 1
+    update_repo, _comment_id, ack_body = webhook_harness.adapter.comment_updates[0]
+    assert update_repo == webhook_harness.repo
+    assert "OpenBot received this issue" in ack_body
+    assert "triage shortly" in ack_body
 
 
 # ───────────────────────── demo 02: PR review stub ack ─────────────────────────
@@ -430,7 +450,22 @@ async def test_demo_09_worker_restart_does_not_drop_message(
     )
     dispatch = dispatch_for(event)
     assert dispatch is not None, "dispatch_for returned None for ISSUE_OPENED"
-    spec = TaskSpec.from_event_and_dispatch(event, dispatch, initial_labels=[])
+    # Pre-computed classifier output so the worker takes Path (a) —
+    # rehydrate without calling the LLM (no API key in e2e env).  A
+    # "question" type ensures ``_triage_wants_sandbox`` returns False
+    # → ``derive_sandbox_policy`` returns NO_SANDBOX → the handler
+    # takes the ACK-only path without attempting to run the repro agent.
+    spec = TaskSpec.from_event_and_dispatch(
+        event,
+        dispatch,
+        initial_labels=[],
+        classifier_output={
+            "type": "question",
+            "severity_guess": "low",
+            "has_reproduction_info": False,
+            "looks_like_spam": False,
+        },
+    )
     entry_id = await enqueue_task_spec(redis, spec)
 
     # Simulate the "first consumer crashed mid-handler": read the entry
@@ -475,11 +510,18 @@ async def test_demo_09_worker_restart_does_not_drop_message(
         consumer_task.cancel()
         raise
 
-    # The triage workflow should have run exactly once.
+    # R4 sticky-reply flow: the handler first POSTs a thinking placeholder
+    # via reply(), then PATCHes it with the final ACK via update_comment()
+    # when the reproduce predicate returns False (no sandbox + question-type
+    # classifier output).  Both calls are recorded.
     assert len(adapter.replies) == 1
-    _, number, body = adapter.replies[0]
+    _, number, thinking_body = adapter.replies[0]
     assert number == 21
-    assert "OpenBot received this issue" in body
+    assert "OpenBot is reproducing this issue" in thinking_body
+
+    assert len(adapter.comment_updates) == 1
+    _, _, ack_body = adapter.comment_updates[0]
+    assert "OpenBot received this issue" in ack_body
 
     # Audit log: one STARTED+COMPLETED pair for the single dispatch.
     rows = await webhook_harness.audit_rows(delivery_id="d-worker-restart")

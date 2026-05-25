@@ -1,4 +1,12 @@
-"""Triage ACK workflow (PRD §4.1 vertical slice)."""
+"""Triage workflow — ACK-only branches (PRD §4.1).
+
+R4 added the sticky-comment reproduce flow on top of the original
+ACK-only slice. The matrix-style integration tests live in
+``test_triage_reproduce.py``; this file pins the pre-existing guards
+(wrong event kind, missing context, bot actor) plus the ACK path you
+hit when no classifier output / no sandbox handle is present (which
+is what every test in this file constructs).
+"""
 
 from __future__ import annotations
 
@@ -75,24 +83,33 @@ def _ctx(
 
 
 async def test_acks_issue_opened() -> None:
+    """Sticky-reply flow: thinking placeholder posted via reply(),
+    then ACK template patched via update_comment() when no sandbox is present."""
     adapter = _adapter()
     await maybe_run_triage(_ctx(adapter, _event()))
 
+    # First call: thinking-placeholder POST.
     adapter.reply.assert_awaited_once()
-    posted_event, posted_msg = adapter.reply.await_args.args
+    posted_event, thinking_msg = adapter.reply.await_args.args
     assert posted_event.issue_number == 7
-    assert "@yiwang" in posted_msg
-    assert "OpenBot" in posted_msg
-    assert "triage shortly" in posted_msg
+    assert "OpenBot is reproducing this issue" in thinking_msg
+
+    # Second call: ACK-template PATCH (no sandbox → ack_only branch).
+    adapter.update_comment.assert_awaited_once()
+    _, _, ack_msg = adapter.update_comment.await_args.args
+    assert "@yiwang" in ack_msg
+    assert "OpenBot" in ack_msg
+    assert "triage shortly" in ack_msg
 
 
 async def test_message_falls_back_when_actor_unknown() -> None:
+    """When actor is empty, the ACK template uses "there" as the fallback handle."""
     adapter = _adapter()
     await maybe_run_triage(_ctx(adapter, _event(actor="")))
 
-    _, msg = adapter.reply.await_args.args
-    # No "@" placeholder leftover; uses "there" as fallback.
-    assert "@there" in msg or "Hi @there" in msg
+    # The ACK template is delivered via update_comment in the sticky-reply flow.
+    _, _, ack_msg = adapter.update_comment.await_args.args
+    assert "@there" in ack_msg or "Hi @there" in ack_msg
 
 
 # ───── skip conditions ─────
@@ -278,13 +295,18 @@ async def test_acks_when_actor_type_missing() -> None:
 async def test_reply_failure_is_logged_not_raised(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """When the initial sticky-reply POST fails, the error is logged by
+    ``_lifecycle.sticky_reply`` (not the triage workflow) and the workflow
+    returns cleanly — background tasks must never surface as 5xx."""
     adapter = _adapter()
     adapter.reply = AsyncMock(side_effect=RuntimeError("boom"))
 
-    with caplog.at_level(logging.ERROR, logger="openbot.application.workflows.triage"):
+    with caplog.at_level(logging.ERROR, logger="openbot.application.use_cases._lifecycle"):
         # Must NOT raise — background tasks that 500 would be invisible to GitHub
         # but visible as nasty traceback in logs every time. Audit + drop instead.
         await maybe_run_triage(_ctx(adapter, _event()))
 
-    assert any(r.message == "triage_ack_failed" for r in caplog.records)
-    assert any(r.exc_info is not None for r in caplog.records if r.message == "triage_ack_failed")
+    assert any(r.message == "sticky_reply_initial_failed" for r in caplog.records)
+    assert any(
+        r.exc_info is not None for r in caplog.records if r.message == "sticky_reply_initial_failed"
+    )

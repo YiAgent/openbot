@@ -172,6 +172,12 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
                         "chat_freeform_post_failed",
                         extra={"delivery_id": event.delivery_id, "repo": event.repo},
                     )
+            message = await _generate_freeform_reply(
+                event=event,
+                user_request=command.body_after_mention,
+                run_id=run_id,
+                checkpointer=checkpointer,
+            )
         except Exception:
             _logger.exception(
                 "chat_freeform_failed",

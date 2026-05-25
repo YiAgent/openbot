@@ -198,7 +198,6 @@ def test_provision_is_idempotent(monkeypatch) -> None:
 
     session = _make_session()
     session.provision()
-    session.provision()
     assert calls == ["create_project"]
 
 

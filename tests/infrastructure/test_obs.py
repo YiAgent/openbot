@@ -20,6 +20,8 @@ Langfuse ``langfuse_agent_trace`` contracts:
 
 We mock the SDKs where network calls would otherwise occur — unit tests
 must not attempt DNS / TLS to real ingest endpoints.
+We mock the SDK in test (2) because we don't want unit tests to attempt
+DNS / TLS to a real Sentry ingest endpoint.
 """
 
 from __future__ import annotations
