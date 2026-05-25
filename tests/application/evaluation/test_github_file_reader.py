@@ -256,3 +256,19 @@ def _fake_pem() -> str:
         serialization.PrivateFormat.TraditionalOpenSSL,
         serialization.NoEncryption(),
     ).decode()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_read_file_strips_leading_slash_from_path() -> None:
+    """Agent may send '/packages/foo.ts'; leading slash must be stripped to avoid
+    a double-slash URL that GitHub 301-redirects (httpx won't follow by default)."""
+    path_with_slash = "/packages/core/CalendarManager.ts"
+    path_clean = "packages/core/CalendarManager.ts"
+    # Route is registered without the leading slash
+    respx.get(f"{_API}/repos/{_REPO}/contents/{path_clean}").mock(
+        return_value=Response(200, json={"content": _encoded("export {};"), "encoding": "base64"})
+    )
+    reader = GitHubFileReader(repo=_REPO, ref=_REF, token="ghp_test")
+    result = await reader.read_file(path_with_slash)
+    assert result == "export {};"

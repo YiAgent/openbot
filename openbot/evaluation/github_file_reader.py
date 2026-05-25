@@ -132,8 +132,13 @@ class GitHubFileReader:
         if not token:
             _logger.warning("GitHubFileReader.read_file: no credentials available; returning empty")
             return ""
-        url = f"{_API_BASE}/repos/{self.repo}/contents/{path}"
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        # Strip leading slash — the agent may send "/packages/foo.ts" but the
+        # Contents API path must be repo-relative without a leading slash.
+        # A leading slash produces a double-slash URL that GitHub 301-redirects
+        # to the numeric-id form; httpx does not follow redirects by default.
+        clean_path = path.lstrip("/")
+        url = f"{_API_BASE}/repos/{self.repo}/contents/{clean_path}"
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
             response = await client.get(url, params={"ref": self.ref}, headers=self._headers(token))
         if response.status_code == 404:
             return ""
@@ -182,7 +187,7 @@ class GitHubFileReader:
             q_parts.append(f"path:{path_glob}")
         q = " ".join(q_parts)
         url = f"{_API_BASE}/search/code?q={quote(q, safe='')}"
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
             response = await client.get(
                 url,
                 headers={
