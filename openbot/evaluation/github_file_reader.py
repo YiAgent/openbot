@@ -103,6 +103,16 @@ class GitHubFileReader:
             self._effective_token = self.token
         else:
             self._effective_token = await _mint_installation_token(self.repo)
+            if not self._effective_token:
+                _logger.warning(
+                    "GitHubFileReader: no credentials for repo=%r. "
+                    "Set GITHUB_TOKEN in Doppler (a classic PAT with no "
+                    "extra scopes reads any public repo at 5000 req/hr). "
+                    "The OpenBot GitHub App only covers repos where it is "
+                    "installed — external public benchmark repos like "
+                    "calcom/cal.com require a PAT.",
+                    self.repo,
+                )
         return self._effective_token
 
     def _headers(self, token: str) -> dict[str, str]:
