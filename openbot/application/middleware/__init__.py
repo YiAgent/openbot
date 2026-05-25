@@ -30,6 +30,11 @@ from openbot.application.middleware.cancel import (
     CancelLabelMiddleware,
     KillSwitchMiddleware,
 )
+from openbot.application.middleware.egress_scan import (
+    EgressScannedAdapter,
+    EgressSurface,
+    scan_egress_text,
+)
 from openbot.application.middleware.feature_toggle import FeatureToggleMiddleware
 from openbot.application.middleware.preflight import (
     Middleware,
@@ -49,6 +54,8 @@ __all__ = [
     "BudgetMiddleware",
     "CancelCommentMiddleware",
     "CancelLabelMiddleware",
+    "EgressScannedAdapter",
+    "EgressSurface",
     "FeatureToggleMiddleware",
     "ForkPRGateMiddleware",
     "KillSwitchMiddleware",
@@ -61,4 +68,5 @@ __all__ = [
     "announce_once",
     "run_preflight",
     "sanitized_event",
+    "scan_egress_text",
 ]

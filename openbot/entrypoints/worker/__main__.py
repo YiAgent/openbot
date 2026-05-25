@@ -24,6 +24,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from openbot import __version__
+from openbot.application.middleware import EgressScannedAdapter
 from openbot.core.logging import configure_root_logger
 from openbot.core.settings import Settings, get_settings
 from openbot.infrastructure.adapters.github import GitHubAdapter
@@ -95,10 +96,11 @@ async def _main() -> int:
 
     redis_client = make_client(settings.redis_url)
     auth = _build_auth(settings)
-    adapter = GitHubAdapter(
+    raw_adapter = GitHubAdapter(
         webhook_secret=settings.github_webhook_secret.get_secret_value(),
         auth=auth,
     )
+    adapter = EgressScannedAdapter(raw_adapter, action="redact")
 
     db_engine = None
     session_factory = None
@@ -162,7 +164,7 @@ async def _main() -> int:
             except TimeoutError:
                 _logger.warning("worker_shutdown_timeout_consumers_dropped")
 
-            await adapter.aclose()
+            await raw_adapter.aclose()
             if auth is not None:
                 await auth.aclose()
             if db_engine is not None:

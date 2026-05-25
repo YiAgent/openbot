@@ -101,6 +101,11 @@ dependencies = [
     # `_logger.info("event", extra={...})` calls emit the extras as
     # top-level JSON keys automatically.
     "python-json-logger>=3.1",
+    # Runtime egress safety scanner (PRD §4.8). Pinned exact: every release
+    # changes the verified-secret pattern set, and we want determinism in
+    # CI + Heroku slug. detect-secrets is pure-Python with one transitive
+    # dep (PyYAML) we already vendor.
+    "detect-secrets==1.5.0",
 ]
 
 [project.urls]

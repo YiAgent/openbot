@@ -20,6 +20,10 @@ class BudgetConfig:
     monthly_soft_cap_usd: Decimal
     monthly_alert_at_pct: int
     global_hard_kill_usd: Decimal
+    # Per-task ceiling enforced inside the agent loop. Distinct from
+    # `per_task[feature]` (which is a feature-scoped budget hint used by
+    # cost-meter dashboards): this is the hard runtime kill threshold.
+    per_task_cap_usd: Decimal = Decimal("1.50")
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +70,16 @@ class FeatureToggles:
 
 
 @dataclass(frozen=True, slots=True)
+class SafetyConfig:
+    """PRD §4.8 — runtime egress controls."""
+
+    # ``redact`` (default): replace verified secrets with
+    # ``<openbot:redacted-secret>`` and continue.
+    # ``block``: drop the entire bot message and post a single audit comment.
+    egress_action: Literal["redact", "block"] = "redact"
+
+
+@dataclass(frozen=True, slots=True)
 class EffectiveConfig:
     """Frozen view of `.openbot/config.yaml` merged with baked-in defaults.
 
@@ -81,4 +95,5 @@ class EffectiveConfig:
     model: ModelOverrides
     fork_pr: ForkPRConfig
     severity_threshold: SeverityThreshold
+    safety: SafetyConfig = field(default_factory=SafetyConfig)
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False, compare=False)
