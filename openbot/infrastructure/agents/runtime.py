@@ -129,11 +129,6 @@ def _build_standard_middleware(limits: AgentRunLimits) -> list[AgentMiddleware]:
             stack.append(
                 ToolCallLimitMiddleware(
                     thread_limit=limits.tool_call_limit,
-                    # "continue" blocks exceeded tools but lets the model make
-                    # one final call to produce the structured response.
-                    # "end" is avoided because it terminates the graph at a
-                    # tool-call node — before the model can emit the final
-                    # structured output — causing AgentStructuredOutputError.
                     exit_behavior="continue",
                 )
             )
@@ -239,16 +234,6 @@ class BaseDeepAgentRuntime:
             checkpointer=effective_checkpointer,
         )
 
-        # Langfuse reads "langfuse_trace_name" and "langfuse_session_id" from
-        # the LangChain run metadata dict (CallbackHandler source lines ~351-364).
-        # Setting them here — alongside the regular observability fields — keeps
-        # config assembly in one place and avoids a duplicate trace_metadata dict.
-        #
-        # langfuse_session_id = run_id groups all traces for the same logical job
-        # (e.g. all eval runs of the same sample, or all retries of one webhook)
-        # under a single Langfuse session while keeping each run's spans in its
-        # own trace.  This replaces the old deterministic trace_id approach, which
-        # caused every re-run of the same sample to merge into one trace.
         config = RunnableConfig(
             recursion_limit=profile.limits.recursion_limit,
             metadata={
@@ -261,9 +246,6 @@ class BaseDeepAgentRuntime:
                 "model": display_name(model),
                 "checkpoint_enabled": effective_checkpointer is not None,
                 "sandbox_present": request.sandbox is not None,
-                # Langfuse-specific: trace label and session grouping.
-                "langfuse_trace_name": (f"{profile.feature.value}-{profile.agent_name}"),
-                "langfuse_session_id": request.run_id or "",
                 **dict(request.metadata),
             },
         )
@@ -281,12 +263,6 @@ class BaseDeepAgentRuntime:
             lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
             if lf_callbacks:
                 config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
-        # Inject a fresh Langfuse callback so every agent run gets its own
-        # trace with all steps + tool calls visible. No-op when
-        # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
-        lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
-        if lf_callbacks:
-            config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
 
             invoke_coro = agent.ainvoke(
                 {"messages": [{"role": "user", "content": profile.user_message(request)}]},
