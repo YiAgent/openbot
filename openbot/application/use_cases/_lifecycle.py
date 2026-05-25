@@ -165,22 +165,46 @@ class _StickyReply:
     If the initial POST failed (e.g. auth not wired), ``comment_id`` is
     ``None`` and ``update`` is a silent no-op so callers never have to
     branch on it.
+
+    ``fallback_on_update_error`` (default ``False``) opts the caller into
+    *louder degradation* — when set, an update that has no placeholder
+    to patch, or whose PATCH raises, posts a fresh comment so the message
+    still lands. Even the fallback ``reply()`` keeps the silent-failure
+    contract: if it also raises, we log and return. Used by the reproduce
+    responder where losing the outcome row is worse than double-posting.
     """
 
     comment_id: int | None
     _adapter: Any
     _event: Any
+    fallback_on_update_error: bool = False
 
     async def update(self, message: str) -> None:
-        """Replace the comment body via PATCH. Swallows all errors."""
-        if self.comment_id is None:
+        """Replace the comment body via PATCH; optionally fall back to a new comment."""
+        if self.comment_id is not None:
+            try:
+                await self._adapter.update_comment(self._event, self.comment_id, message)
+                return
+            except Exception:
+                _logger.exception(
+                    "sticky_reply_update_failed",
+                    extra={"comment_id": self.comment_id},
+                )
+                if not self.fallback_on_update_error:
+                    return
+        elif not self.fallback_on_update_error:
+            # No placeholder + no fallback opt-in → behaviour pre-flag: no-op.
             return
+        # Either the initial POST failed (comment_id is None) or PATCH raised
+        # — in both cases the caller asked for a fallback, so try a fresh
+        # comment. A failure here is still swallowed: losing the audit row
+        # beats crashing the workflow body that produced it.
         try:
-            await self._adapter.update_comment(self._event, self.comment_id, message)
+            await self._adapter.reply(self._event, message)
         except Exception:
             _logger.exception(
-                "sticky_reply_update_failed",
-                extra={"comment_id": self.comment_id},
+                "sticky_reply_fallback_failed",
+                extra={"repo": getattr(self._event, "repo", None)},
             )
 
 
@@ -190,6 +214,7 @@ async def sticky_reply(
     event: UnifiedEvent,
     *,
     initial: str,
+    fallback_on_update_error: bool = False,
 ) -> AsyncGenerator[_StickyReply, None]:
     """Post a placeholder comment; yield a handle to update it in-place.
 
@@ -204,6 +229,10 @@ async def sticky_reply(
     logged and ``comment_id`` is set to ``None``.  Subsequent
     :meth:`_StickyReply.update` calls are then no-ops so the caller's logic
     continues without having to branch.
+
+    Pass ``fallback_on_update_error=True`` when the outcome message MUST
+    reach the channel even if the sticky path is broken (e.g. reproduce
+    responder); see :class:`_StickyReply` for the exact semantics.
     """
     comment_id: int | None = None
     try:
@@ -214,7 +243,12 @@ async def sticky_reply(
             "sticky_reply_initial_failed",
             extra={"repo": event.repo},
         )
-    yield _StickyReply(comment_id=comment_id, _adapter=adapter, _event=event)
+    yield _StickyReply(
+        comment_id=comment_id,
+        _adapter=adapter,
+        _event=event,
+        fallback_on_update_error=fallback_on_update_error,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
