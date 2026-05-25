@@ -184,9 +184,30 @@ async def test_returns_fix_outcome_when_agent_succeeds(monkeypatch: pytest.Monke
         "git_diff",
         "search_files",
     ]
-    assert captured["config"]["recursion_limit"] == 60
+    assert captured["config"]["recursion_limit"] == 600
     # Schema bridge wiring — pydantic class, not the dict shape.
     assert captured["response_format"].__name__ == "_FixOutcomeModel"
+
+
+async def test_fix_profile_limits_are_coding_agent_scale() -> None:
+    """Fix budgets must match real coding-agent loops, and the model
+    cap must exceed the tool cap so the tool middleware fires first
+    (its 'continue' exit_behavior is what allows a structured reply)."""
+    from openbot.infrastructure.agents.deepagents_fix import FixProfile
+
+    profile = FixProfile()
+    limits = profile.limits
+    assert limits.tool_call_limit is not None
+    assert limits.model_call_limit is not None
+    # Coding agents need real budgets — far above the previous 20/20 cap.
+    assert limits.tool_call_limit >= 60
+    assert limits.model_call_limit > limits.tool_call_limit, (
+        "model_call_limit must exceed tool_call_limit so the tool cap "
+        "(exit_behavior='continue') terminates the loop and lets the model "
+        "still emit the structured response."
+    )
+    # Recursion budget needs ~3 nodes per tool call plus middleware overhead.
+    assert limits.recursion_limit >= limits.tool_call_limit * 5
 
 
 async def test_includes_issue_context_in_prompt(monkeypatch: pytest.MonkeyPatch) -> None:

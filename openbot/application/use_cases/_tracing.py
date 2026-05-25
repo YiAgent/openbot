@@ -49,7 +49,7 @@ except ImportError:  # pragma: no cover
 # ── Langfuse ──────────────────────────────────────────────────────────────────
 
 try:
-    from langfuse import observe  # type: ignore[import-untyped]  # langfuse v3+
+    from langfuse import observe  # type: ignore[import-untyped]  # langfuse>=3.0.0
 except ImportError:  # pragma: no cover
     # langfuse is a declared runtime dependency (pyproject.toml); this
     # fallback is a safety net for stripped CI images only.

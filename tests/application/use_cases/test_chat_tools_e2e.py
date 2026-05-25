@@ -36,6 +36,12 @@ class _RecordingAdapter:
         self.replies.append(message)
         return {"id": 1}
 
+    async def update_comment(
+        self, _event: UnifiedEvent, comment_id: int | str, message: str
+    ) -> dict[str, Any]:
+        self.replies.append(message)
+        return {"id": comment_id}
+
     async def read_file(self, _event: UnifiedEvent, path: str) -> str:
         self.read_calls.append(path)
         return "config_loader.py: loads .openbot/config.yaml"

@@ -48,8 +48,18 @@ Rules:
 """
 
 _CHAT_LIMITS = AgentRunLimits(
-    recursion_limit=10,
-    model_call_limit=3,
+    # 100 mirrors the review profile headroom. Each LangGraph node (model
+    # call, router, tool dispatch, tool result) costs one recursion step.
+    # GLM-5.1 can take more internal steps than the previous model, so 30
+    # was too tight and triggered GraphRecursionError before model_call_limit
+    # could fire cleanly.
+    recursion_limit=100,
+    # deepagents makes 3-5 internal model calls (planning + reasoning +
+    # final response). The old limit of 3 triggered ModelCallLimitMiddleware
+    # exit_behavior="end" with a synthetic "Model call limits exceeded" reply
+    # before the useful response was produced. 10 gives the framework room
+    # while still bounding runaway loops.
+    model_call_limit=10,
     model_timeout_s=60,
     max_output_tokens=4_096,
 )

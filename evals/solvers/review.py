@@ -1,36 +1,38 @@
-"""Inspect solver wrapping the deepagents review provider (PRD §4.1).
+"""Inspect solver wrapping the production OpenBot review path (PRD §4.1).
 
-Input: PR diff string. Output: list[Finding] (file, line, body, severity).
-The @solver shim is at the bottom of this file.
+Calls ``openbot.evaluation.run_review_sample`` which exercises the real
+production review workflow end-to-end.
+
+Public surface kept stable:
+  - ``Finding`` TypedDict — the scorer (review_overlap.py) reads this shape.
+  - ``state.metadata["candidate_findings"]`` — list[Finding] for the scorer.
+  - ``state.metadata["candidate_findings_json"]`` — JSON string for trace export.
+  - ``state.metadata["agent_raw_output"]`` — summary text from ReviewFindings.
+
+File-fetching design:
+  The solver creates a ``GitHubFileReader`` from the sample's ``pr_url`` and
+  ``base_sha`` metadata and injects it into the eval runner.  This lets the
+  review agent's ``read_file`` / ``grep_repo`` tool calls hit the real GitHub
+  API at the correct base commit, without duplicating file-fetching logic in
+  the Inspect AI eval layer (which would violate the decoupling principle).
 """
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
-from typing import Any, Literal, TypedDict
+from typing import Literal, TypedDict
 
-from deepagents.backends.protocol import BackendProtocol
+from openbot.evaluation import run_review_sample
 
-from evals.agents.baseline import build_run_config, resolve_model
-from evals.agents.review import (
-    ReviewResponseModel,
-    build_review_agent,
-    build_review_user_message,
-)
-from evals.common.termination import assert_clean_termination
-from evals.common.usage import aggregate_provider_usage
-from evals.sandboxes import (
-    RepoSpec,
-    SandboxBackend,
-    create_bare_sandbox,
-    create_sandbox_for_sample,
+# Pattern: https://github.com/<owner>/<repo>/pull/<number>
+_PR_URL_RE = re.compile(
+    r"https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/pull/(?P<number>\d+)"
 )
 
 
 class Finding(TypedDict):
-    """Output shape — also referenced by `evals.scorers.review_overlap.Finding`."""
+    """Output shape — also referenced by ``evals.scorers.review_overlap.Finding``."""
 
     file: str
     line: int | None
@@ -38,323 +40,120 @@ class Finding(TypedDict):
     severity: Literal["low", "medium", "high"]
 
 
-def _normalize_severity(value: Any) -> Literal["low", "medium", "high"]:
-    s = str(value).lower().strip()
-    if s in {"low", "medium", "high"}:
-        return s  # type: ignore[return-value]
-    return "medium"
-
-
-def _coerce_findings(raw: Any) -> list[Finding]:
-    """Best-effort: pull a `findings` list out of whatever the agent returned."""
-    if isinstance(raw, dict) and "findings" in raw:
-        items = raw["findings"]
-    elif isinstance(raw, list):
-        items = raw
-    else:
-        return []
-    out: list[Finding] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        try:
-            out.append(
-                {
-                    "file": str(item["file"]),
-                    "line": int(item["line"]) if item.get("line") is not None else None,
-                    "body": str(item["body"]),
-                    "severity": _normalize_severity(item.get("severity", "medium")),
-                }
-            )
-        except (KeyError, TypeError, ValueError):
-            continue
-    return out
-
-
-def _extract_json_object(text: str) -> dict[str, Any] | None:
-    """Pull the LAST JSON object from `text` — agents sometimes prepend prose."""
-    matches = re.findall(r"\{(?:[^{}]|\{[^{}]*\})*\}", text, flags=re.DOTALL)
-    for blob in reversed(matches):
-        try:
-            obj = json.loads(blob)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict):
-            return obj
-    return None
-
-
-# Usage aggregation lives in evals.common.usage — sums across all AI
-# messages, matching LangSmith's trace-side aggregation.
-
-
-@dataclass(frozen=True)
-class ReviewResult:
-    """Both the raw agent reply and the structured findings parsed from it.
-
-    The raw text matters: the safety scorer (E2-T13) must scan the **whole**
-    response for canaries / forbidden patterns. If we only kept the parsed
-    findings, an attacker could leak a canary in prefatory prose and pass.
-
-    ``structured_present`` records whether the agent actually emitted a
-    schema-conforming payload (via deepagents' ``structured_response`` OR a
-    JSON object embedded in prose). When ``False`` but ``raw_text`` carries
-    substantive analysis, the caller runs the force-tool retry — that's the
-    specific failure mode we observed on review (long prose enumeration of
-    real defects, structured-output tool never called).
-    """
-
-    raw_text: str
-    findings: list[Finding] = field(default_factory=list)
-    provider_usage: dict[str, Any] | None = None
-    structured_present: bool = False
-
-
-def _findings_from_structured(payload: Any) -> list[Finding] | None:
-    """Pull normalized findings out of deepagents' ``structured_response``.
-
-    deepagents binds ``response_format=`` to the agent's terminal step via
-    langchain's ``AutoStrategy`` — the parsed Pydantic instance lives at
-    ``result["structured_response"]``. Returns ``None`` when the agent didn't
-    emit one (e.g. legacy stub agents in unit tests), so callers fall back to
-    the regex extractor without crashing.
-    """
-    if payload is None:
+def _parse_github_repo(pr_url: str) -> tuple[str, int] | None:
+    """Parse ``pr_url`` into ``(owner/repo, pr_number)`` or ``None`` if unrecognised."""
+    m = _PR_URL_RE.match(str(pr_url or ""))
+    if m is None:
         return None
-    if isinstance(payload, ReviewResponseModel):
-        as_dict = payload.model_dump()
-    elif isinstance(payload, dict):
-        as_dict = payload
-    else:
-        # Some langchain shapes return arbitrary objects; try `.model_dump()`
-        # before giving up so we don't lose a valid scorecard to a type check.
-        dump = getattr(payload, "model_dump", None)
-        if not callable(dump):
-            return None
-        as_dict = dump()
-    return _coerce_findings(as_dict)
+    owner = m.group("owner")
+    repo = m.group("repo")
+    number = int(m.group("number"))
+    return f"{owner}/{repo}", number
 
 
-def _collect_raw_text(messages: list[Any]) -> str:
-    """Concatenate all assistant message text for safety-scanner coverage."""
-    parts: list[str] = []
-    for msg in messages:
-        if getattr(msg, "type", None) != "ai":
-            continue
-        content = msg.content if hasattr(msg, "content") else str(msg)
-        if isinstance(content, list):
-            content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict))
-        parts.append(str(content))
-    return "\n".join(parts)
+def _domain_findings_to_eval(
+    findings: tuple,
+) -> list[Finding]:
+    """Convert domain Finding objects to the eval Finding dict format.
 
-
-def _parse_agent_result(result: Any) -> ReviewResult:
-    """Shared parser for both closed-form and sandbox-mode agent results."""
-    messages = result.get("messages", []) if isinstance(result, dict) else []
-    last_msg = messages[-1] if messages else None
-    text = _collect_raw_text(messages) if messages else ""
-    if not text and last_msg is not None:
-        # Defensive: legacy stub agents may not set a `type` attr on messages.
-        fallback = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
-        if isinstance(fallback, list):
-            fallback = "\n".join(b.get("text", "") for b in fallback if isinstance(b, dict))
-        text = str(fallback)
-
-    structured = result.get("structured_response") if isinstance(result, dict) else None
-    findings = _findings_from_structured(structured)
-    structured_present = findings is not None
-    if findings is None:
-        # Stub-agent / legacy path — extract JSON from the raw reply.
-        obj = _extract_json_object(text)
-        findings = _coerce_findings(obj) if obj else []
-        # JSON-in-prose counts as schema-equivalent: agent did emit the
-        # findings shape, just inline instead of via the structured tool.
-        if obj is not None:
-            structured_present = True
-
-    return ReviewResult(
-        raw_text=text,
-        findings=findings,
-        provider_usage=aggregate_provider_usage(messages),
-        structured_present=structured_present,
-    )
-
-
-def review_diff(diff: str, *, model: str | None = None) -> ReviewResult:
-    """Run the deep agent on a PR diff, return raw text + normalized findings.
-
-    Pure function (no inspect-ai imports) so it's directly callable in tests.
-
-    The preconfigured review agent lives under ``evals.agents.review``. This
-    helper keeps the legacy direct-call test surface.
+    Mappings:
+      domain.Finding.message  → eval Finding.body
+      domain severity "nit"   → eval severity "low"
     """
-    # Closed-form review: no backend, no tools. The agent reads the diff and
-    # emits findings — it never touches a shell. The shared baseline factory
-    # still applies (so the HarnessProfile that drops `write_todos` and
-    # `task` matches what the SWE-bench solver uses).
-    resolved_model = resolve_model(override=model)
-
-    agent = build_review_agent(model=resolved_model, sandbox_mode=False)
-    user_msg = build_review_user_message(diff=diff, sandbox_mode=False)
-    raw_result = agent.invoke({"messages": [{"role": "user", "content": user_msg}]})
-    # The baseline wrapper's structured_finalizer guarantees
-    # ``structured_response`` whenever the agent emitted any prose, so we
-    # check both gates here. Empty trace → wrapper already raised
-    # AgentTerminationError; clean wrapper return → schema is present.
-    assert_clean_termination(
-        raw_result,
-        requires_structured_response=True,
-        structured_response_type=ReviewResponseModel,
-    )
-    return _parse_agent_result(raw_result)
+    result: list[Finding] = []
+    for f in findings:
+        sev = str(f.severity)
+        # "nit" is a valid domain severity; scorers only know low/medium/high
+        if sev == "nit":
+            sev = "low"
+        result.append(
+            {
+                "file": f.file,
+                "line": f.line,
+                "body": f.message,
+                "severity": sev,
+            }
+        )
+    return result
 
 
-_PR_URL_RE = re.compile(r"github\.com/(?P<owner>[^/]+)/(?P<name>[^/]+)/pull/\d+")
-
-
-def _resolve_owner_repo(repo_field: Any, pr_url: Any) -> str | None:
-    """Derive a canonical ``owner/name`` slug for cloning.
-
-    Why this exists: the Martian review dataset stores ``repo`` as a
-    cosmetic slug (``cal_dot_com``) that is **not** a real GitHub path.
-    The real ``owner/name`` lives in ``pr_url``. We prefer ``repo`` only
-    when it already looks GitHub-shaped; otherwise parse the PR URL.
-    Returns ``None`` when neither yields a usable slug (caller falls back
-    to a bare sandbox).
-    """
-    if isinstance(repo_field, str) and "/" in repo_field and ".." not in repo_field:
-        return repo_field
-    if isinstance(pr_url, str):
-        m = _PR_URL_RE.search(pr_url)
-        if m:
-            return f"{m['owner']}/{m['name']}"
-    return None
-
-
-# ─── Inspect AI @solver shim ────────────────────────────────────────────────
-
-
-def deepagents_baseline_review_solver(
+def openbot_review_solver(
     *,
     model: str | None = None,
-    backend: BackendProtocol | None = None,
-    use_sandbox: bool = True,
-):  # type: ignore[no-untyped-def]
-    """Inspect AI ``@solver`` — deepagents review with sandbox + gh access.
-
-    Mirrors the swe_fix / swe_test pattern: the agent runs under an Inspect
-    per-sample sandbox via :class:`InspectSandboxBackend`, so deepagents
-    auto-attaches its file-aware toolset (``ls`` / ``read_file`` / ``grep``
-    / ``glob`` / ``write_file`` / ``edit_file`` / ``execute``). ``gh`` and
-    ``git`` are reachable through ``execute`` — the system prompt teaches
-    the agent which ``gh`` subcommands to reach for. The PR ``repo`` /
-    ``pr_url`` / ``pr_title`` from the sample metadata are surfaced in the
-    user message so the agent has canonical identifiers without needing to
-    parse the diff header.
+):
+    """Inspect AI solver shim — calls the production review responder.
 
     Args:
-        model: Optional explicit ``provider:model`` id. Falls back to
-            the shared ``OPENBOT_DEEPAGENTS_MODEL`` config, then to the
-            baseline fallback.
-        backend: Override sandbox backend (testing hook). Defaults to a
-            fresh :class:`InspectSandboxBackend` per sample.
-        use_sandbox: When ``False``, runs the closed-form ``review_diff``
-            path (no backend, no tools). Useful as a regression fallback
-            when no sandbox is configured on the Task.
+        model: Reserved for future model-routing hooks. Currently unused;
+               the production responder reads its model from Settings.
 
-    State shape after this solver runs:
-      - ``state.output.completion`` ← normalized findings JSON (stable
-        export / LangSmith surface).
-      - ``state.metadata["agent_raw_output"]`` ← full raw agent text
-        (for future safety / canary scans).
-      - ``state.metadata["candidate_findings"]`` ← parsed findings list
-        (for the review_overlap scorer).
-      - ``state.metadata["candidate_findings_json"]`` ← JSON-serialized
-        findings (legacy / trace export).
+    State keys written:
+      - ``candidate_findings``      list[Finding] for the overlap scorer.
+      - ``candidate_findings_json`` JSON string for trace export.
+      - ``agent_raw_output``        summary text from ReviewFindings.
     """
-    from inspect_ai.solver import Generate, Solver, TaskState, solver
-
-    resolved_model = resolve_model(override=model)
+    try:
+        from inspect_ai.solver import solver
+    except ImportError:
+        # inspect_ai is an optional eval dependency; defer the ImportError
+        # to call time so unit tests can import this module without it.
+        def solver(fn):  # type: ignore[assignment]
+            return fn
 
     @solver
-    def _solver() -> Solver:
-        async def _run(state: TaskState, _generate: Generate) -> TaskState:
-            diff = state.input_text
-            if not use_sandbox:
-                result = review_diff(diff, model=resolved_model)
-            else:
-                md = state.metadata or {}
-                repo = _resolve_owner_repo(md.get("repo"), md.get("pr_url"))
-                # base_sha is the PR base commit; upstream_commit is martian-CRB's
-                # snapshot SHA and must NOT be used for git checkout.
-                base_sha = md.get("base_sha")
-                if backend is not None:
-                    effective_backend = backend
-                elif repo and base_sha:
-                    # Production path: clone repo at PR base commit for full context.
-                    effective_backend = await create_sandbox_for_sample(
-                        repo_spec=RepoSpec(repo=str(repo), base_commit=str(base_sha)),
-                    )
-                else:
-                    # Bare fallback — sample has no repo identity (synthetic
-                    # tests, prompt-injection corpus, etc.). Agent still gets
-                    # a shell + scratch /workspace; diff in input is enough.
-                    effective_backend = await create_bare_sandbox()
-                owns_backend = backend is None
-                try:
-                    agent = build_review_agent(
-                        model=resolved_model,
-                        backend=effective_backend,
-                    )
-                    user_msg = build_review_user_message(
-                        diff=diff,
-                        repo=md.get("repo"),
-                        pr_url=md.get("pr_url"),
-                        pr_title=md.get("pr_title"),
-                        base_sha=base_sha,
-                    )
-                    sample_label = str(state.sample_id) if state.sample_id is not None else "anon"
-                    ls_config = build_run_config(
-                        sample_id=sample_label,
-                        dataset_version=md.get("dataset_version", "martian_2026w20"),
-                        solver_family=md.get("solver_family", "deepagents_baseline"),
-                        model=resolved_model,
-                        git_sha=md.get("git_sha"),
-                        extra_metadata={
-                            "repo": md.get("repo"),
-                            "pr_url": md.get("pr_url"),
-                        },
-                    )
-                    if isinstance(effective_backend, SandboxBackend):
-                        state.metadata["modal_sandbox_id"] = effective_backend.id
-                        state.metadata["modal_sha_fallback"] = effective_backend.used_sha_fallback
-                    raw_result = await agent.ainvoke(
-                        {"messages": [{"role": "user", "content": user_msg}]},
-                        config=ls_config,
-                    )
-                    # Structured output guaranteed by baseline's wrap_agent_with_finalizer.
-                    assert_clean_termination(
-                        raw_result,
-                        requires_structured_response=True,
-                        structured_response_type=ReviewResponseModel,
-                    )
-                    result = _parse_agent_result(raw_result)
-                finally:
-                    if owns_backend and isinstance(effective_backend, SandboxBackend):
-                        await effective_backend.aclose()
+    def _solver():
+        async def _run(state, _generate):
+            md = state.metadata or {}
+            diff = state.input_text or ""
+            sample_id = str(state.sample_id) if state.sample_id is not None else "anon"
 
-            state.metadata["candidate_findings"] = result.findings
-            state.metadata["candidate_findings_json"] = json.dumps(
-                {"findings": result.findings}, ensure_ascii=False
+            # Parse owner/repo and pr_number from pr_url; fall back to metadata
+            # fields when pr_url is absent (e.g. in unit tests).
+            pr_url = str(md.get("pr_url") or "")
+            parsed = _parse_github_repo(pr_url)
+            if parsed is not None:
+                github_repo, pr_number = parsed
+            else:
+                # Legacy / test path: use the metadata fields directly.
+                github_repo = str(md.get("repo", "unknown/repo"))
+                pr_number = int(md.get("pr_number") or 0)
+
+            # Build a live file reader when we have enough metadata to do so.
+            # This lets the agent's read_file / grep_repo tool calls hit the
+            # real GitHub API at the correct base commit rather than receiving
+            # empty strings from the default in-memory file map.
+            file_reader = None
+            base_sha = str(md.get("base_sha") or "")
+            if github_repo and base_sha:
+                from openbot.evaluation.github_file_reader import GitHubFileReader
+
+                file_reader = GitHubFileReader(repo=github_repo, ref=base_sha)
+
+            findings_obj = await run_review_sample(
+                repo=github_repo,
+                pr_number=pr_number,
+                pr_diff=diff,
+                run_id=sample_id,
+                file_reader=file_reader,
             )
-            state.metadata["agent_raw_output"] = result.raw_text
-            if result.provider_usage is not None:
-                state.metadata["provider_usage"] = result.provider_usage
-            # Keep the completion field stable and structured for eval exports
-            # and LangSmith experiment rows; raw prose lives in metadata.
-            state.output.completion = state.metadata["candidate_findings_json"]
+
+            eval_findings = _domain_findings_to_eval(findings_obj.findings)
+            findings_json = json.dumps({"findings": eval_findings}, ensure_ascii=False)
+
+            state.metadata["candidate_findings"] = eval_findings
+            state.metadata["candidate_findings_json"] = findings_json
+            state.metadata["agent_raw_output"] = findings_obj.summary
+            state.output.completion = findings_json
             return state
 
         return _run
 
     return _solver()
+
+
+__all__ = [
+    "Finding",
+    "_domain_findings_to_eval",
+    "_parse_github_repo",
+    "openbot_review_solver",
+]

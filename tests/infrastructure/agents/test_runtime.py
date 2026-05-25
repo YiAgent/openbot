@@ -333,3 +333,58 @@ async def test_runtime_observability_metadata_uses_display_name(
     assert ":" not in model_in_meta, (
         f"Metadata model should be display_name (no prefix), got {model_in_meta!r}"
     )
+
+
+async def test_runtime_soft_finalizes_when_structured_response_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the agent loop ends without a structured_response (e.g. middleware
+    truncated the graph), the runtime must run one extra ``with_structured_output``
+    pass so the profile still receives a schema-conforming object instead of
+    raising AgentStructuredOutputError."""
+    from pydantic import BaseModel, Field
+
+    import openbot.infrastructure.agents.runtime as mod
+
+    class _Schema(BaseModel):
+        ok: bool = Field(default=False)
+        note: str = Field(default="")
+
+    @dataclass
+    class _StructuredProfile(_FakeProfile):
+        response_schema: Any = _Schema
+
+        def parse_result(self, result: Mapping[str, Any]) -> _Schema:  # type: ignore[override]
+            structured = result.get("structured_response")
+            if structured is None:
+                raise AssertionError("runtime did not soft-finalize")
+            assert isinstance(structured, _Schema)
+            return structured
+
+    # Agent returns no structured_response — simulating ModelCallLimitMiddleware
+    # exit_behavior="end" path where a synthetic AIMessage replaces the
+    # response_format node.
+    fake_agent = _FakeAgent({"messages": [], "structured_response": None})
+
+    def fake_create(**_: Any) -> _FakeAgent:
+        return fake_agent
+
+    monkeypatch.setattr(mod, "create_deep_agent", fake_create)
+
+    # Stub chat model that exposes with_structured_output → ainvoke.
+    class _StubStructured:
+        async def ainvoke(self, _messages: Any) -> _Schema:
+            return _Schema(ok=True, note="finalized")
+
+    class _StubChatModel:
+        def with_structured_output(self, schema: Any) -> _StubStructured:
+            assert schema is _Schema
+            return _StubStructured()
+
+    monkeypatch.setattr(mod, "build_agent_chat_model", lambda *_a, **_kw: _StubChatModel())
+
+    result = await mod.BaseDeepAgentRuntime().run(_StructuredProfile(), _request())
+
+    assert isinstance(result, _Schema)
+    assert result.ok is True
+    assert result.note == "finalized"

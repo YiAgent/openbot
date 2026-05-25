@@ -1,27 +1,40 @@
-"""Sentry init contract tests.
+"""Observability init contract tests — Sentry + Langfuse.
 
-We don't validate Sentry SDK internals — those are upstream's job. We
-validate the two boundaries this codebase actually relies on:
-
+Sentry contracts:
   1. ``init_sentry`` with no DSN must be a silent no-op so local ``make
      dev`` and CI runs never need a Sentry project.
   2. ``init_sentry`` with a DSN must complete without raising, and must
      tag the hub with the component so a future webapp / worker error
      burst is distinguishable in the Sentry UI.
 
-We mock the SDK in test (2) because we don't want unit tests to attempt
-DNS / TLS to a real Sentry ingest endpoint.
+Langfuse ``get_langfuse_handler`` contracts:
+  3. Returns ``None`` when LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are absent.
+  4. Returns a ``CallbackHandler`` (truthy) when both keys are present.
+  5. Each call returns a **distinct** handler object (no shared state).
+  6. The handler is created with NO ``trace_context`` — nesting is handled by
+     ``langfuse_agent_trace()`` via OTel ContextVar, not by constructor args.
+
+Langfuse ``langfuse_agent_trace`` contracts:
+  7. Yields ``None`` and is a no-op when keys are absent.
+  8. Yields an observation object (truthy) when keys are present.
+
+We mock the SDKs where network calls would otherwise occur — unit tests
+must not attempt DNS / TLS to real ingest endpoints.
 """
 
 from __future__ import annotations
 
 import logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from sentry_sdk.integrations.logging import LoggingIntegration
 
 from openbot.core.settings import Settings
-from openbot.infrastructure.observability import init_sentry
+from openbot.infrastructure.observability import (
+    get_langfuse_handler,
+    init_sentry,
+    langfuse_agent_trace,
+)
 
 
 def test_init_sentry_is_noop_without_dsn() -> None:
@@ -112,3 +125,160 @@ def test_init_sentry_logs_sentry_initialised(caplog) -> None:  # type: ignore[no
 
     messages = [r.message for r in caplog.records]
     assert "sentry_initialised" in messages
+
+
+# ---------------------------------------------------------------------------
+# get_langfuse_handler — Langfuse CallbackHandler factory
+# ---------------------------------------------------------------------------
+
+_FAKE_PK = "pk-lf-test-public-key"
+_FAKE_SK = "sk-lf-test-secret-key"
+
+
+class _FakeCallbackHandler:
+    """Stand-in for langfuse.langchain.CallbackHandler in unit tests."""
+
+    def __init__(self, **kwargs: object) -> None:
+        self.init_kwargs = kwargs
+
+
+def _fake_langfuse_module(monkeypatch, fake_handler_cls: type = _FakeCallbackHandler) -> None:  # type: ignore[no-untyped-def]
+    """Patch langfuse.langchain.CallbackHandler with *fake_handler_cls*."""
+    fake_module = MagicMock()
+    fake_module.CallbackHandler = fake_handler_cls
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "langfuse.langchain",
+        fake_module,
+    )
+
+
+def test_get_langfuse_handler_returns_none_without_keys(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """No credentials → must return None so callers don't attach a broken handler."""
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    _fake_langfuse_module(monkeypatch)
+    assert get_langfuse_handler() is None
+
+
+def test_get_langfuse_handler_returns_none_with_only_public_key(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Partial credentials (public key only) → must return None."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    _fake_langfuse_module(monkeypatch)
+    assert get_langfuse_handler() is None
+
+
+def test_get_langfuse_handler_returns_handler_with_both_keys(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Both credentials present → must return a CallbackHandler instance."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
+    _fake_langfuse_module(monkeypatch)
+    handler = get_langfuse_handler()
+    assert isinstance(handler, _FakeCallbackHandler)
+
+
+def test_get_langfuse_handler_returns_distinct_instances(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Each call must return a *new* handler so concurrent requests don't
+    share state (mixing spans from different agent runs)."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
+    _fake_langfuse_module(monkeypatch)
+    h1 = get_langfuse_handler()
+    h2 = get_langfuse_handler()
+    assert h1 is not h2
+
+
+def test_get_langfuse_handler_no_trace_context(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Handler must NOT pass ``trace_context`` to CallbackHandler.
+
+    OTel context propagation via ``langfuse_agent_trace()`` is responsible for
+    nesting all LangGraph sub-spans under one root trace.  Passing
+    ``trace_context`` directly to the handler bypasses this mechanism and
+    causes ``ValueError: invalid literal for int() with base 16`` in the
+    Langfuse SDK (which parses the trace_id as a hex integer).
+
+    The handler should be created with no arguments so it reads the current
+    OTel ContextVar (set by ``langfuse.start_as_current_observation()``) at
+    call time.
+    """
+    captured_kwargs: list[dict] = []
+
+    class _CapturingHandler:
+        def __init__(self, **kwargs: object) -> None:
+            captured_kwargs.append(dict(kwargs))
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
+    _fake_langfuse_module(monkeypatch, fake_handler_cls=_CapturingHandler)
+
+    get_langfuse_handler()
+
+    assert len(captured_kwargs) == 1
+    kwargs = captured_kwargs[0]
+    # Must NOT inject trace_context — OTel ContextVar (from langfuse_agent_trace)
+    # is the correct mechanism for nesting sub-spans under a root trace.
+    assert "trace_context" not in kwargs or kwargs.get("trace_context") is None, (
+        "get_langfuse_handler() must not pass trace_context; "
+        "use langfuse_agent_trace() context manager to nest spans."
+    )
+
+
+# ---------------------------------------------------------------------------
+# langfuse_agent_trace — root trace context manager
+# ---------------------------------------------------------------------------
+
+
+def _fake_langfuse_sdk(monkeypatch) -> tuple[MagicMock, MagicMock]:  # type: ignore[no-untyped-def]
+    """Patch langfuse.Langfuse and langfuse.propagate_attributes.
+
+    Returns (mock_langfuse_instance, mock_obs) so tests can inspect calls.
+    """
+    mock_obs = MagicMock()
+    mock_obs.__enter__ = MagicMock(return_value=mock_obs)
+    mock_obs.__exit__ = MagicMock(return_value=False)
+
+    mock_lf_instance = MagicMock()
+    mock_lf_instance.start_as_current_observation.return_value = mock_obs
+
+    mock_lf_cls = MagicMock(return_value=mock_lf_instance)
+
+    mock_propagate = MagicMock()
+    mock_propagate_ctx = MagicMock()
+    mock_propagate_ctx.__enter__ = MagicMock(return_value=None)
+    mock_propagate_ctx.__exit__ = MagicMock(return_value=False)
+    mock_propagate.return_value = mock_propagate_ctx
+
+    fake_langfuse_mod = MagicMock()
+    fake_langfuse_mod.Langfuse = mock_lf_cls
+    fake_langfuse_mod.propagate_attributes = mock_propagate
+
+    monkeypatch.setitem(__import__("sys").modules, "langfuse", fake_langfuse_mod)
+    return mock_lf_instance, mock_obs
+
+
+def test_langfuse_agent_trace_noop_without_keys(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Without credentials the context manager must yield ``None`` and
+    must not attempt to contact Langfuse."""
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+
+    with langfuse_agent_trace(name="test", session_id="s1") as obs:
+        assert obs is None
+
+
+def test_langfuse_agent_trace_yields_observation_with_keys(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """With credentials the context manager must yield a truthy observation
+    and call ``start_as_current_observation`` with ``as_type="agent"``."""
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
+
+    mock_lf, _mock_obs = _fake_langfuse_sdk(monkeypatch)
+
+    with langfuse_agent_trace(name="review-review", session_id="run-123") as obs:
+        assert obs is not None
+
+    mock_lf.start_as_current_observation.assert_called_once()
+    call_kwargs = mock_lf.start_as_current_observation.call_args.kwargs
+    assert call_kwargs["as_type"] == "agent"
+    assert call_kwargs["name"] == "review-review"

@@ -39,10 +39,11 @@ if TYPE_CHECKING:
     from openbot.application.ports.channel_adapter import ChannelAdapterPort
     from openbot.domain.events import UnifiedEvent
 
-_SYSTEM_PROMPT = """You are OpenBot, a senior engineer. You will fix the bug \
-described in the GitHub issue below by editing files in the sandbox and \
-running tests until they pass. Return a JSON object matching the schema — \
-never plain text.
+_SYSTEM_PROMPT = """You are OpenBot, a senior coding agent operating in an \
+autonomous fix loop. You will fix the bug described in the GitHub issue \
+below by editing files in a sandboxed clone of the repository and running \
+tests until they pass. You MUST end your run by returning a JSON object \
+matching the schema — never plain text.
 
 Workflow:
 - Read the issue carefully. Form a hypothesis about which file(s) are wrong.
@@ -53,13 +54,37 @@ Workflow:
 - If tests fail, iterate: re-read code, refine the fix, re-run tests.
 - When tests pass, use `git_diff` to capture the final diff and return your structured answer.
 
-Tools available (total tool calls are budget-capped — stop iterating before you exhaust):
+Tools available:
 - `read_file(path)` — read a UTF-8 file from the sandbox working tree.
 - `write_file(path, content)` — overwrite or create a file. Always read first when modifying.
 - `list_files(path=".")` — list a directory's entries (non-recursive).
 - `run_command(command)` — run a shell command in the sandbox. Use this for tests and inspections.
 - `git_diff()` — return `git diff` against the base commit. Call this once near the end.
 - `search_files(pattern, path_glob="**/*")` — recursive grep (regex) in the working tree.
+
+Budget discipline (CRITICAL — read before you start):
+- You have a finite tool-call and model-call budget enforced by the runtime. \
+There is NO grace period after the budget is exhausted; if you keep calling \
+tools, the runtime will cut you off mid-thought and you will lose the ability \
+to record what you found.
+- Pace yourself. Aim for tight, intentional steps. Do not re-run the same \
+command speculatively, do not browse the repo aimlessly, and do not stack \
+exploratory `run_command` calls when one would do.
+- Budget the loop in three phases: (1) **understand** the bug from the issue \
+plus a small number of reads/searches; (2) **fix** with the smallest possible \
+edit; (3) **verify** by running the most targeted test you can identify. Do \
+not start phase 2 until you have a concrete file:line hypothesis. Do not \
+start phase 3 until you have actually edited code.
+- When you are nearing the budget (rough rule of thumb: when you have made \
+~70% of your apparent tool-call budget), STOP iterating, capture the current \
+state with `git_diff`, and return the structured object — even if tests \
+still fail. Set `tests_passed=false` and put the last failure tail in \
+`test_output`. A truthful partial answer is far more useful than being cut \
+off mid-tool-call with no answer at all.
+- If the runtime injects a message like "Tool call limit exceeded" or \
+"Model call limits exceeded", do NOT try to recover by calling more tools. \
+Immediately return the structured object with whatever information you \
+already have.
 
 Rules:
 - Make the smallest change that fixes the bug. Do not refactor unrelated code.
@@ -73,16 +98,32 @@ dialogue, or markdown prose outside the schema.
 - `files_changed` lists the repo-relative paths you wrote.
 - `test_output` should be the tail of the final test run (truncate yourself \
 to ~2000 chars; the use case will truncate further if needed for GitHub).
+- Never invent test results. If you did not run the tests, say so via \
+`tests_passed=false` and an empty or honest `test_output`.
 """
 
-# recursion_limit=60: fix loops with 20 tool calls visit ~50 LangGraph nodes
-# (ToolCall + ToolMessage + alternating LLM nodes). 60 gives headroom.
-# tool_call_limit=20: matches retired ToolBudget value; enforced by middleware.
+# Coding-agent scale budgets. Prior limits (tool=20 / model=20 / recursion=200
+# / wall=1800s) were set when fix-loops were closer to "single-shot patches"
+# than full agent loops. Real fix tasks need exploration + multiple test
+# iterations, so we move to coding-agent norms (cf. SWE-agent, OpenHands):
+#
+#   * tool_call_limit=80 — enough for a fix loop that browses, edits, and
+#     re-runs tests several times. Soft cap (exit_behavior="continue") so the
+#     model keeps the floor and produces the structured response after.
+#   * model_call_limit=120 — strictly greater than tool_call_limit so the
+#     tool cap fires first via "continue". The remaining ~40 calls are
+#     headroom for the model to plan, summarise, and emit the schema. If the
+#     model cap still fires, runtime._soft_finalize covers it.
+#   * recursion_limit=600 — each tool call burns ~3 LangGraph nodes (model →
+#     tool → model). 80 tools x 3 ~= 240 nodes; 600 leaves ample slack for
+#     internal subgraphs and middleware.
+#   * wall_seconds=3600 — 60-minute hard ceiling. SWE-bench fix loops with
+#     real test suites can run 20-30 minutes on a hot repo.
 _FIX_LIMITS = AgentRunLimits(
-    recursion_limit=60,
-    tool_call_limit=20,
-    model_call_limit=20,
-    wall_seconds=1800,  # 30-minute hard ceiling for fix loops
+    recursion_limit=600,
+    tool_call_limit=80,
+    model_call_limit=120,
+    wall_seconds=3600,
     model_timeout_s=300,
     max_retries=2,
     max_output_tokens=16_384,

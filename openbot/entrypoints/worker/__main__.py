@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from openbot import __version__
 from openbot.application.middleware import EgressScannedAdapter
+from openbot.application.sandbox_factory_deps import build_sandbox_factory
 from openbot.core.logging import configure_root_logger
 from openbot.core.settings import Settings, get_settings
 from openbot.infrastructure.adapters.github import GitHubAdapter
@@ -124,6 +125,7 @@ async def _main() -> int:
             # spam the log. The Event is the single source of truth.
             loop.add_signal_handler(sig, shutdown.set)
 
+        sandbox_factory = build_sandbox_factory(settings)
         consumers = [
             asyncio.create_task(
                 consume_loop(
@@ -133,6 +135,7 @@ async def _main() -> int:
                     consumer_name=f"consumer-{i}",
                     shutdown=shutdown,
                     agent_checkpointer=cp,
+                    sandbox_factory=sandbox_factory,
                 ),
                 name=f"openbot-consumer-{i}",
             )
@@ -170,6 +173,16 @@ async def _main() -> int:
             if db_engine is not None:
                 await db_engine.dispose()
             await redis_client.aclose()
+            # Flush any buffered Langfuse trace events before the process exits.
+            # The SDK batches events internally; without an explicit shutdown call
+            # the last few traces can be dropped on SIGTERM. No-op when Langfuse
+            # is not configured (keys absent → get_client() is a lightweight stub).
+            try:
+                from langfuse import get_client as _get_lf_client
+
+                _get_lf_client().shutdown()
+            except Exception:
+                _logger.debug("langfuse_shutdown_failed", exc_info=True)
             _logger.info("worker_stopped")
     return 0
 

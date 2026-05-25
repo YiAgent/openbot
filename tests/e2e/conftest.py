@@ -98,6 +98,9 @@ class RecordingGitHubAdapter(GitHubAdapter):
         # Slice-C fix loop — recorded write-backs for assertion in demo 03/10.
         self.branch_creates: list[tuple[str, str, str]] = []  # (repo, ref, sha)
         self.pr_creates: list[dict[str, Any]] = []  # POST /pulls
+        # Sticky-comment updates — in-place edits via PATCH /issues/comments/{id}.
+        # Demos that use the sticky pattern (fix, freeform chat) record here.
+        self.comment_updates: list[tuple[str, int, str]] = []  # (repo, comment_id, body)
         # Test-controlled issue dict returned by ``get_issue``. Defaults
         # to a minimal happy-path shape so the bot-assigned demos work
         # without extra setup; tests override via ``harness.adapter.fake_issue``.
@@ -117,6 +120,16 @@ class RecordingGitHubAdapter(GitHubAdapter):
         # only read `id`, so we return the minimum shape — anything else
         # would be lying about response stability.
         return {"id": 10_000 + len(self.replies)}
+
+    async def update_comment(
+        self,
+        event: UnifiedEvent,
+        comment_id: int,
+        message: str,
+    ) -> dict[str, Any]:
+        """Record an in-place comment edit (sticky UX — PATCH /issues/comments/{id})."""
+        self.comment_updates.append((event.repo, comment_id, message))
+        return {"id": comment_id}
 
     async def add_label(self, event: UnifiedEvent, *labels: str) -> list[dict[str, Any]]:
         self.labels_added.append((event.repo, labels))

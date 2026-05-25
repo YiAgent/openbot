@@ -85,6 +85,13 @@ _MAX_ATTEMPTS: Final = 3
 # entry before its retry history evaporates.
 _RETRY_TTL_SECONDS: Final = 7 * 86400
 
+# Hard wall-clock budget for a single handler execution.  PRD §4.3 allows
+# up to 45 min for the fix loop; add a 5 min grace margin.  When the
+# timeout fires, asyncio.wait_for cancels execute_handler which then
+# PATCHes the check run to ``conclusion=cancelled`` before re-raising
+# CancelledError — so the GitHub UI never shows a permanently-stuck check.
+_HANDLER_TIMEOUT_SECONDS: Final = 50 * 60  # 50 minutes
+
 
 def _retry_key(entry_id: str) -> str:
     return f"openbot:workflows:retries:{entry_id}"
@@ -98,6 +105,7 @@ async def _execute_task_spec(
     adapter: GitHubAdapter,
     session_factory: async_sessionmaker[AsyncSession] | None,
     agent_checkpointer: Any | None = None,
+    sandbox_factory: Any | None = None,
 ) -> None:
     """W1-W8: Process one TaskSpec v3 entry.
 
@@ -197,23 +205,88 @@ async def _execute_task_spec(
 
     try:
         try:
-            await execute_handler(
-                adapter=adapter,
-                event=event,
-                dispatch=new_dispatch,
-                config=config,
-                session_factory=session_factory,
-                redis=redis,
-                check_run_id=spec.check_run_id,
-                classifier_output=classifier_output,
-                agent_checkpointer=agent_checkpointer,
+            # Hard budget: asyncio.wait_for cancels execute_handler when the
+            # wall-clock limit is reached.  execute_handler's BaseException
+            # guard catches the resulting CancelledError and PATCHes the check
+            # run to ``conclusion=cancelled`` before re-raising — so the
+            # GitHub UI never shows a permanently-stuck check.  wait_for then
+            # converts the inner CancelledError to TimeoutError for us.
+            await asyncio.wait_for(
+                execute_handler(
+                    adapter=adapter,
+                    event=event,
+                    dispatch=new_dispatch,
+                    config=config,
+                    session_factory=session_factory,
+                    redis=redis,
+                    check_run_id=spec.check_run_id,
+                    classifier_output=classifier_output,
+                    agent_checkpointer=agent_checkpointer,
+                    sandbox_factory=sandbox_factory,
+                ),
+                timeout=_HANDLER_TIMEOUT_SECONDS,
             )
+        except asyncio.CancelledError:
+            # SUPERSEDE / explicit cancel / shutdown. ``execute_handler``
+            # already finalized the GitHub check run as ``cancelled`` and
+            # re-raised so this branch can XACK — letting the entry sit in
+            # the PEL would have reclaim re-run a deliberately-cancelled
+            # task ~60 s later. Cancellation is not a failure, so the DLQ
+            # is intentionally left alone.
+            _logger.info(
+                "queue_v3_entry_cancelled",
+                extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
+            )
+            await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
+            return
+        except TimeoutError:
+            # Budget exceeded — execute_handler already patched the check run
+            # as ``cancelled``.  XACK so the entry doesn't stay in the PEL
+            # and get reclaimed (a timeout is not a transient failure worth
+            # retrying with the same budget guard that just fired).
+            _logger.warning(
+                "queue_v3_handler_timed_out",
+                extra={
+                    "entry_id": entry_id,
+                    "delivery_id": spec.delivery_id,
+                    "timeout_seconds": _HANDLER_TIMEOUT_SECONDS,
+                },
+            )
+            await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
+            return
         except Exception:
             _logger.exception(
                 "queue_v3_execute_handler_escaped",
                 extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
             )
             if attempts >= _MAX_ATTEMPTS:
+                # Close the check run before DLQ-ing so the GitHub UI doesn't
+                # show a permanently-stuck "in_progress" check after all
+                # retries are exhausted.
+                if spec.check_run_id is not None:
+                    try:
+                        await adapter.update_check_run(
+                            spec.to_event(),
+                            spec.check_run_id,
+                            status="completed",
+                            conclusion="failure",
+                            output={
+                                "title": "Analysis Failed",
+                                "summary": (
+                                    f"OpenBot could not complete the `{spec.scenario}` "
+                                    "workflow after multiple attempts. The task has been "
+                                    "moved to the dead-letter queue."
+                                ),
+                            },
+                        )
+                    except Exception:
+                        _logger.exception(
+                            "check_run_dlq_update_failed",
+                            extra={
+                                "entry_id": entry_id,
+                                "check_run_id": spec.check_run_id,
+                            },
+                        )
                 await _ack_and_dlq(redis, entry_id, reason="max_attempts_v3")
             # Don't XACK — let the next reclaim cycle pick it up.
             return
@@ -276,6 +349,7 @@ async def consume_loop(
     shutdown: asyncio.Event | None = None,
     read_block_ms: int = _READ_BLOCK_MS,
     agent_checkpointer: Any | None = None,
+    sandbox_factory: Any | None = None,
 ) -> None:
     """One async consumer. Run N copies concurrently for parallelism.
 
@@ -302,6 +376,7 @@ async def consume_loop(
                 session_factory=session_factory,
                 consumer_name=consumer_name,
                 agent_checkpointer=agent_checkpointer,
+                sandbox_factory=sandbox_factory,
             )
             await _read_and_dispatch(
                 redis=redis,
@@ -310,6 +385,7 @@ async def consume_loop(
                 consumer_name=consumer_name,
                 read_block_ms=read_block_ms,
                 agent_checkpointer=agent_checkpointer,
+                sandbox_factory=sandbox_factory,
             )
         except asyncio.CancelledError:
             raise
@@ -340,6 +416,7 @@ async def _read_and_dispatch(
     consumer_name: str,
     read_block_ms: int = _READ_BLOCK_MS,
     agent_checkpointer: Any | None = None,
+    sandbox_factory: Any | None = None,
 ) -> None:
     """One XREADGROUP round."""
     response = await redis.xreadgroup(
@@ -368,6 +445,7 @@ async def _read_and_dispatch(
                 entry_id=_as_str(entry_id),
                 fields=fields,
                 agent_checkpointer=agent_checkpointer,
+                sandbox_factory=sandbox_factory,
             )
 
 
@@ -378,6 +456,7 @@ async def _reclaim_abandoned(
     session_factory: async_sessionmaker[AsyncSession] | None,
     consumer_name: str,
     agent_checkpointer: Any | None = None,
+    sandbox_factory: Any | None = None,
 ) -> None:
     """XAUTOCLAIM idle entries from dead consumers."""
     try:
@@ -409,6 +488,7 @@ async def _reclaim_abandoned(
             entry_id=_as_str(entry_id),
             fields=fields,
             agent_checkpointer=agent_checkpointer,
+            sandbox_factory=sandbox_factory,
         )
 
 
@@ -420,6 +500,7 @@ async def _process_entry(
     entry_id: str,
     fields: dict,
     agent_checkpointer: Any | None = None,
+    sandbox_factory: Any | None = None,
 ) -> None:
     """Deserialize TaskSpec v3 → dispatch → ack/dlq one entry."""
     blob = _extract_payload_blob(fields)
@@ -439,6 +520,7 @@ async def _process_entry(
         adapter=adapter,
         session_factory=session_factory,
         agent_checkpointer=agent_checkpointer,
+        sandbox_factory=sandbox_factory,
     )
 
 

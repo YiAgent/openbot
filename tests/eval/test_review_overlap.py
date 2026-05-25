@@ -121,21 +121,23 @@ def test_greedy_match_consumes_golden_at_most_once() -> None:
 
 
 def test_judge_is_called_through_locked_martian_model(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Judge must run through the resolver-driven model — wire test.
+    """Judge must run through the JudgeSettings-driven model — wire test.
 
     Asserts ``evals.scorers.review_judge.MARTIAN_JUDGE_MODEL_ID`` reflects
-    whatever the shared judge-model resolver chose, so callers downstream
-    (overlap scorer, task metadata, LangSmith experiment record) all see
-    the same id. Pre-v3 this pinned the literal ``claude-opus-4-5``; v3
-    moved the id to :func:`evals.common.judge_client.resolve_judge_model`
-    so per-gateway overrides work without touching code.
+    whatever :class:`evals.runtime.config.JudgeSettings` resolves, so callers
+    downstream (overlap scorer, task metadata, LangSmith experiment record)
+    all see the same id. Pre-v3 this pinned the literal ``claude-opus-4-5``;
+    v3 moved the id behind a resolver, and v5 collapsed the resolver into
+    ``JudgeSettings`` directly so per-gateway overrides work without
+    touching code.
     """
     import importlib
 
-    from evals.common import judge_client
+    from evals.runtime import config as runtime_config
     from evals.scorers import review_judge
 
-    monkeypatch.setenv("OPENBOT_REVIEW_JUDGE_MODEL_ID", "anthropic:test-judge-model")
+    monkeypatch.setenv("OPENBOT_REVIEW_JUDGE_MODEL_ID", "test-judge-model")
+    runtime_config.get_eval_config.cache_clear()
     importlib.reload(review_judge)
     try:
         seen_models: list[str] = []
@@ -145,11 +147,11 @@ def test_judge_is_called_through_locked_martian_model(monkeypatch) -> None:  # t
             return _verdict(match=False)
 
         compute_review_overlap([_f("a.py", 1, "g")], [_f("a.py", 1, "c")], judge_fn)
-        assert seen_models == ["anthropic:test-judge-model"]
+        assert seen_models == ["test-judge-model"]
     finally:
         # Restore module-level constant for downstream tests in this session.
         monkeypatch.delenv("OPENBOT_REVIEW_JUDGE_MODEL_ID", raising=False)
-        importlib.reload(judge_client)
+        runtime_config.get_eval_config.cache_clear()
         importlib.reload(review_judge)
 
 

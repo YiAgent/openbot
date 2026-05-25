@@ -4,7 +4,7 @@ This module intentionally keeps the **official Appendix D prompt body** from
 arXiv 2603.16124, but it is not a paper-reproduction scorer:
 
 - the runtime judge is the OpenBot development default
-  ``anthropic:claude-opus-4-7`` rather than the paper's ``GPT-5``;
+  ``claude-opus-4-7`` rather than the paper's ``GPT-5``;
 - the dev scorer makes a single judge call rather than the paper's 3-run
   average.
 
@@ -15,7 +15,7 @@ Locked surface (do not edit without bumping ``SWE_QA_JUDGE_VERSION`` and
 recording a docs entry under the eval PRD):
 
   - **Model**: paper Appendix D pins ``GPT-5``; this dev scorer intentionally
-    uses ``anthropic:claude-opus-4-7`` through the shared Anthropic client.
+    uses ``claude-opus-4-7`` through the shared Anthropic gateway.
   - **Prompt**: one user message containing the official Appendix D prompt text
     end-to-end, including the opening evaluator sentence plus the rubric /
     INPUT / OUTPUT / REQUIREMENT blocks.
@@ -36,11 +36,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_anthropic import ChatAnthropic
 from pydantic import BaseModel, Field
 
-from evals.common import config
-from evals.common.config import get_eval_config
-from evals.common.judge_client import get_judge_client, resolve_judge_model
+from evals.runtime.config import get_eval_config
 
 # Paper Appendix D, in order.
 SWE_QA_DIMENSIONS: tuple[str, ...] = (
@@ -53,33 +52,32 @@ SWE_QA_DIMENSIONS: tuple[str, ...] = (
 
 # Paper §3.2 Eq. (4) — RL reward weights. Surfaced as a derived metric only.
 SWE_QA_RL_WEIGHTS: tuple[float, ...] = (0.3, 0.2, 0.2, 0.1, 0.2)
-
-SWE_QA_JUDGE_VERSION: int = 3  # official single-message prompt + structured output
-
-# Paper Appendix D: "Model: GPT-5".
-SWE_QA_PAPER_JUDGE_MODEL: str = "openai/gpt-5"
-# Judge model id — resolved by the shared resolver so every judge in this
-# repo follows ``OPENBOT_JUDGE_MODEL_ID`` (with this judge's local override
-# ``OPENBOT_SWE_QA_JUDGE_MODEL`` taking precedence when set). This dev
-# scorer intentionally stays on the OpenBot-canonical Anthropic gateway —
-# recorded in JUDGE_DEVIATIONS below.
-SWE_QA_JUDGE_MODEL_ID: str = resolve_judge_model(
-    per_judge_env=config.SWE_QA_JUDGE_MODEL_ENV,
+# ─── Known deviations from the paper (arXiv 2603.16124v1) ────────────────────
+# Docstring-explained, kept explicit so every run's metadata is self-auditing.
+JUDGE_DEVIATIONS: tuple[str, ...] = (
+    "judge model is claude-opus-4-7 (paper uses GPT-5)",
+    "single judge call per sample (paper averages 3 runs to reduce variance)",
 )
+
+# Locked-surface version bump protocol: increment when any judge constant
+# (prompt, temperature, max_tokens, structured-output schema) changes and
+# record a docs/eval/judge-version-log.md entry.
+SWE_QA_JUDGE_VERSION: int = 1
+
 # Paper does not specify temperature / max_tokens. Use the deterministic
-# shared defaults from :mod:`evals.common.config` (matches every other
+# shared defaults from :mod:`evals.runtime.config` (matches every other
 # LLM-judge in this repo). Pinned via ``SWE_QA_JUDGE_VERSION`` — see the
 # locked-surface note in the module docstring.
-SWE_QA_JUDGE_TEMPERATURE: float = get_eval_config().judge.temperature
-SWE_QA_JUDGE_MAX_TOKENS: int = get_eval_config().judge.max_tokens
-
-# Known deviations from paper Appendix D — surfaced as a constant so audits
-# stay loud. Add to (don't remove from) this tuple when introducing new
-# divergences.
-JUDGE_DEVIATIONS: tuple[str, ...] = (
-    "single_call_not_3_run_avg",  # paper §4.1: paper averages 3 runs
-    "anthropic_gateway_default",  # dev scorer uses Anthropic, not paper GPT-5
-)
+#
+# Model id resolution (``OPENBOT_SWE_QA_JUDGE_MODEL`` →
+# ``OPENBOT_JUDGE_MODEL_ID`` → :data:`config.JUDGE_MODEL_DEFAULT`) flows
+# through :class:`JudgeSettings`. Env vars must be **bare** Anthropic ids
+# (e.g. ``claude-opus-4-7``); deepagents-style ``anthropic:`` /
+# ``anthropic/`` prefixes are no longer stripped.
+_judge_settings = get_eval_config().judge
+SWE_QA_JUDGE_TEMPERATURE: float = _judge_settings.temperature
+SWE_QA_JUDGE_MAX_TOKENS: int = _judge_settings.max_tokens
+SWE_QA_JUDGE_MODEL_ID: str = _judge_settings.swe_qa_model_id or _judge_settings.model_id
 
 
 # ─── Official Appendix D prompt text — DO NOT EDIT ────────────────────────
@@ -154,20 +152,6 @@ class SWEQAScorecard(BaseModel):
     reasoning: int = Field(ge=1, le=10, strict=True)
 
 
-def _get_client():  # type: ignore[no-untyped-def]
-    """Shared ``ChatAnthropic`` via :func:`evals.common.judge_client.get_judge_client`.
-
-    Honors :data:`SWE_QA_JUDGE_MODEL_ID`. The shared helper strips
-    ``anthropic:`` / ``anthropic/`` prefixes because this dev scorer is
-    intentionally Anthropic-only (see module docstring + ``JUDGE_DEVIATIONS``).
-    """
-    return get_judge_client(
-        model_id=SWE_QA_JUDGE_MODEL_ID,
-        temperature=SWE_QA_JUDGE_TEMPERATURE,
-        max_tokens=SWE_QA_JUDGE_MAX_TOKENS,
-    )
-
-
 def weighted_rl_reward(scores: dict[str, int]) -> float:
     """Paper §3.2 Eq. (4): ``r = w · s / 10``, range [0.1, 1.0].
 
@@ -200,7 +184,11 @@ def judge_answer(
         candidate=candidate,
     )
     scorecard = (
-        _get_client()
+        ChatAnthropic(
+            model=SWE_QA_JUDGE_MODEL_ID,
+            temperature=SWE_QA_JUDGE_TEMPERATURE,
+            max_tokens=SWE_QA_JUDGE_MAX_TOKENS,
+        )
         .with_structured_output(
             SWEQAScorecard,
             method="json_schema",

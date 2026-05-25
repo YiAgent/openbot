@@ -18,16 +18,15 @@ recording a `docs/eval/judge-version-log.md` entry):
                     and ``candidate`` substitutions — no extra
                     ``Severity:`` / ``Location:`` headers
 
-Model id (formerly hardcoded to ``claude-opus-4-5``) is now resolved via
-:func:`evals.common.judge_client.resolve_judge_model`, which reads
-``OPENBOT_REVIEW_JUDGE_MODEL_ID`` first, then the shared
-``OPENBOT_JUDGE_MODEL_ID``, then a fallback. This is required because the
-configured Anthropic-compatible gateway (``ANTHROPIC_BASE_URL``) routinely
-ships a curated subset of models — pinning a model the gateway doesn't
-expose makes every dev / smoke run crash with 400. The byte-identical
-prompt + temperature + max_tokens are still the load-bearing parts of the
-martian-CRB contract; the model id is recorded in the experiment
-metadata so historical runs are still reproducible.
+Model id (formerly hardcoded to ``claude-opus-4-5``) now flows through
+:class:`evals.runtime.config.JudgeSettings`: ``OPENBOT_REVIEW_JUDGE_MODEL_ID``
+wins, then the shared ``OPENBOT_JUDGE_MODEL_ID``, then
+:data:`config.JUDGE_MODEL_DEFAULT`. This is required because the configured
+Anthropic-compatible gateway (``ANTHROPIC_BASE_URL``) routinely ships a
+curated subset of models — pinning a model the gateway doesn't expose
+makes every dev / smoke run crash with 400. Env vars must be **bare**
+Anthropic ids (``claude-opus-4-7``); the older deepagents-style
+``anthropic:`` / ``anthropic/`` prefixes are no longer stripped.
 
 Upstream source: https://github.com/withmartian/code-review-benchmark
 (MIT licensed; commit 807d469 pinned by
@@ -39,11 +38,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langchain_anthropic import ChatAnthropic
 from pydantic import BaseModel, Field
 
-from evals.common import config
-from evals.common.config import get_eval_config
-from evals.common.judge_client import get_judge_client, resolve_judge_model
+from evals.runtime.config import get_eval_config
 
 logger = logging.getLogger(__name__)
 
@@ -58,20 +56,20 @@ logger = logging.getLogger(__name__)
 #     candidate=candidate)``); v3 wrapped them in open-swe-style
 #     ``Severity:`` / ``Location:`` / ``Comment:`` headers, which is a
 #     different prompt and produced different match decisions.
-# v3 had moved the model id to :func:`resolve_judge_model`; that resolution
-# is unchanged. Temperature and max_tokens are also unchanged.
+# v3 had moved the model id off a hardcoded constant onto a shared resolver;
+# the resolver is now collapsed into ``JudgeSettings`` directly. Resolution
+# semantics are unchanged (per-judge override → shared → hardcoded default).
 MARTIAN_JUDGE_VERSION: int = 4
-MARTIAN_JUDGE_MODEL_ID: str = resolve_judge_model(
-    per_judge_env=config.REVIEW_JUDGE_MODEL_ENV,
-)
+_judge_settings = get_eval_config().judge
+MARTIAN_JUDGE_MODEL_ID: str = _judge_settings.review_model_id or _judge_settings.model_id
 # Temperature + max_tokens are part of v4's locked surface (martian-CRB
 # contract). They happen to match the shared judge defaults in
-# :mod:`evals.common.config`; if those defaults ever drift, this constant
+# :mod:`evals.runtime.config`; if those defaults ever drift, this constant
 # must stay pinned to 0.0 / 4096 until ``MARTIAN_JUDGE_VERSION`` is bumped.
 # Upstream OpenAI call does not set ``max_tokens``; ``ChatAnthropic``
 # requires one, and 4096 is well above the short JSON verdict.
-MARTIAN_JUDGE_TEMPERATURE: float = get_eval_config().judge.temperature
-MARTIAN_JUDGE_MAX_TOKENS: int = get_eval_config().judge.max_tokens
+MARTIAN_JUDGE_TEMPERATURE: float = _judge_settings.temperature
+MARTIAN_JUDGE_MAX_TOKENS: int = _judge_settings.max_tokens
 
 # Byte-identical to upstream ``step3_judge_comments.py`` constants. Do not
 # edit either without bumping ``MARTIAN_JUDGE_VERSION`` and logging a
@@ -109,15 +107,6 @@ class MartianVerdict(BaseModel):
     reasoning: str = Field(..., description="One-sentence justification for the verdict.")
     match: bool = Field(..., description="True iff candidate identifies the same issue.")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Calibrated [0,1] confidence.")
-
-
-def _get_client():  # type: ignore[no-untyped-def]
-    """Shared ``ChatAnthropic`` via :func:`evals.common.judge_client.get_judge_client`."""
-    return get_judge_client(
-        model_id=MARTIAN_JUDGE_MODEL_ID,
-        temperature=MARTIAN_JUDGE_TEMPERATURE,
-        max_tokens=MARTIAN_JUDGE_MAX_TOKENS,
-    )
 
 
 def format_golden(golden: dict[str, Any]) -> str:
@@ -162,7 +151,11 @@ def judge_pair(golden: dict[str, Any], candidate: dict[str, Any]) -> dict[str, A
         {"role": "user", "content": prompt},
     ]
     verdict = (
-        _get_client()
+        ChatAnthropic(
+            model=MARTIAN_JUDGE_MODEL_ID,
+            temperature=MARTIAN_JUDGE_TEMPERATURE,
+            max_tokens=MARTIAN_JUDGE_MAX_TOKENS,
+        )
         .with_structured_output(MartianVerdict, method="json_schema")
         .with_config({"run_name": "martian_review_judge"})
         .invoke(messages)

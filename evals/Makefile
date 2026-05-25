@@ -82,7 +82,7 @@ endif
 #                  attempt past this; ``--retry-on-error`` then re-tries.
 # RETRY_ON_ERROR:  per-sample retry budget for errors the HTTP layer didn't
 #                  recover from. Independent from
-#                  ``OPENBOT_DEEPAGENTS_MODEL_MAX_RETRIES`` (HTTP layer).
+#                  ``OPENBOT_MODEL_MAX_RETRIES`` (HTTP layer).
 # FAIL_ON_ERROR:   threshold above which the eval **halts** instead of
 #                  pushing more empty-output noise to LangSmith. Inspect
 #                  accepts an integer (absolute error count) or a fraction
@@ -133,28 +133,28 @@ data: data-review data-chat data-fix data-test ## Publish all eval datasets safe
 data-refresh: data-review-refresh data-chat-refresh data-fix-refresh data-test-refresh ## Rebuild all eval datasets with --force
 
 data-review: ## Publish Martian review dataset to LangSmith
-	$(DOPPLER) $(PY) python -m evals.scripts.build_review_martian_dataset
+	$(DOPPLER) $(PY) python -m evals.data refresh review
 
 data-chat: ## Publish SWE-QA-Pro chat dataset to LangSmith
-	$(DOPPLER) $(PY) python -m evals.scripts.build_chat_swe_qa_pro_dataset
+	$(DOPPLER) $(PY) python -m evals.data refresh chat
 
 data-fix: ## Publish SWE-bench Verified LangSmith mirror
-	$(DOPPLER) $(PY) python -m evals.scripts.build_swe_bench_verified_dataset
+	$(DOPPLER) $(PY) python -m evals.data refresh fix
 
 data-test: ## Publish SWT-Bench Verified LangSmith mirror
-	$(DOPPLER) $(PY) python -m evals.scripts.build_swt_bench_verified_dataset
+	$(DOPPLER) $(PY) python -m evals.data refresh swt
 
-data-review-refresh: ## Rebuild Martian review dataset with --force
-	$(DOPPLER) $(PY) python -m evals.scripts.build_review_martian_dataset --force
+data-review-refresh: ## Rebuild Martian review dataset (idempotent re-collect + publish)
+	$(DOPPLER) $(PY) python -m evals.data refresh review
 
-data-chat-refresh: ## Rebuild SWE-QA-Pro chat dataset with --force
-	$(DOPPLER) $(PY) python -m evals.scripts.build_chat_swe_qa_pro_dataset --force
+data-chat-refresh: ## Rebuild SWE-QA-Pro chat dataset (idempotent re-collect + publish)
+	$(DOPPLER) $(PY) python -m evals.data refresh chat
 
-data-fix-refresh: ## Rebuild SWE-bench Verified LangSmith mirror with --force
-	$(DOPPLER) $(PY) python -m evals.scripts.build_swe_bench_verified_dataset --force
+data-fix-refresh: ## Rebuild SWE-bench Verified LangSmith mirror (idempotent re-collect + publish)
+	$(DOPPLER) $(PY) python -m evals.data refresh fix
 
-data-test-refresh: ## Rebuild SWT-Bench Verified LangSmith mirror with --force
-	$(DOPPLER) $(PY) python -m evals.scripts.build_swt_bench_verified_dataset --force
+data-test-refresh: ## Rebuild SWT-Bench Verified LangSmith mirror (idempotent re-collect + publish)
+	$(DOPPLER) $(PY) python -m evals.data refresh swt
 
 # ─── Local verification ─────────────────────────────────────────
 test: ## Run eval-focused pytest suite only
@@ -168,28 +168,28 @@ smoke: smoke-docker smoke-review smoke-fix smoke-test smoke-chat ## Run all impl
 smoke-docker: ## Verify DockerSandboxBackend end-to-end (local docker daemon, ~10 s, free)
 	cd .. && $(PY) python scripts/smoke_docker_backend.py
 
-smoke-review: ## Run review baseline smoke eval
-	$(call inspect_banner,review_martian_baseline_crb)
+smoke-review: ## Run OpenBot review eval (martian-CRB judge)
+	$(call inspect_banner,review_martian_openbot)
 	cd .. && $(DOPPLER) $(INSPECT) eval \
-		'evals/tasks/review_martian.py@review_martian_baseline_crb' \
+		'evals/tasks/review_martian.py@review_martian_openbot' \
 		--limit $(LIMIT) $(INSPECT_FLAGS)
 
-smoke-fix: ## Run SWE-bench fix baseline smoke eval
-	$(call inspect_banner,fix_swe_bench_verified_deepagents)
+smoke-fix: ## Run SWE-bench Verified fix eval
+	$(call inspect_banner,fix_swe_bench)
 	cd .. && $(DOPPLER) $(INSPECT) eval \
-		'evals/tasks/fix_swe_bench_verified.py@fix_swe_bench_verified_deepagents' \
+		'evals/tasks/fix_swe_bench.py@fix_swe_bench' \
 		--limit $(LIMIT) $(INSPECT_FLAGS)
 
-smoke-test: ## Run SWT-Bench test-generation baseline smoke eval
-	$(call inspect_banner,test_swt_bench_verified_deepagents)
+smoke-test: ## Run SWT-Bench Verified test-generation eval
+	$(call inspect_banner,test_swt_bench)
 	cd .. && $(DOPPLER) $(INSPECT) eval \
-		'evals/tasks/test_swt_bench_verified.py@test_swt_bench_verified_deepagents' \
+		'evals/tasks/test_swt_bench.py@test_swt_bench' \
 		--limit $(LIMIT) $(INSPECT_FLAGS)
 
-smoke-chat: ## Run SWE-QA-Pro chat "+Agent" smoke eval — paper Table 2 right column (Docker sandbox + repo clone + read tools)
-	$(call inspect_banner,chat_swe_qa_pro_openbot)
+smoke-chat: ## Run SWE-QA-Pro chat eval
+	$(call inspect_banner,chat_swe_qa)
 	cd .. && $(DOPPLER) $(INSPECT) eval \
-		'evals/tasks/chat_swe_qa_pro.py@chat_swe_qa_pro_openbot' \
+		'evals/tasks/chat_swe_qa.py@chat_swe_qa' \
 		--limit $(LIMIT) $(INSPECT_FLAGS)
 
 # ─── End-to-end SWT pipeline (smoke → grade → writeback) ────────
@@ -277,9 +277,9 @@ writeback-test: ## Writeback SWT harness verdicts → LangSmith swt_bench_pass_a
 		EXP_NAME="$(GRADE_EXPERIMENT)"; \
 	fi; \
 	printf '\033[36m▶ swt-bench writeback\033[0m %s → experiment %s\n' "$$GRADE_REPORT" "$$EXP_NAME"; \
-	cd .. && $(DOPPLER) $(PY) python -m evals.scripts.writeback_swt_grades \
-		--evaluation-result "$$GRADE_REPORT" \
-		--experiment-name "$$EXP_NAME" \
+	cd .. && $(DOPPLER) $(PY) python -m evals.data writeback swt \
+		--report "$$GRADE_REPORT" \
+		--experiment "$$EXP_NAME" \
 		$(if $(DRY_RUN),--dry-run)
 
 grade-test: ## Run vendored SWT-bench harness on remote docker (DOCKER_HOST) against GRADE_PREDICTIONS
@@ -422,9 +422,9 @@ writeback-fix: ## Writeback SWE harness verdicts → LangSmith swe_bench_pass_at
 		EXP_NAME="$(GRADE_FIX_EXPERIMENT)"; \
 	fi; \
 	printf '\033[36m▶ swe-bench writeback\033[0m %s → experiment %s\n' "$$GRADE_FIX_REPORT" "$$EXP_NAME"; \
-	cd .. && $(DOPPLER) $(PY) python -m evals.scripts.writeback_swe_grades \
-		--evaluation-result "$$GRADE_FIX_REPORT" \
-		--experiment-name "$$EXP_NAME" \
+	cd .. && $(DOPPLER) $(PY) python -m evals.data writeback fix \
+		--report "$$GRADE_FIX_REPORT" \
+		--experiment "$$EXP_NAME" \
 		$(if $(DRY_RUN),--dry-run)
 
 eval-fix: ## Full SWE-bench pipeline: agent run → offline grading → LangSmith writeback

@@ -6,11 +6,11 @@ It documents the code that exists today, not the full target-state described in 
 At a high level:
 
 - **Inspect AI** is the offline runner: it owns `Task`, `Solver`, `Scorer`, sample execution, and `.inspect/logs/...`.
-- **DeepAgents** is the current agent framework used by every implemented OpenBot-side solver.
+- **OpenBot product code** owns the agent framework. Eval solvers are thin Inspect adapters that call `openbot.evaluation.run_*_sample(...)`; the agent loop, sandbox lifecycle, and model routing live in `openbot/`.
 - **LangSmith** has two roles:
   - source-of-truth dataset storage for the `review` and `chat` evals;
   - tracing / experiment projection for all evals where wired.
-- **Local Docker** is the primary sandbox backend for agent-based evals (`fix`, `test`, `chat`). Each sample spins up its own container, clones the repo, and is torn down after the run.
+- **Sandbox** is provisioned by the OpenBot product factory (Daytona / Modal / Docker, selected via `OPENBOT_SANDBOX_BACKEND`). Eval code does not own sandboxes.
 
 ## Current architecture
 
@@ -38,27 +38,27 @@ flowchart LR
 
     subgraph Inspect["Inspect AI offline runner"]
         ReviewTask["review_martian_baseline_crb"]
-        ChatTask["chat_swe_qa_pro_openbot"]
-        FixTask["fix_swe_bench_verified_deepagents"]
-        TestTask["test_swt_bench_verified_deepagents"]
+        ChatTask["chat_swe_qa"]
+        FixTask["fix_swe_bench"]
+        TestTask["test_swt_bench (stub)"]
     end
 
-    subgraph Solvers["Implemented solvers"]
-        ReviewSolver["deepagents review\nclosed-form"]
-        ChatSolver["deepagents chat agent\n(+Agent variant)"]
-        FixSolver["deepagents fix\nDockerSandboxBackend"]
-        TestSolver["deepagents test\nDockerSandboxBackend"]
+    subgraph Solvers["Thin Inspect adapters → openbot.evaluation"]
+        ReviewSolver["solvers/review.py\n→ run_review_sample"]
+        ChatSolver["solvers/chat.py\n→ run_chat_sample"]
+        FixSolver["solvers/fix.py\n→ run_fix_sample"]
+        TestSolver["solvers/test_generation.py\n(unsupported stub)"]
     end
 
-    subgraph Sandbox["Per-sample execution"]
-        Docker["Local Docker sandbox\nper sample"]
+    subgraph Sandbox["OpenBot product sandbox factory"]
+        Backend["Daytona / Modal / Docker\nselected by OPENBOT_SANDBOX_BACKEND"]
     end
 
     subgraph Scorers["Scoring"]
-        ReviewScore["review overlap\nLLM judge -> P/R/F1"]
+        ReviewScore["review overlap\nLLM judge → P/R/F1"]
         ChatScore["SWE-QA-Pro 5-dim judge"]
         FixScore["prediction_exporter\n(offline grading)"]
-        TestScore["custom swt_bench_scorer"]
+        TestScore["prediction_exporter\n(reports unsupported)"]
     end
 
     Martian --> BuildReview --> LSDatasets
@@ -73,9 +73,9 @@ flowchart LR
     SWTBench --> TestTask
 
     ReviewTask --> ReviewSolver --> ReviewScore
-    ChatTask --> ChatSolver --> Docker --> ChatScore
-    FixTask --> FixSolver --> Docker --> FixScore
-    TestTask --> TestSolver --> Docker --> TestScore
+    ChatTask --> ChatSolver --> Backend --> ChatScore
+    FixTask --> FixSolver --> Backend --> FixScore
+    TestTask --> TestSolver --> TestScore
 
     ReviewSolver --> LSTraces
     ChatSolver --> LSTraces
@@ -90,10 +90,10 @@ flowchart LR
 
 | Surface | Task entry | Runtime dataset source | Solver | Sandbox | Scorer | Status |
 |---|---|---|---|---|---|---|
-| Review | `review_martian_baseline_crb` | LangSmith `martian_2026w20` | DeepAgents baseline review solver | none | Martian-compatible overlap scorer (`precision / recall / F1`) | implemented |
-| Fix | `fix_swe_bench_verified_deepagents` | HF `princeton-nlp/SWE-bench_Verified` | DeepAgents baseline fix solver | Local Docker | `prediction_exporter` (offline grading) | implemented |
-| Test generation | `test_swt_bench_verified_deepagents` | HF `eth-sri/SWT-bench_Verified_bm25_27k_zsb` | DeepAgents baseline test solver | Local Docker | custom `swt_bench_scorer` | implemented |
-| Chat / repo QA | `chat_swe_qa_pro_openbot` | LangSmith `chat_swe_qa_pro_v1` | DeepAgents Agent (+Agent) | Local Docker | SWE-QA-Pro 5-dim judge | implemented |
+| Review | `review_martian_baseline_crb` | LangSmith `martian_2026w20` | `evals/solvers/review.py` -> `openbot.evaluation.run_review_sample` | none | Martian-compatible overlap scorer (`precision / recall / F1`) | implemented |
+| Fix | `fix_swe_bench` | HF `princeton-nlp/SWE-bench_Verified` | `evals/solvers/fix.py` -> `openbot.evaluation.run_fix_sample` | OpenBot product factory (Daytona / Modal / Docker) | `prediction_exporter` (offline grading) | implemented |
+| Test generation | `test_swt_bench` | HF `eth-sri/SWT-bench_Verified_bm25_27k_zsb` | `evals/solvers/test_generation.py` (unsupported stub) | n/a | `prediction_exporter` (always reports unsupported) | stub |
+| Chat / repo QA | `chat_swe_qa` | LangSmith `chat_swe_qa_pro_v1` | `evals/solvers/chat.py` -> `openbot.evaluation.run_chat_sample` | OpenBot product factory | SWE-QA-Pro 5-dim judge | implemented |
 
 ## How each flow works
 
@@ -101,47 +101,56 @@ flowchart LR
 
 1. `build_review_martian_dataset.py` mirrors the pinned Martian benchmark into LangSmith.
 2. `evals/tasks/review_martian.py` materializes that LangSmith dataset into an Inspect `MemoryDataset`.
-3. `evals/solvers/review.py` runs a closed-form DeepAgents review prompt over each PR diff.
+3. `evals/solvers/review.py` calls `openbot.evaluation.run_review_sample(...)`, which exercises the production `DeepAgentsReviewResponder` over each PR diff.
 4. The solver stores parsed findings in `state.metadata["candidate_findings"]`.
 5. The task-local overlap scorer compares those findings with gold findings using the Martian-compatible judge and returns `precision`, `recall`, and `f1`.
 
 There is **no sandbox** in this flow because the model only reads a diff and emits review findings.
 
-### 2. Fix: `fix_swe_bench_verified_deepagents`
+### 2. Fix: `fix_swe_bench`
 
 1. The task loads the SWE-bench dataset from HuggingFace.
-2. `DockerSandboxBackend` (local Docker) clones the repo at the base commit into `/workspace`.
-3. DeepAgents baseline fix solver edits the code using its native tools.
+2. The OpenBot product sandbox factory provisions a sandbox cloned at `base_commit` (Daytona by default; Modal / Docker swappable via `OPENBOT_SANDBOX_BACKEND`).
+3. `evals/solvers/fix.py` calls `openbot.evaluation.run_fix_sample(...)`, which exercises the production `DeepAgentsFixResponder`.
 4. `prediction_exporter` captures the `git diff` and appends it to `evals/outputs/.../*.predictions.jsonl`.
 5. **Real grading is offline** via the official SWE-bench Docker harness.
 
-### 3. Test generation: `test_swt_bench_verified_deepagents`
+### 3. Test generation: `test_swt_bench`
 
 1. The task loads the SWT-Bench Verified dataset.
-2. Similar to Fix, it uses `DockerSandboxBackend` to host the agent.
-3. The custom `swt_bench_scorer()` runs inside the same sandbox to validate the regression test.
+2. The solver is currently a stub: it emits an empty `SwtBenchPrediction` with `unsupported=true` until OpenBot product code grows a test-generation responder.
+3. The vendored SWT-Bench harness (`evals/third_party/swt_bench/`) is still wired for offline grading once a real solver lands.
 
 ### 4. Chat / repo QA: `chat_swe_qa_pro_openbot`
 
+### 4. Chat / repo QA: `chat_swe_qa`
+
 1. `build_chat_swe_qa_pro_dataset.py` mirrors SWE-QA-Pro-Bench into LangSmith.
 2. The task loads it from LangSmith.
-3. The solver uses the preconfigured SWE-QA agent built on `evals.agents.baseline`.
-4. Each sample spins up a `DockerSandboxBackend` where the repo is cloned.
+3. `evals/solvers/chat.py` calls `openbot.evaluation.run_chat_sample(...)`, which exercises the production `DeepAgentsChatResponder`.
+4. The OpenBot product sandbox factory provisions a sandbox where the repo is cloned.
 5. The agent uses `ls`, `grep`, `read_file` to browse the code before answering.
 6. `swe_qa_pro_judge_scorer()` calls the 5-dimension judge for scoring.
 
 ## Sandbox boundary
 
-The repo currently uses **Local Docker** for all agent-based evals:
+The eval solvers themselves do **not** own a sandbox. They obtain one
+from the OpenBot product factory
+(`openbot.application.sandbox_factory_deps.build_sandbox_factory`) and
+pass it to `openbot.evaluation.run_fix_sample(...)`:
 
 ```text
-DeepAgents solver
-  -> DockerSandboxBackend
-  -> Local Docker container
+Inspect Task
+  -> evals/solvers/fix.py (thin adapter)
+  -> openbot.evaluation.run_fix_sample(sandbox=<from openbot product factory>)
+  -> Daytona / Modal / Docker backend (selected via OPENBOT_SANDBOX_BACKEND)
 ```
 
-Inspect AI owns the Task orchestration, but **DeepAgents owns the sandbox lifecycle** for these tasks.
-The sandbox is created by the solver at the start of each sample and destroyed at the end.
+Inspect AI owns the Task orchestration; **OpenBot owns the sandbox
+lifecycle**. This is the inversion that motivated the Phase 1/2
+refactor: evals are no longer a parallel implementation of the agent
+loop — they call the same code path production triage/review/fix
+agents do.
 
 ## LangSmith behavior
 
@@ -154,56 +163,56 @@ There are three distinct LangSmith integrations in the current code:
    - mirror-only storage for `test_swt_bench_verified`
 
 2. **Trace routing**
-   - `evals.agents.langsmith.configure_tracing_for_dataset(...)` enables LangSmith tracing
+   - `evals.inspect.langsmith.configure_tracing_for_dataset(...)` enables LangSmith tracing
    - `LANGSMITH_EVAL_PROJECT` is the single project override for eval agent and judge traces
 
 3. **Experiment / feedback projection**
-   - `evals.agents.langsmith.LangSmithExperiment.wrap(...)` projects per-sample SWE-bench / SWT-Bench results into LangSmith Experiment projects
+   - `evals.runtime.langsmith.LangSmithExperiment.wrap(...)` projects per-sample SWE-bench / SWT-Bench results into LangSmith Experiment projects
    - `swe_qa_pro_judge_scorer()` attaches per-dimension feedback to the live LangSmith trace
 
 ## Directory map
 
 ```text
 evals/
-├── agents/
-│   ├── baseline.py                 # shared DeepAgents/LangChain/sandbox baseline
-│   ├── convergence_middleware.py   # shared agent loop convergence guards
-│   ├── structured_finalizer.py     # shared structured-output finalizer
-│   ├── langsmith.py                # trace routing + Inspect -> LangSmith Experiment bridge
-│   ├── langsmith_feedback.py       # shared Feedback config helper
-│   ├── review.py                   # preconfigured review agent
-│   ├── fix.py                      # preconfigured SWE-bench fix agent
-│   ├── test_generation.py          # preconfigured SWT-Bench test agent
-│   └── chat.py                     # preconfigured SWE-QA-Pro chat agent
-├── common/
-│   ├── datasets.py                  # LangSmith dataset -> Inspect MemoryDataset
-│   ├── prediction_export.py         # shared prediction export helpers
-│   ├── predictions.py               # structured prediction models
-│   ├── termination.py               # shared solver termination checks
-│   └── usage.py                     # provider usage aggregation
+├── runtime/                            # Inspect-side glue (was common/ + inspect/)
+│   ├── config.py                       # eval-only settings: judge model, paths, LS routing
+│   ├── datasets.py                     # LangSmith Example -> Inspect Sample
+│   ├── hf_datasets.py                  # HuggingFace row -> Inspect Sample
+│   ├── langsmith.py                    # trace routing + Inspect -> LangSmith Experiment bridge
+│   ├── environment.py                  # build_export_experiment / git_sha / model label
+│   ├── predictions.py                  # SweBenchPrediction / SwtBenchPrediction / SweQaProAnswer
+│   └── prediction_export.py            # @scorer that appends to predictions.jsonl
+├── solvers/                            # thin Inspect adapters calling openbot.evaluation
+│   ├── review.py                       # -> openbot.evaluation.run_review_sample
+│   ├── fix.py                          # -> openbot.evaluation.run_fix_sample
+│   ├── chat.py                         # -> openbot.evaluation.run_chat_sample
+│   └── test_generation.py              # stub: emits unsupported-capability prediction
+├── tasks/                              # Inspect AI @task definitions
+│   ├── review_martian.py
+│   ├── fix_swe_bench.py
+│   ├── test_swt_bench.py
+│   └── chat_swe_qa.py
 ├── scorers/
-│   ├── review_overlap.py            # review overlap math
-│   ├── swt_bench_scorer.py          # SWT-Bench Success metric
-│   └── swe_qa_pro.py                # SWE-QA-Pro judge wrapper
-├── solvers/
-│   ├── review.py                    # review baseline
-│   ├── swe_fix.py                   # SWE-bench fixing baseline
-│   ├── swe_test.py                  # SWT-Bench test-writing baseline
-│   └── swe_qa.py                    # SWE-QA-Pro agent-based solver
-├── sandboxes/
-│   ├── docker_backend.py            # Local Docker sandbox implementation
-│   └── repo_setup.py                # Clone / Checkout logic
+│   ├── review_overlap.py               # review overlap math
+│   ├── review_judge.py                 # Martian-CRB LLM-as-judge
+│   ├── swe_qa_judge.py                 # SWE-QA-Pro 5-dim judge
+│   └── swe_qa_pro.py                   # @scorer wrapping the 5-dim judge
 ├── scripts/
 │   ├── build_review_martian_dataset.py
 │   ├── build_chat_swe_qa_pro_dataset.py
 │   ├── build_swe_bench_verified_dataset.py
-│   └── build_swt_bench_verified_dataset.py
-└── tasks/
-    ├── review_martian.py
-    ├── fix_swe_bench_verified.py
-    ├── test_swt_bench_verified.py
-    └── chat_swe_qa_pro.py
+│   ├── build_swt_bench_verified_dataset.py
+│   ├── writeback_swe_grades.py         # offline SWE-bench grade -> LangSmith
+│   └── writeback_swt_grades.py         # offline SWT-Bench grade -> LangSmith
+└── third_party/
+    └── swt_bench/                      # vendored SWT-Bench Docker harness
+        └── _docker_ssh.py               # macOS-friendly Docker-over-SSH shim
 ```
+
+The sandbox lifecycle (`DaytonaSandboxBackend`, `DockerSandboxBackend`,
+`ModalSandboxBackend`) is **not** an eval concern — it lives in
+`openbot/infrastructure/sandboxes/` and the eval solver receives one
+through the OpenBot product factory.
 
 ## Makefile entry points
 
@@ -259,8 +268,8 @@ Tunables:
 make -C evals smoke LIMIT=3
 
 # change coding-model ids without editing the Makefile
-OPENBOT_DEEPAGENTS_MODEL=mimo-v2.5 make -C evals smoke-fix
-OPENBOT_DEEPAGENTS_MODEL=mimo-v2.5 make -C evals smoke-test
+OPENBOT_MODEL=mimo-v2.5 make -C evals smoke-fix
+OPENBOT_MODEL=mimo-v2.5 make -C evals smoke-test
 
 # point the viewer at Makefile-produced smoke logs or a different port
 make -C evals view-open VIEW_LOG_DIR=evals/logs VIEW_OUTPUT_DIR=evals/logs-www
@@ -276,18 +285,21 @@ resume.
 
 ### Layer 1 — HTTP-client timeout + retries (per request)
 
-Every `deepagents` LLM call is constructed through `build_chat_model(...)`
-in [`evals/agents/baseline.py`](agents/baseline.py),
+Every LLM call is constructed through `build_agent_chat_model(...)` in
+[`openbot/infrastructure/agents/runtime.py`](../openbot/infrastructure/agents/runtime.py),
 which sets explicit `timeout` and `max_retries` on the provider httpx
 client. Defaults: **90 s timeout, 3 retries** on retryable HTTP errors
-(429 / 5xx / connection drops).
+(429 / 5xx / connection drops). Eval solvers inherit this exactly
+because they call the same `openbot.evaluation.run_*_sample` path
+production agents use — no parallel chat-model construction lives in
+`evals/`.
 
 ```bash
 # per-request HTTP timeout — applies to every model call
-OPENBOT_DEEPAGENTS_MODEL_TIMEOUT_S=60 make -C evals smoke-review
+OPENBOT_MODEL_TIMEOUT_S=60 make -C evals smoke-review
 
 # HTTP-layer retry count for transient errors (429 / 5xx / network)
-OPENBOT_DEEPAGENTS_MODEL_MAX_RETRIES=5 make -C evals smoke-review
+OPENBOT_MODEL_MAX_RETRIES=5 make -C evals smoke-review
 ```
 
 ### Layer 2 — Inspect per-sample resilience

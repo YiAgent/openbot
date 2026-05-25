@@ -31,13 +31,26 @@ from openbot.infrastructure.agents.profiles import (
     SandboxRequirement,
 )
 from openbot.infrastructure.llm.model_router import primary_model_for
-from openbot.infrastructure.observability import get_langfuse_handler
+from openbot.infrastructure.observability import get_langfuse_handler, langfuse_agent_trace
 
 if TYPE_CHECKING:
     from langchain.agents.middleware import AgentMiddleware
     from langchain_core.language_models import BaseChatModel
+    from langchain_core.messages import BaseMessage
 
 _logger = logging.getLogger(__name__)
+
+# Single budget-finalize prompt reused across profiles. Placed at module
+# scope so it appears in tracing payloads under a stable name and stays
+# easy to grep when tuning.
+_BUDGET_FINALIZE_INSTRUCTION = (
+    "BUDGET REACHED. Stop calling tools. Using ONLY the information already "
+    "gathered in this conversation, emit one final response that conforms "
+    "exactly to the required schema. If the work is incomplete, set the "
+    "appropriate failure / partial fields in the schema (e.g. tests_passed=false, "
+    "include the last test_output you saw, list any files you actually edited). "
+    "Do not invent results you did not observe. Return the structured object now."
+)
 
 _REGISTERED_MODELS: set[str] = set()
 
@@ -89,7 +102,22 @@ def _register_harness_profile(model: str) -> None:
 
 
 def _build_standard_middleware(limits: AgentRunLimits) -> list[AgentMiddleware]:
-    """Standard safety middleware: budget guard → repetition guard → tool cap → model cap."""
+    """Standard safety middleware: repetition guard → tool cap → model cap.
+
+    Both budget caps use *soft* termination paths so the agent can always
+    emit one last structured response after the cap fires:
+
+      - tool cap uses ``exit_behavior="continue"`` — blocks further tool
+        calls but routes back to the model for a final answer.
+      - model cap uses ``exit_behavior="end"`` — graph ends with a synthetic
+        "limits exceeded" AIMessage. The runtime's outer ``run`` then runs a
+        soft-finalize pass against the same chat model with
+        ``with_structured_output`` to produce the schema-conforming reply.
+
+    Profiles that depend on this asymmetry should size limits so the tool
+    cap fires first (``model_call_limit > tool_call_limit``); the runtime's
+    soft-finalize is the safety net for the residual case.
+    """
     stack: list[Any] = [make_budget_guard(), ToolCallRepetitionGuard()]
     try:
         from langchain.agents.middleware import (  # type: ignore[import]
@@ -224,36 +252,41 @@ class BaseDeepAgentRuntime:
         if effective_checkpointer is not None:
             config["configurable"] = {"thread_id": request.run_id}
 
-        # Inject a fresh Langfuse callback so every agent run gets its own
-        # trace with all steps + tool calls visible. No-op when
-        # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
-        lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
-        if lf_callbacks:
-            config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
+        # Langfuse root trace: wraps the entire agent invocation so all
+        # LangGraph sub-operations (LLM calls, tool calls, chain steps) nest
+        # under ONE root "agent" span instead of scattering as 30-40 separate
+        # root traces.  The CallbackHandler is created INSIDE the context so
+        # it inherits the active OTel ContextVar set by start_as_current_observation.
+        # No-op when LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
+        trace_name = f"{profile.feature.value}-{profile.agent_name}"
+        with langfuse_agent_trace(name=trace_name, session_id=request.run_id or ""):
+            lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
+            if lf_callbacks:
+                config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
 
-        invoke_coro = agent.ainvoke(
-            {"messages": [{"role": "user", "content": profile.user_message(request)}]},
-            config=config,
-        )
+            invoke_coro = agent.ainvoke(
+                {"messages": [{"role": "user", "content": profile.user_message(request)}]},
+                config=config,
+            )
 
-        try:
-            if profile.limits.wall_seconds is not None:
-                raw = await asyncio.wait_for(invoke_coro, timeout=profile.limits.wall_seconds)
-            else:
-                raw = await invoke_coro
-        except TimeoutError as exc:
-            raise AgentTimeoutError(
-                f"Agent '{profile.agent_name}' exceeded wall_seconds={profile.limits.wall_seconds}"
-            ) from exc
-        except Exception as exc:
-            exc_type_name = type(exc).__name__
-            if "Termination" in exc_type_name or "Budget" in exc_type_name:
-                raise AgentBudgetExhaustedError(
-                    f"Agent '{profile.agent_name}' budget exhausted"
+            try:
+                if profile.limits.wall_seconds is not None:
+                    raw = await asyncio.wait_for(invoke_coro, timeout=profile.limits.wall_seconds)
+                else:
+                    raw = await invoke_coro
+            except TimeoutError as exc:
+                raise AgentTimeoutError(
+                    f"Agent '{profile.agent_name}' exceeded wall_seconds={profile.limits.wall_seconds}"
                 ) from exc
-            raise AgentExecutionError(
-                f"Agent '{profile.agent_name}' failed: {type(exc).__name__}"
-            ) from exc
+            except Exception as exc:
+                exc_type_name = type(exc).__name__
+                if "Termination" in exc_type_name or "Budget" in exc_type_name:
+                    raise AgentBudgetExhaustedError(
+                        f"Agent '{profile.agent_name}' budget exhausted"
+                    ) from exc
+                raise AgentExecutionError(
+                    f"Agent '{profile.agent_name}' failed: {type(exc).__name__}"
+                ) from exc
 
         # Surface the budget verdict so callers can flip partial=True.
         if budget_state is not None and budget_state.partial:
@@ -266,7 +299,56 @@ class BaseDeepAgentRuntime:
                 # request.metadata is a frozen mapping — log only.
                 _logger.warning("budget_partial_metadata_unmutable")
 
+        # Soft-finalize: if the profile expects a structured response but
+        # middleware terminated the graph (e.g. ModelCallLimitMiddleware
+        # exit_behavior="end" injects a synthetic AIMessage and skips the
+        # response_format node), make ONE additional model call against
+        # ``with_structured_output(schema)`` so we still return a valid
+        # domain object instead of raising AgentStructuredOutputError.
+        # This is bounded: exactly one extra call, no tools, no checkpoint.
+        if profile.response_schema is not None and isinstance(raw, dict):
+            structured = raw.get("structured_response")
+            if structured is None:
+                raw = await self._soft_finalize(
+                    chat_model=chat_model,
+                    schema=profile.response_schema,
+                    raw=raw,
+                    profile_name=profile.agent_name,
+                )
+
         return profile.parse_result(raw)
+
+    async def _soft_finalize(
+        self,
+        *,
+        chat_model: BaseChatModel,
+        schema: type[Any],
+        raw: dict[str, Any],
+        profile_name: str,
+    ) -> dict[str, Any]:
+        """Recover a missing structured_response by asking the model once
+        more with the schema bound directly. No tools are exposed.
+
+        Failure here is logged and re-raises through the existing
+        AgentStructuredOutputError path in ``profile.parse_result``.
+        """
+        from langchain_core.messages import HumanMessage  # type: ignore[import]
+
+        prior = raw.get("messages") or []
+        finalize_input: list[BaseMessage] = [
+            *prior,
+            HumanMessage(content=_BUDGET_FINALIZE_INSTRUCTION),
+        ]
+        try:
+            structured_model = chat_model.with_structured_output(schema)
+            structured = await structured_model.ainvoke(finalize_input)
+        except Exception as exc:  # pragma: no cover — exercised by integration
+            _logger.warning(
+                "soft_finalize_failed agent=%s err=%s", profile_name, type(exc).__name__
+            )
+            return raw
+        _logger.info("soft_finalize_succeeded agent=%s", profile_name)
+        return {**raw, "structured_response": structured}
 
 
 __all__ = ["BaseDeepAgentRuntime", "build_agent_chat_model"]
