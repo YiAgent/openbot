@@ -47,6 +47,7 @@ from openbot.domain.config_schema import (
     ForkPRConfig,
     ModelOverrides,
     RateLimitConfig,
+    SafetyConfig,
     SeverityThreshold,
 )
 from openbot.domain.events import UnifiedEvent
@@ -88,6 +89,7 @@ def baked_in_defaults() -> EffectiveConfig:
             monthly_soft_cap_usd=Decimal("100"),
             monthly_alert_at_pct=80,
             global_hard_kill_usd=Decimal("500"),
+            per_task_cap_usd=Decimal("1.50"),
         ),
         rate_limit=RateLimitConfig(
             per_user_per_day=20,
@@ -102,6 +104,7 @@ def baked_in_defaults() -> EffectiveConfig:
         model=ModelOverrides(per_feature={}),
         fork_pr=ForkPRConfig(run=False, ok_to_test_phrase="/ok-to-test"),
         severity_threshold="medium",
+        safety=SafetyConfig(),
         raw={},
     )
 
@@ -236,6 +239,7 @@ def _coerce(parsed: Mapping[str, Any], *, repo: str) -> EffectiveConfig:
             model=_coerce_model(parsed, base.model, repo=repo),
             fork_pr=_coerce_fork_pr(parsed, base.fork_pr),
             severity_threshold=_coerce_severity(parsed, base.severity_threshold),
+            safety=_coerce_safety(parsed, base.safety),
             raw=parsed,
         )
     except Exception:
@@ -310,6 +314,14 @@ def _coerce_budget(parsed: Mapping[str, Any], default: BudgetConfig, *, repo: st
                 field="budget.global_hard_kill_usd",
             ),
             default.global_hard_kill_usd,
+        ),
+        per_task_cap_usd=_coalesce(
+            _to_decimal(
+                section.get("per_task_cap_usd"),
+                repo=repo,
+                field="budget.per_task_cap_usd",
+            ),
+            default.per_task_cap_usd,
         ),
     )
 
@@ -420,6 +432,20 @@ def _coerce_severity(parsed: Mapping[str, Any], default: SeverityThreshold) -> S
     if threshold in ("critical", "high", "medium", "low"):
         return threshold  # type: ignore[return-value]
     return default
+
+
+def _coerce_safety(parsed: Mapping[str, Any], default: SafetyConfig) -> SafetyConfig:
+    section = parsed.get("safety")
+    if not isinstance(section, Mapping):
+        return default
+    raw = section.get("egress_action", default.egress_action)
+    if raw not in ("redact", "block"):
+        _logger.warning(
+            "config_safety_invalid_egress_action",
+            extra={"raw": str(raw)[:32]},
+        )
+        return default
+    return SafetyConfig(egress_action=raw)
 
 
 def _to_decimal(value: Any, *, repo: str, field: str) -> Decimal | None:

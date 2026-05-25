@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.tools import BaseTool
 
 from openbot.domain.workflows import Feature
+from openbot.infrastructure.agents._chat_tools import make_chat_tools
 from openbot.infrastructure.agents.profiles import (
     AgentRequest,
     AgentRunLimits,
@@ -31,11 +32,18 @@ _SYSTEM_PROMPT = """You are OpenBot, a GitHub maintainer bot assistant.
 
 You are answering a GitHub comment mention inside an automation workflow.
 
+You have three read-only tools:
+
+  - `read_file(path)`: read a repo file (≤8 KB, truncated with `[truncated 8KB cap]`)
+  - `grep_repo(pattern, path_glob=None, max_matches=20)`: pattern search
+  - `list_files(path='.')`: list paths up to 4 levels deep, ≤200 entries
+
 Rules:
-- Answer the user's request directly and concisely.
-- Use only the context provided in the prompt.
-- Do not claim you inspected repository files, ran commands, or fetched remote data unless that context is explicitly provided.
-- If the user asks for action you cannot complete from the provided context, say so clearly and suggest the next concrete step.
+- Use these tools to ground answers in actual repo content. Do not fabricate file contents.
+- If output ends with `[truncated 8KB cap]`, say "(truncated)" in your reply rather than pretending you saw the rest.
+- You CANNOT open PRs, push branches, label issues, edit files, run shell commands, or fetch URLs.
+- If the user asks for any state-changing action ("open a PR", "push this", "merge"), refuse with a single line that points them to: assign the issue to @openbot to trigger fix, or open a PR for review.
+- Be concise. One paragraph beats three bullet points unless the user asked for a list.
 """
 
 _CHAT_LIMITS = AgentRunLimits(
@@ -108,7 +116,13 @@ class ChatProfile:
         )
 
     def build_tools(self, request: AgentRequest) -> Sequence[BaseTool]:
-        return []
+        adapter = getattr(request, "event_adapter", None)
+        if adapter is None:
+            # No adapter wired (e.g. test that built AgentRequest without
+            # one) — fall back to no tools so the chat agent still answers
+            # from prompt context. Production wiring always passes ctx.adapter.
+            return []
+        return list(make_chat_tools(adapter=adapter, event=request.event))
 
     def parse_result(self, result: Mapping[str, Any]) -> str:
         messages = result.get("messages")
@@ -134,6 +148,7 @@ class DeepAgentsChatResponder:
         user_request: str,
         run_id: str | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
+        adapter: Any | None = None,
     ) -> str:
         return await self._runtime.run(
             ChatProfile(),
@@ -142,6 +157,7 @@ class DeepAgentsChatResponder:
                 run_id=run_id,
                 checkpointer=checkpointer,
                 input={"user_request": user_request},
+                event_adapter=adapter,
             ),
         )
 
