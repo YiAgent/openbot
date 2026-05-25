@@ -36,11 +36,16 @@ from __future__ import annotations
 
 import html
 
-# Imported here (not inside the function) so an accidental rename in
-# triage.py fails the test pinning ack_only ≡ existing template *at
-# import time*, not as a runtime mismatch.
-from openbot.application.use_cases.triage import _ACK_TEMPLATE
 from openbot.domain.repro import ReproOutcome, ReproStatus
+
+# NOTE: ``_ACK_TEMPLATE`` is imported lazily inside ``render_final_comment``.
+# A module-level import would create a cycle with ``triage.py`` (which
+# imports this module for ``render_thinking_comment`` /
+# ``render_final_comment``). The snapshot test in
+# ``test_repro_render.py`` re-imports ``_ACK_TEMPLATE`` directly from
+# ``triage`` at test-execution time, so the "rename in triage trips the
+# snapshot" contract still holds — it just fires on first test run
+# rather than at module-import.
 
 # ── Constants ───────────────────────────────────────────────────────────────
 
@@ -165,6 +170,9 @@ def render_final_comment(
     if outcome is None:
         if not ack_only:
             raise ValueError("render_final_comment requires outcome or ack_only=True; got neither")
+        # Deferred import — see module-level NOTE on the triage cycle.
+        from openbot.application.use_cases.triage import _ACK_TEMPLATE
+
         return _ACK_TEMPLATE.format(actor=_actor_handle(actor))
 
     # Dispatch on status. We don't fall through to a "default" branch
