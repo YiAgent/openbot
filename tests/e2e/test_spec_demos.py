@@ -47,7 +47,12 @@ def _phases(rows: list, /) -> list[WorkflowPhase]:
 
 
 async def test_demo_01_issue_opens_triage_acks(webhook_harness: WebhookHarness) -> None:
-    """Issue opens → STARTED + COMPLETED audit rows; one triage ACK reply."""
+    """Issue opens → STARTED + COMPLETED audit rows; sticky thinking → ACK.
+
+    R4 replaced the single-reply ACK with a sticky-reply flow: a thinking
+    placeholder is posted first (``reply()``), then patched with the ACK
+    template (``update_comment()``) when no sandbox is present.
+    """
     event = webhook_harness.make_event(
         kind=EventKind.ISSUE_OPENED,
         delivery_id="d-triage-1",
@@ -58,11 +63,20 @@ async def test_demo_01_issue_opens_triage_acks(webhook_harness: WebhookHarness) 
     rows = await webhook_harness.audit_rows(delivery_id="d-triage-1")
     assert _phases(rows) == [WorkflowPhase.STARTED, WorkflowPhase.COMPLETED]
     assert all(row.workflow is Workflow.TRIAGE for row in rows)
+
+    # Sticky-reply: thinking placeholder posted first.
     assert len(webhook_harness.adapter.replies) == 1
-    repo, number, body = webhook_harness.adapter.replies[0]
+    repo, number, thinking_body = webhook_harness.adapter.replies[0]
     assert repo == webhook_harness.repo
     assert number == 7
-    assert "OpenBot received this issue" in body
+    assert "reproducing this issue" in thinking_body
+
+    # Then PATCH'd with the ACK template.
+    assert len(webhook_harness.adapter.comment_updates) == 1
+    update_repo, _comment_id, ack_body = webhook_harness.adapter.comment_updates[0]
+    assert update_repo == webhook_harness.repo
+    assert "OpenBot received this issue" in ack_body
+    assert "triage shortly" in ack_body
 
 
 # ───────────────────────── demo 02: PR review stub ack ─────────────────────────
