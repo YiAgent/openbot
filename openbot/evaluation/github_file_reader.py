@@ -1,7 +1,11 @@
 """Lightweight GitHub file reader for the eval harness.
 
-Uses a plain GitHub personal-access token (PAT) to read files from a
-specific commit ref.  NOT a GitHub App — no installation-token dance needed.
+Token resolution precedence:
+  1. ``token`` constructor arg / ``GITHUB_TOKEN`` env var (PAT).
+  2. GitHub App credentials: ``OPENBOT_GITHUB_APP_ID`` +
+     ``OPENBOT_GITHUB_APP_PRIVATE_KEY_PEM`` — mints an installation token for
+     the target repo on first use and caches it for the instance lifetime.
+  3. Empty string (no reads — all methods return empty results silently).
 
 Designed to be injected into ``EvalChannelAdapter`` so the review agent's
 ``read_file`` / ``grep_repo`` tool calls hit the real GitHub API rather than
@@ -24,6 +28,52 @@ _logger = logging.getLogger(__name__)
 
 _API_BASE = "https://api.github.com"
 _HTTP_TIMEOUT = 10.0
+_GITHUB_API_VERSION = "2022-11-28"
+
+
+async def _mint_installation_token(repo: str) -> str:
+    """Mint a GitHub App installation token for ``repo``.
+
+    Reads ``OPENBOT_GITHUB_APP_ID`` and ``OPENBOT_GITHUB_APP_PRIVATE_KEY_PEM``
+    from the environment.  Returns ``""`` when either is absent, or when the
+    repo has no recorded installation for this App.
+    """
+    app_id_str = os.environ.get("OPENBOT_GITHUB_APP_ID", "")
+    pem_str = os.environ.get("OPENBOT_GITHUB_APP_PRIVATE_KEY_PEM", "")
+    if not app_id_str or not pem_str:
+        return ""
+    try:
+        from openbot.infrastructure.adapters.github_auth import GitHubAppAuth
+
+        auth = GitHubAppAuth(
+            app_id=int(app_id_str),
+            private_key_pem=pem_str.encode() if isinstance(pem_str, str) else pem_str,
+        )
+        jwt_token = auth.app_jwt()
+        headers = {
+            "Authorization": f"Bearer {jwt_token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": _GITHUB_API_VERSION,
+        }
+        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            resp = await client.get(
+                f"{_API_BASE}/repos/{repo}/installation",
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            _logger.info(
+                "github_file_reader_no_installation",
+                extra={"repo": repo, "status": resp.status_code},
+            )
+            return ""
+        installation_id = resp.json().get("id")
+        if not installation_id:
+            return ""
+        tok = await auth.installation_token(int(installation_id))
+        return tok.token
+    except Exception as exc:
+        _logger.warning("github_file_reader_app_auth_failed: %s", exc)
+        return ""
 
 
 @dataclass
@@ -34,18 +84,32 @@ class GitHubFileReader:
         repo:  GitHub ``"owner/name"`` (e.g. ``"calcom/cal.com"``).
         ref:   Commit SHA or branch name to read files at.
         token: GitHub PAT.  Defaults to ``GITHUB_TOKEN`` env var.
-               When empty, all methods return empty results silently.
+               When empty, falls back to GitHub App auth (see module docstring).
     """
 
     repo: str
     ref: str
     token: str = field(default_factory=lambda: os.environ.get("GITHUB_TOKEN", ""))
+    # Lazily resolved effective token (PAT wins; App token is fallback).
+    _effective_token: str = field(init=False, default="", repr=False)
+    _token_resolved: bool = field(init=False, default=False, repr=False)
 
-    def _headers(self) -> dict[str, str]:
+    async def _ensure_token(self) -> str:
+        """Return the effective bearer token, resolving once per instance."""
+        if self._token_resolved:
+            return self._effective_token
+        self._token_resolved = True
+        if self.token:
+            self._effective_token = self.token
+        else:
+            self._effective_token = await _mint_installation_token(self.repo)
+        return self._effective_token
+
+    def _headers(self, token: str) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self.token}",
+            "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
+            "X-GitHub-Api-Version": _GITHUB_API_VERSION,
         }
 
     async def read_file(self, path: str) -> str:
@@ -54,12 +118,13 @@ class GitHubFileReader:
         Returns ``""`` for 404 (file not in repo) and for non-UTF-8 binary files.
         Raises on other HTTP errors (auth failures, server errors).
         """
-        if not self.token:
-            _logger.warning("GitHubFileReader.read_file: GITHUB_TOKEN unset; returning empty")
+        token = await self._ensure_token()
+        if not token:
+            _logger.warning("GitHubFileReader.read_file: no credentials available; returning empty")
             return ""
         url = f"{_API_BASE}/repos/{self.repo}/contents/{path}"
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-            response = await client.get(url, params={"ref": self.ref}, headers=self._headers())
+            response = await client.get(url, params={"ref": self.ref}, headers=self._headers(token))
         if response.status_code == 404:
             return ""
         response.raise_for_status()
@@ -98,8 +163,9 @@ class GitHubFileReader:
         bad query) — callers should treat an empty list as "no matches found",
         not as "repo absent".  Raises on other HTTP errors.
         """
-        if not self.token:
-            _logger.warning("GitHubFileReader.grep_repo: GITHUB_TOKEN unset; returning empty")
+        token = await self._ensure_token()
+        if not token:
+            _logger.warning("GitHubFileReader.grep_repo: no credentials available; returning empty")
             return []
         q_parts = [pattern, f"repo:{self.repo}"]
         if path_glob:
@@ -109,7 +175,10 @@ class GitHubFileReader:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
             response = await client.get(
                 url,
-                headers={**self._headers(), "Accept": "application/vnd.github.text-match+json"},
+                headers={
+                    **self._headers(token),
+                    "Accept": "application/vnd.github.text-match+json",
+                },
             )
         if response.status_code in (404, 422):
             _logger.info(
