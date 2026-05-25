@@ -240,32 +240,8 @@ def init_langfuse() -> None:
         )
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 def get_langfuse_handler() -> object | None:
     """Return a fresh Langfuse CallbackHandler for one agent invocation.
-||||||| parent of afadb1c (feat(obs): unify Langfuse traces per agent run with descriptive names)
-def get_langfuse_handler() -> object | None:
-    """Return a fresh Langfuse CallbackHandler for one DeepAgents invocation.
-=======
-def get_langfuse_handler(
-    *,
-    run_id: str | None = None,
-    trace_name: str | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> object | None:
-||||||| parent of a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
-def get_langfuse_handler(
-    *,
-    run_id: str | None = None,
-    trace_name: str | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> object | None:
-=======
-def get_langfuse_handler() -> object | None:
->>>>>>> a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
-    """Return a fresh Langfuse CallbackHandler for one DeepAgents invocation.
->>>>>>> afadb1c (feat(obs): unify Langfuse traces per agent run with descriptive names)
 
     **Must be called inside an active** ``langfuse_agent_trace()`` **context.**
     When the handler is created inside that context, it automatically inherits
@@ -275,54 +251,16 @@ def get_langfuse_handler() -> object | None:
     If called outside a ``langfuse_agent_trace()`` context, each LangChain root
     runnable creates its own Langfuse trace — the 36-root-trace problem.
 
-    Trace name and session grouping are controlled via LangChain's
-    ``RunnableConfig.metadata`` dict, not via this function.  Callers
-    should add the following keys to the config metadata before calling
-    ``agent.ainvoke()``:
-
-    - ``"langfuse_trace_name"`` — human-readable label shown in the
-      Langfuse UI (e.g. ``"review-openbot_review_responder"``).
-    - ``"langfuse_session_id"`` — groups related traces under one session.
-      Use the agent ``run_id`` so all invocations for the same logical
-      job (including evals that re-run the same sample) appear together
-      without merging their individual spans.
-
-    Each call returns a handler with a **fresh** trace ID, ensuring that
-    separate eval runs for the same sample produce separate, non-overlapping
-    traces in Langfuse.
-
     Returns ``None`` when:
       - ``langfuse`` is not installed, or
       - ``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY`` are not both set.
 
     Callers inject the result via::
 
-<<<<<<< HEAD
-<<<<<<< HEAD
         with langfuse_agent_trace(name=..., session_id=...):
             callbacks = [h for h in [get_langfuse_handler()] if h is not None]
             config["callbacks"] = callbacks
             await agent.ainvoke(..., config=config)
-||||||| parent of afadb1c (feat(obs): unify Langfuse traces per agent run with descriptive names)
-        callbacks = [h for h in [get_langfuse_handler()] if h is not None]
-        config["callbacks"] = callbacks
-=======
-        callbacks = [
-            h
-            for h in [get_langfuse_handler(run_id=..., trace_name=..., metadata=...)]
-            if h is not None
-        ]
-||||||| parent of a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
-        callbacks = [
-            h
-            for h in [get_langfuse_handler(run_id=..., trace_name=..., metadata=...)]
-            if h is not None
-        ]
-=======
-        callbacks = [h for h in [get_langfuse_handler()] if h is not None]
->>>>>>> a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
-        config["callbacks"] = callbacks
->>>>>>> afadb1c (feat(obs): unify Langfuse traces per agent run with descriptive names)
     """
     import os
 
@@ -334,33 +272,11 @@ def get_langfuse_handler() -> object | None:
     if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
         return None
 
-<<<<<<< HEAD
-<<<<<<< HEAD
     # No trace_context — the handler inherits the current OTel ContextVar
     # set by langfuse_agent_trace().  That context manager calls
     # langfuse.start_as_current_observation() which sets the active span,
     # and CallbackHandler() reads it via get_current_observation_id().
     return CallbackHandler()
-||||||| parent of afadb1c (feat(obs): unify Langfuse traces per agent run with descriptive names)
-    return CallbackHandler()
-=======
-    # Build trace_context for unified trace per run_id
-    trace_context: dict[str, str] | None = None
-    if run_id:
-        # Use run_id as seed to generate deterministic trace_id
-        # This ensures all operations in the same agent run share one trace
-        trace_id = Langfuse.create_trace_id(seed=run_id)
-        trace_context = {"trace_id": trace_id}
-
-    # Note: Langfuse CallbackHandler doesn't directly support trace_name
-    # The trace name will be derived from the first LangChain run in the trace
-    # We use metadata to make traces searchable and filterable
-    if metadata and trace_context is not None:
-        # Merge metadata into trace_context (Langfuse will attach these to the trace)
-        trace_context["metadata"] = metadata  # type: ignore[assignment]
-
-    return CallbackHandler(trace_context=trace_context)
->>>>>>> afadb1c (feat(obs): unify Langfuse traces per agent run with descriptive names)
 
 
 @contextlib.contextmanager
@@ -419,30 +335,6 @@ def langfuse_agent_trace(
         lf.start_as_current_observation(as_type="agent", name=name) as obs,
     ):
         yield obs
-||||||| parent of a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
-    # Build trace_context for unified trace per run_id
-    trace_context: dict[str, str] | None = None
-    if run_id:
-        # Use run_id as seed to generate deterministic trace_id
-        # This ensures all operations in the same agent run share one trace
-        trace_id = Langfuse.create_trace_id(seed=run_id)
-        trace_context = {"trace_id": trace_id}
-
-    # Note: Langfuse CallbackHandler doesn't directly support trace_name
-    # The trace name will be derived from the first LangChain run in the trace
-    # We use metadata to make traces searchable and filterable
-    if metadata and trace_context is not None:
-        # Merge metadata into trace_context (Langfuse will attach these to the trace)
-        trace_context["metadata"] = metadata  # type: ignore[assignment]
-
-    return CallbackHandler(trace_context=trace_context)
-=======
-    # No trace_context: let Langfuse assign a fresh UUID per invocation.
-    # trace_name and session_id reach the handler via LangChain metadata keys
-    # "langfuse_trace_name" / "langfuse_session_id" (see CallbackHandler source,
-    # lines ~351-364: it reads those keys from the LangChain run metadata dict).
-    return CallbackHandler()
->>>>>>> a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
 
 
 def create_langfuse_root_span(

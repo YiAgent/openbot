@@ -7,7 +7,6 @@ Sentry contracts:
      tag the hub with the component so a future webapp / worker error
      burst is distinguishable in the Sentry UI.
 
-<<<<<<< HEAD
 Langfuse ``get_langfuse_handler`` contracts:
   3. Returns ``None`` when LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are absent.
   4. Returns a ``CallbackHandler`` (truthy) when both keys are present.
@@ -21,24 +20,8 @@ Langfuse ``langfuse_agent_trace`` contracts:
 
 We mock the SDKs where network calls would otherwise occur — unit tests
 must not attempt DNS / TLS to real ingest endpoints.
-||||||| parent of a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
 We mock the SDK in test (2) because we don't want unit tests to attempt
 DNS / TLS to a real Sentry ingest endpoint.
-=======
-Langfuse ``get_langfuse_handler`` contracts:
-  3. Returns ``None`` when LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are absent
-     so callers that guard with ``[h for h in [...] if h is not None]`` behave
-     correctly in environments without Langfuse credentials.
-  4. Returns a ``CallbackHandler`` (truthy) when both keys are present.
-  5. Each call returns a **distinct** handler object — handlers must not be
-     shared across concurrent requests.
-  6. The handler has no forced ``trace_context`` trace_id — each invocation
-     gets a fresh trace so repeated eval runs of the same sample don't merge
-     into one Langfuse trace.
-
-We mock the SDKs where network calls would otherwise occur — unit tests
-must not attempt DNS / TLS to real ingest endpoints.
->>>>>>> a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
 """
 
 from __future__ import annotations
@@ -49,17 +32,11 @@ from unittest.mock import MagicMock, patch
 from sentry_sdk.integrations.logging import LoggingIntegration
 
 from openbot.core.settings import Settings
-<<<<<<< HEAD
 from openbot.infrastructure.observability import (
     get_langfuse_handler,
     init_sentry,
     langfuse_agent_trace,
 )
-||||||| parent of a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
-from openbot.infrastructure.observability import init_sentry
-=======
-from openbot.infrastructure.observability import get_langfuse_handler, init_sentry
->>>>>>> a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
 
 
 def test_init_sentry_is_noop_without_dsn() -> None:
@@ -150,7 +127,6 @@ def test_init_sentry_logs_sentry_initialised(caplog) -> None:  # type: ignore[no
 
     messages = [r.message for r in caplog.records]
     assert "sentry_initialised" in messages
-<<<<<<< HEAD
 
 
 # ---------------------------------------------------------------------------
@@ -308,145 +284,3 @@ def test_langfuse_agent_trace_yields_observation_with_keys(monkeypatch) -> None:
     call_kwargs = mock_lf.start_as_current_observation.call_args.kwargs
     assert call_kwargs["as_type"] == "agent"
     assert call_kwargs["name"] == "review-review"
-||||||| parent of a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)
-=======
-
-
-# ---------------------------------------------------------------------------
-# get_langfuse_handler — Langfuse CallbackHandler factory
-# ---------------------------------------------------------------------------
-
-_FAKE_PK = "pk-lf-test-public-key"
-_FAKE_SK = "sk-lf-test-secret-key"
-
-
-class _FakeCallbackHandler:
-    """Stand-in for langfuse.langchain.CallbackHandler in unit tests."""
-
-    def __init__(self, **kwargs: object) -> None:
-        self.init_kwargs = kwargs
-
-
-def _fake_langfuse_module(monkeypatch, fake_handler_cls: type = _FakeCallbackHandler) -> None:  # type: ignore[no-untyped-def]
-    """Patch langfuse.langchain.CallbackHandler with *fake_handler_cls*."""
-    fake_module = MagicMock()
-    fake_module.CallbackHandler = fake_handler_cls
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "langfuse.langchain",
-        fake_module,
-    )
-
-
-def test_get_langfuse_handler_returns_none_without_keys(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """No credentials → must return None so callers don't attach a broken handler."""
-    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
-    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-    _fake_langfuse_module(monkeypatch)
-    assert get_langfuse_handler() is None
-
-
-def test_get_langfuse_handler_returns_none_with_only_public_key(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Partial credentials (public key only) → must return None."""
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
-    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-    _fake_langfuse_module(monkeypatch)
-    assert get_langfuse_handler() is None
-
-
-def test_get_langfuse_handler_returns_handler_with_both_keys(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Both credentials present → must return a CallbackHandler instance."""
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
-    _fake_langfuse_module(monkeypatch)
-    handler = get_langfuse_handler()
-    assert isinstance(handler, _FakeCallbackHandler)
-
-
-def test_get_langfuse_handler_returns_distinct_instances(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Each call must return a *new* handler so concurrent requests don't
-    share state (mixing spans from different agent runs)."""
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
-    _fake_langfuse_module(monkeypatch)
-    h1 = get_langfuse_handler()
-    h2 = get_langfuse_handler()
-    assert h1 is not h2
-
-
-def test_get_langfuse_handler_uses_fresh_trace_id(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Handler must be constructed with a *fresh random UUID* trace_context.
-
-    Without ``trace_context``, each LangGraph sub-operation (LLM call, tool
-    call) creates its own Langfuse root trace instead of nesting under the
-    agent trace — GENERATION and TOOL spans scatter across dozens of
-    disconnected traces with ``Session: None``.
-
-    The fix: pass ``trace_context={"trace_id": str(uuid.uuid4())}`` so all
-    LangGraph sub-spans share one trace_id.  The UUID must be random (never
-    seeded from a fixed input) so repeated eval runs of the same sample each
-    produce a distinct, non-overlapping trace.
-
-    Trace name and session grouping still travel via LangChain RunnableConfig
-    metadata keys (``langfuse_trace_name`` / ``langfuse_session_id``).
-    """
-    import re
-
-    captured_kwargs: list[dict] = []
-
-    class _CapturingHandler:
-        def __init__(self, **kwargs: object) -> None:
-            captured_kwargs.append(dict(kwargs))
-
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
-    _fake_langfuse_module(monkeypatch, fake_handler_cls=_CapturingHandler)
-
-    get_langfuse_handler()
-
-    assert len(captured_kwargs) == 1
-    kwargs = captured_kwargs[0]
-    # Must pass a trace_context with a valid UUID so LangGraph sub-spans
-    # (LLM calls, tool calls) nest under the same root trace.
-    assert "trace_context" in kwargs, (
-        "get_langfuse_handler() must pass trace_context to keep LangGraph "
-        "sub-operations nested under the agent trace rather than floating as "
-        "separate root traces."
-    )
-    trace_id = (kwargs["trace_context"] or {}).get("trace_id", "")
-    # Langfuse SDK parses trace_id with int(trace_id, 16), so it must be a
-    # 32-char hex string WITHOUT dashes (uuid.hex format, not str(uuid)).
-    hex_re = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
-    assert hex_re.match(trace_id), (
-        f"trace_context.trace_id must be a 32-char hex string (uuid.hex), got: {trace_id!r}"
-    )
-
-
-def test_get_langfuse_handler_fresh_trace_ids_differ(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Two consecutive calls must produce *different* trace_ids.
-
-    This guarantees that separate eval runs of the same sample each get
-    their own distinct trace — not the deterministic hash that caused
-    cross-run trace merging in the old implementation.
-    """
-    captured_kwargs: list[dict] = []
-
-    class _CapturingHandler:
-        def __init__(self, **kwargs: object) -> None:
-            captured_kwargs.append(dict(kwargs))
-
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", _FAKE_PK)
-    monkeypatch.setenv("LANGFUSE_SECRET_KEY", _FAKE_SK)
-    _fake_langfuse_module(monkeypatch, fake_handler_cls=_CapturingHandler)
-
-    get_langfuse_handler()
-    get_langfuse_handler()
-
-    assert len(captured_kwargs) == 2
-    id1 = (captured_kwargs[0].get("trace_context") or {}).get("trace_id")
-    id2 = (captured_kwargs[1].get("trace_context") or {}).get("trace_id")
-    assert id1 != id2, (
-        "get_langfuse_handler() must generate a fresh UUID on each call; "
-        "a fixed/seeded trace_id would merge eval re-runs into one Langfuse trace."
-    )
->>>>>>> a2f50ef (fix(observability): correct Langfuse trace_name and stop trace merging)

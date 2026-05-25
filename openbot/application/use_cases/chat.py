@@ -125,7 +125,6 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
         # replaces the placeholder in-place rather than posting a new thread.
         initial = _THINKING_TEMPLATE.format(actor=event.actor or "there")
         try:
-<<<<<<< HEAD
             async with sticky_reply(adapter, event, initial=initial) as sticky:
                 try:
                     message = await _generate_freeform_reply(
@@ -173,59 +172,12 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
                         "chat_freeform_post_failed",
                         extra={"delivery_id": event.delivery_id, "repo": event.repo},
                     )
-||||||| parent of 2d5db5f (feat: sticky comments + check-run lifecycle closure)
             message = await _generate_freeform_reply(
                 event=event,
                 user_request=command.body_after_mention,
                 run_id=run_id,
                 checkpointer=checkpointer,
             )
-=======
-            async with sticky_reply(adapter, event, initial=initial) as sticky:
-                try:
-                    message = await _generate_freeform_reply(
-                        event=event,
-                        user_request=command.body_after_mention,
-                        run_id=run_id,
-                        checkpointer=checkpointer,
-                    )
-                except Exception:
-                    _logger.exception(
-                        "chat_agent_reply_failed",
-                        extra={"delivery_id": event.delivery_id, "repo": event.repo},
-                    )
-                    message = _ERROR_TEMPLATE
-
-                if run_id:
-                    await checkpoint(ctx.redis, run_id)
-
-                try:
-                    async with audit_lifecycle(ctx, workflow=Workflow.CHAT) as audit:
-                        await sticky.update(message)
-                        audit.outcome = f"intent=freeform comment_id={sticky.comment_id}"
-                        _logger.info(
-                            "chat_freeform_posted",
-                            extra={
-                                "delivery_id": event.delivery_id,
-                                "repo": event.repo,
-                                "target": target_number,
-                                "comment_id": sticky.comment_id,
-                            },
-                        )
-                        if run_id and checkpointer is not None:
-                            try:
-                                await checkpointer.adelete_thread(run_id)
-                            except Exception:
-                                _logger.warning(
-                                    "chat_checkpoint_delete_failed",
-                                    extra={"delivery_id": event.delivery_id, "run_id": run_id},
-                                )
-                except Exception:
-                    _logger.exception(
-                        "chat_freeform_post_failed",
-                        extra={"delivery_id": event.delivery_id, "repo": event.repo},
-                    )
->>>>>>> 2d5db5f (feat: sticky comments + check-run lifecycle closure)
         except Exception:
             _logger.exception(
                 "chat_freeform_failed",

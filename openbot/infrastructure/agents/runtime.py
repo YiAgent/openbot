@@ -270,7 +270,6 @@ class BaseDeepAgentRuntime:
         if effective_checkpointer is not None:
             config["configurable"] = {"thread_id": request.run_id}
 
-<<<<<<< HEAD
         # Langfuse root trace: wraps the entire agent invocation so all
         # LangGraph sub-operations (LLM calls, tool calls, chain steps) nest
         # under ONE root "agent" span instead of scattering as 30-40 separate
@@ -282,22 +281,12 @@ class BaseDeepAgentRuntime:
             lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
             if lf_callbacks:
                 config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
-||||||| parent of afadb1c (feat(obs): unify Langfuse traces per agent run with descriptive names)
         # Inject a fresh Langfuse callback so every agent run gets its own
         # trace with all steps + tool calls visible. No-op when
         # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
         lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
         if lf_callbacks:
             config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
-=======
-        # Inject a fresh Langfuse callback so every agent run gets its own
-        # trace with all steps + tool calls visible.  No-op when
-        # LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
-        # trace_name and session_id are conveyed via the metadata keys above.
-        lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
-        if lf_callbacks:
-            config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
->>>>>>> afadb1c (feat(obs): unify Langfuse traces per agent run with descriptive names)
 
             invoke_coro = agent.ainvoke(
                 {"messages": [{"role": "user", "content": profile.user_message(request)}]},

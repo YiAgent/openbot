@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 """Eval data lifecycle package.
 
 Provides per-suite EvalDataset singletons (REVIEW, CHAT, FIX, SWT) and
@@ -41,13 +40,3 @@ __all__ = [
     "WritebackSummary",
     "sha256_examples",
 ]
-||||||| parent of cea222a (feat(evals/data): scaffold package, copy predictions + samples modules)
-=======
-"""Eval data lifecycle package.
-
-Provides per-suite EvalDataset singletons (REVIEW, CHAT, FIX, SWT) and
-the shared EvalDataset ABC. Singletons are wired in this module; suite
-classes live in review.py / chat.py / fix.py / swt.py.
-"""
-# Singletons wired in Task 10; ABC re-exported in Task 4.
->>>>>>> cea222a (feat(evals/data): scaffold package, copy predictions + samples modules)
