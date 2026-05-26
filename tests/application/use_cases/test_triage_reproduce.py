@@ -47,7 +47,7 @@ from openbot.domain.repro import ReproOutcome, ReproStatus
 from openbot.domain.workflows import Feature
 from openbot.infrastructure.agents.profiles import AgentTimeoutError
 from openbot.infrastructure.config_loader import baked_in_defaults
-from tests._fakes.sandbox import FakeSandboxLifecycle
+from openbot.testing.fakes import FakeSandbox
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -86,10 +86,10 @@ def _classifier(
     )
 
 
-def _handle(sandbox: FakeSandboxLifecycle | None = None) -> SandboxedHandle:
+def _handle(sandbox: FakeSandbox | None = None) -> SandboxedHandle:
     """Build a SandboxedHandle. ``sandbox`` defaults to a fresh fake."""
     return SandboxedHandle(
-        sandbox=sandbox or FakeSandboxLifecycle(),
+        sandbox=sandbox or FakeSandbox(),
         checkout=CheckoutSpec(
             repo_url="https://github.com/YiAgent/openbot.git",
             ref="deadbeef",
