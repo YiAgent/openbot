@@ -148,8 +148,12 @@ OR the list of missing info (INSUFFICIENT_INFO path).
 #     2 tools per model call x 15 calls = 30).
 #   * model_call_limit=15      — effective ceiling (fires before tool cap in
 #     single-tool-call scenarios); runtime soft-finalize handles the end case.
-#   * wall_seconds=180         — hard ceiling. Reproduce should not take
-#     longer than 3 minutes; fix can take an hour, but fix's payoff is a PR.
+#   * wall_seconds=600         — hard ceiling. 10 minutes: each LLM call
+#     costs 6-37s (cold-start effect on first calls), so 15 model calls *
+#     avg ~13s = ~195s base + pytest run time (~30-60s on a cold sandbox).
+#     The original 180s was too tight; the agent wrote the test but timed
+#     out before running it. Fix gets 30 min; repro gets 10 min — still
+#     much tighter because it does one targeted test, not a full PR.
 #   * max_output_tokens=4000   — comment-shaped output. The schema enforces
 #     a 2000-char excerpt budget so the model can't dump multi-KB blobs.
 #   * thinking_budget_tokens=0 — extended thinking is off; the prompt's
@@ -158,7 +162,7 @@ _REPRO_LIMITS = AgentRunLimits(
     recursion_limit=120,
     model_call_limit=15,
     tool_call_limit=30,
-    wall_seconds=180,
+    wall_seconds=600,
     max_output_tokens=4000,
     thinking_budget_tokens=0,
 )

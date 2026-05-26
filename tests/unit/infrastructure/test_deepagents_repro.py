@@ -119,7 +119,7 @@ def test_repro_profile_limits_match_spec() -> None:
     assert limits.recursion_limit == 120
     assert limits.model_call_limit == 15
     assert limits.tool_call_limit == 30
-    assert limits.wall_seconds == 180
+    assert limits.wall_seconds == 600
     assert limits.max_output_tokens == 4000
     assert limits.thinking_budget_tokens == 0
 
