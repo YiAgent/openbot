@@ -283,7 +283,8 @@ class DaytonaSandboxAdapter(SandboxPort):
     async def read_file(self, path: str) -> str:
         full = f"{self.workspace}/{path}" if not path.startswith("/") else path
         try:
-            data = await asyncio.to_thread(self._sandbox.files.download, full)
+            # SDK: sandbox.fs.download_file(remote_path) -> bytes
+            data = await asyncio.to_thread(self._sandbox.fs.download_file, full)
         except Exception:
             return ""
         if isinstance(data, bytes):
@@ -295,7 +296,8 @@ class DaytonaSandboxAdapter(SandboxPort):
 
     async def write_file(self, path: str, content: str) -> None:
         full = f"{self.workspace}/{path}" if not path.startswith("/") else path
-        await asyncio.to_thread(self._sandbox.files.upload, full, content.encode("utf-8"))
+        # SDK: sandbox.fs.upload_file(file_bytes, remote_path) — bytes first
+        await asyncio.to_thread(self._sandbox.fs.upload_file, content.encode("utf-8"), full)
 
     async def list_files(self, *, path: str = ".", max: int = 200) -> list[str]:
         target = (
