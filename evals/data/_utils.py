@@ -6,6 +6,7 @@ build_export_experiment) is NOT here — it belongs entirely to langsmith_hook.p
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import subprocess
 from typing import Any
@@ -22,6 +23,26 @@ def git_sha() -> str:
         return out.decode().strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown"
+
+
+def make_experiment_name(
+    *,
+    dataset_version: str,
+    solver_family: str,
+    ts: dt.datetime | None = None,
+) -> str:
+    """Build a canonical ``<dataset>-<solver>-<timestamp>`` experiment name.
+
+    Canonical format: ``{dataset_version}-{solver_family}-%Y%m%d-%H%M%S``
+
+    This function is the **single source of truth** for experiment naming.
+    Both :func:`~evals.data.fix.FixDataset.build_task` (predictions filename)
+    and :func:`~evals.runtime.langsmith_hook._build_session` (LangSmith project)
+    call it so the two names always match.
+    """
+    if ts is None:
+        ts = dt.datetime.now(dt.UTC)
+    return f"{dataset_version}-{solver_family}-{ts.strftime('%Y%m%d-%H%M%S')}"
 
 
 def resolve_model_label() -> str:

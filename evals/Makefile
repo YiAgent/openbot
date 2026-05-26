@@ -402,9 +402,6 @@ writeback-fix: ## Writeback SWE harness verdicts → LangSmith swe_bench_pass_at
 	@# Resolve paths to absolute BEFORE the `cd ..` below — otherwise the
 	@# `../<report_dir>/*.json` glob (relative to evals/) gets re-resolved
 	@# under repo-root, ending up one dir too high.
-	@# Resolve report path BEFORE the `cd ..` below; otherwise the
-	@# ../<dir>/ glob (relative to evals/) gets re-resolved one dir too
-	@# high.
 	@if [ -z "$(GRADE_FIX_REPORT)" ]; then \
 		LATEST="$$(ls -1t ../$(GRADE_FIX_REPORT_DIR)/*.json 2>/dev/null | head -1)"; \
 		if [ -z "$$LATEST" ]; then \
@@ -417,6 +414,9 @@ writeback-fix: ## Writeback SWE harness verdicts → LangSmith swe_bench_pass_at
 	fi; \
 	if [ -z "$(GRADE_FIX_EXPERIMENT)" ]; then \
 		LATEST_PRED="$$(ls -1t outputs/fix_swe_bench_verified/*.predictions.jsonl 2>/dev/null | head -1)"; \
+		# Since build_task() now pre-generates the experiment name using
+		# make_experiment_name() and passes it to prediction_exporter(run_label=),
+		# the predictions filename IS the experiment name — no transformation needed.
 		EXP_NAME="$$(basename "$$LATEST_PRED" .predictions.jsonl)"; \
 	else \
 		EXP_NAME="$(GRADE_FIX_EXPERIMENT)"; \

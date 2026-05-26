@@ -40,7 +40,12 @@ from typing import Any
 from inspect_ai.hooks import Hooks, SampleEnd, TaskEnd, TaskStart, hooks
 from inspect_ai.scorer import Score
 
-from evals.data._utils import ensure_feedback_config, git_sha, resolve_model_label
+from evals.data._utils import (
+    ensure_feedback_config,
+    git_sha,
+    make_experiment_name,
+    resolve_model_label,
+)
 from evals.runtime.config import LANGSMITH_EVAL_PROJECT_ENV
 
 logger = logging.getLogger(__name__)
@@ -158,8 +163,13 @@ def _build_session(
     )
     model = spec_metadata.get("model") or resolve_model_label()
     instance_id_field = str(spec_metadata.get("instance_id_field") or "instance_id")
-    ts = _now().strftime("%Y%m%d-%H%M%S")
-    experiment_name = f"{dataset_name}-{solver_family}-{ts}"
+    # Use the pre-generated name from build_task() when available — this ensures
+    # the LangSmith experiment name matches the predictions filename exactly.
+    # Fall back to generating a new name for tasks that don't pre-generate one.
+    experiment_name = spec_metadata.get("langsmith_experiment_name") or make_experiment_name(
+        dataset_version=dataset_name,
+        solver_family=solver_family,
+    )
     extra: dict[str, Any] = {
         "dataset_name": dataset_name,
         "solver_family": solver_family,
