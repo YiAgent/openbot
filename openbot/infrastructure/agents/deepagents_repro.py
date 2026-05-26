@@ -135,12 +135,19 @@ OR the list of missing info (INSUFFICIENT_INFO path).
 # one of two things — bail on insufficient info, or run a single reproduction
 # command + maybe one variation. Neither needs 80 tool calls.
 #
-#   * recursion_limit=40       — ~3 LangGraph nodes per tool call x ~12 calls
-#     + middleware overhead. Leaves slack without inviting runaway loops.
-#   * tool_call_limit=30       — generous enough for "list_files → read_file
-#     → run_command → maybe rerun with -v" plus a handful of misfires.
-#   * model_call_limit=15      — > tool_call_limit so the tool cap fires
-#     first via exit_behavior="continue" (same discipline as fix).
+#   * recursion_limit=120      — The middleware stack adds ~6 LangGraph nodes
+#     per tool-call cycle (ModelCallLimitMiddleware.before_model + model +
+#     3x after_model + tools), not ~3. With model_call_limit=15 as the
+#     effective ceiling: 15 x 6 + startup/final overhead ~= 100 nodes.
+#     120 gives clear headroom so the model/tool caps always fire before the
+#     graph blows up (mirrors review=100, fix=200 which use the same formula).
+#   * tool_call_limit=30       — generous enough for "list_files -> read_file
+#     -> run_command -> maybe rerun with -v" plus a handful of misfires.
+#     With model_call_limit=15 < tool_call_limit=30, the model cap fires
+#     first; tool cap acts as a safety net for parallel-call bursts (up to
+#     2 tools per model call x 15 calls = 30).
+#   * model_call_limit=15      — effective ceiling (fires before tool cap in
+#     single-tool-call scenarios); runtime soft-finalize handles the end case.
 #   * wall_seconds=180         — hard ceiling. Reproduce should not take
 #     longer than 3 minutes; fix can take an hour, but fix's payoff is a PR.
 #   * max_output_tokens=4000   — comment-shaped output. The schema enforces
@@ -148,7 +155,7 @@ OR the list of missing info (INSUFFICIENT_INFO path).
 #   * thinking_budget_tokens=0 — extended thinking is off; the prompt's
 #     workflow rules give the model enough structure without it.
 _REPRO_LIMITS = AgentRunLimits(
-    recursion_limit=40,
+    recursion_limit=120,
     model_call_limit=15,
     tool_call_limit=30,
     wall_seconds=180,

@@ -16,7 +16,8 @@ Sandbox lifecycle (unified for all four evals):
   callable.  Internally each one:
 
     1. Opens a sandbox via ``async with sandbox_factory() as sandbox``.
-    2. Clones the repo at ``base_sha`` with ``strategy=SHALLOW``.
+    2. Clones the repo at ``base_sha`` with ``strategy=BLOBLESS``
+       (needed because base_sha is a commit SHA, not a branch name).
     3. Wires the sandbox into the agent:
        - fix / repro: passes ``sandbox`` directly to the responder so the
          agent can call ``run_command`` / ``write_file`` etc.
@@ -78,7 +79,7 @@ async def _open_sandbox_if_configured(
                 repo_url=clone_url,
                 ref=base_sha,
                 token=clone_token,
-                strategy=CloneStrategy.SHALLOW,
+                strategy=CloneStrategy.BLOBLESS,
             )
             yield sandbox
     else:
@@ -256,7 +257,7 @@ async def run_fix_sample(
             repo_url=clone_url,
             ref=base_sha,
             token=clone_token,
-            strategy=CloneStrategy.SHALLOW,
+            strategy=CloneStrategy.BLOBLESS,
         )
         return await DeepAgentsFixResponder().fix_for_event(
             event,
@@ -411,7 +412,7 @@ async def run_test_generation_sample(
             repo_url=clone_url,
             ref=base_sha,
             token=clone_token,
-            strategy=CloneStrategy.SHALLOW,
+            strategy=CloneStrategy.BLOBLESS,
         )
         return await DeepAgentsReproResponder().reproduce_for_event(
             event,

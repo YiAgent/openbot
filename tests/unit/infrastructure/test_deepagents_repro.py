@@ -116,7 +116,7 @@ def test_repro_profile_limits_match_spec() -> None:
     from openbot.infrastructure.agents.deepagents_repro import ReproProfile
 
     limits = ReproProfile().limits
-    assert limits.recursion_limit == 40
+    assert limits.recursion_limit == 120
     assert limits.model_call_limit == 15
     assert limits.tool_call_limit == 30
     assert limits.wall_seconds == 180

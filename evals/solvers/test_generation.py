@@ -6,11 +6,20 @@ failure, runs it to confirm it fails, then emits the git unified diff via
 so the upstream Docker harness can grade it offline.
 
 Architecture mirrors the other three solvers (review / fix / chat):
-  1. Obtain a sandbox factory from the openbot product sandbox layer.
+  1. Build a sandbox factory from ``openbot.application.sandbox_factory_deps``
+     (same call the fix solver makes — never injected via sample metadata).
   2. Delegate the full lifecycle to ``run_test_generation_sample`` — same
      pattern as ``run_fix_sample`` (clone → agent → close).
   3. Store a ``SwtBenchPrediction`` dict in ``state.metadata["prediction"]``
      for the ``prediction_exporter`` scorer.
+
+Data shape (from ``issue_row_to_sample``):
+  state.sample_id  → instance_id  (e.g. "astropy__astropy-12907")
+  state.input_text → problem_statement  (HuggingFace "problem_statement" field)
+  state.metadata   → {"repo": ..., "base_commit": ..., "version": ...}
+
+SWT-bench rows have no real GitHub issue numbers; ``issue_number=0`` is the
+stable placeholder (same convention as the fix solver).
 """
 
 from __future__ import annotations
@@ -35,24 +44,42 @@ def openbot_test_generation_solver(*, model: str | None = None):
     @solver
     def _solver():
         async def _run(state, _generate):
+            from openbot.application.sandbox_factory_deps import build_sandbox_factory
+            from openbot.core.settings import Settings
+
             instance_id = str(state.sample_id) if state.sample_id is not None else "anon"
             metadata = state.metadata or {}
 
-            repo = metadata.get("repo", "")
-            base_sha = metadata.get("base_commit", "")
-            clone_url = metadata.get("clone_url") or (
-                f"https://github.com/{repo}.git" if repo else ""
-            )
-            problem_statement = metadata.get("problem_statement", "")
-            # SWT-bench rows carry the issue number; fall back to 0 for safety.
-            issue_number = int(metadata.get("issue_number", 0)) or 0
+            repo = str(metadata.get("repo", ""))
+            base_sha = str(metadata.get("base_commit", ""))
+            # problem_statement lives in state.input_text (set by issue_row_to_sample).
+            problem_statement = state.input_text or ""
+            clone_url = f"https://github.com/{repo}.git" if repo else ""
 
-            sandbox_factory = metadata.get("sandbox_factory")
-
-            if not sandbox_factory:
+            if not repo or not base_sha:
                 logger.warning(
-                    "swt_bench_solver_no_sandbox_factory instance_id=%s — "
-                    "emitting empty prediction",
+                    "swt_bench_solver_missing_metadata instance_id=%s — "
+                    "emitting empty prediction (repo=%r base_sha=%r)",
+                    instance_id,
+                    repo,
+                    base_sha,
+                )
+                prediction = empty_swt_prediction(
+                    instance_id=instance_id,
+                    model_name_or_path="openbot",
+                )
+                state.metadata["prediction"] = prediction.model_dump()
+                state.metadata["prediction_json"] = prediction.model_dump_json()
+                state.output.completion = f"NO_METADATA: {instance_id}"
+                return state
+
+            # Build sandbox factory the same way the fix solver does — never
+            # injected via sample metadata.  Public SWT-bench repos need no token.
+            sandbox_factory = build_sandbox_factory(Settings())
+            if sandbox_factory is None:
+                logger.warning(
+                    "swt_bench_solver_no_sandbox instance_id=%s — "
+                    "emitting empty prediction (DAYTONA_API_KEY not set?)",
                     instance_id,
                 )
                 prediction = empty_swt_prediction(
@@ -68,11 +95,14 @@ def openbot_test_generation_solver(*, model: str | None = None):
                 outcome = await run_test_generation_sample(
                     instance_id=instance_id,
                     repo=repo,
-                    issue_number=issue_number,
+                    # SWT-bench rows have no real GitHub issue numbers.
+                    issue_number=0,
                     problem_statement=problem_statement,
                     base_sha=base_sha,
                     clone_url=clone_url,
                     sandbox_factory=sandbox_factory,
+                    clone_token="",
+                    run_id=instance_id,
                 )
                 model_patch = outcome.repro_artifact or ""
                 prediction = SwtBenchPrediction(

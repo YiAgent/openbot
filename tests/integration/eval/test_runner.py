@@ -126,7 +126,7 @@ async def test_run_fix_sample_calls_responder(monkeypatch) -> None:
         repo_url="https://github.com/org/repo.git",
         ref="a" * 40,
         token="",
-        strategy=CloneStrategy.SHALLOW,
+        strategy=CloneStrategy.BLOBLESS,
     )
 
     # Verify the responder received the correct event.
@@ -209,7 +209,7 @@ async def test_run_test_generation_sample_calls_responder(monkeypatch) -> None:
         repo_url="https://github.com/org/repo.git",
         ref="b" * 40,
         token="",
-        strategy=CloneStrategy.SHALLOW,
+        strategy=CloneStrategy.BLOBLESS,
     )
 
     # Verify the repro responder received the correct event.
