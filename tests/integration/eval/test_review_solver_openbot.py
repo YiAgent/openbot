@@ -130,7 +130,7 @@ async def test_solver_stores_findings_json_in_metadata(monkeypatch) -> None:
     assert parsed["findings"][0]["body"] == "minor"
 
 
-# ── pr_url parsing + file_reader wiring ──────────────────────────────────────
+# ── pr_url parsing + sandbox wiring ──────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -144,6 +144,7 @@ async def test_solver_parses_github_repo_from_pr_url(monkeypatch) -> None:
         return ReviewFindings(summary="ok", findings=())
 
     monkeypatch.setattr("evals.solvers.review.run_review_sample", fake_run)
+    monkeypatch.setattr("evals.solvers.review.build_sandbox_factory", lambda _: None)
 
     state = MagicMock()
     state.input_text = "diff text"
@@ -161,17 +162,27 @@ async def test_solver_parses_github_repo_from_pr_url(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_solver_passes_file_reader_when_pr_url_and_base_sha_present(monkeypatch) -> None:
-    """Solver builds a GitHubFileReader and passes it to run_review_sample."""
-    from openbot.evaluation.github_file_reader import GitHubFileReader
+async def test_solver_passes_sandbox_factory_when_pr_url_and_base_sha_present(
+    monkeypatch,
+) -> None:
+    """Solver passes sandbox_factory + base_sha + clone_url to run_review_sample.
 
+    The sandbox path replaced the old GitHubFileReader approach so file reads
+    come from a locally-cloned workspace rather than the GitHub API.
+    """
     captured: dict = {}
+    fake_factory = object()  # sentinel — any non-None value
 
-    async def fake_run(*, repo, pr_number, pr_diff, file_reader=None, **kwargs):
-        captured["file_reader"] = file_reader
+    async def fake_run(
+        *, repo, pr_number, pr_diff, sandbox_factory=None, base_sha="", clone_url="", **kwargs
+    ):
+        captured["sandbox_factory"] = sandbox_factory
+        captured["base_sha"] = base_sha
+        captured["clone_url"] = clone_url
         return ReviewFindings(summary="ok", findings=())
 
     monkeypatch.setattr("evals.solvers.review.run_review_sample", fake_run)
+    monkeypatch.setattr("evals.solvers.review.build_sandbox_factory", lambda _: fake_factory)
 
     state = MagicMock()
     state.input_text = "diff"
@@ -183,22 +194,23 @@ async def test_solver_passes_file_reader_when_pr_url_and_base_sha_present(monkey
 
     await openbot_review_solver()(state, MagicMock())
 
-    fr = captured["file_reader"]
-    assert isinstance(fr, GitHubFileReader)
-    assert fr.repo == "calcom/cal.com"
-    assert fr.ref == "ba9688a04a8398c9a8332ee7061bfae2f2efd524"
+    assert captured["sandbox_factory"] is fake_factory
+    assert captured["base_sha"] == "ba9688a04a8398c9a8332ee7061bfae2f2efd524"
+    assert captured["clone_url"] == "https://github.com/calcom/cal.com.git"
 
 
 @pytest.mark.asyncio
-async def test_solver_passes_no_file_reader_when_pr_url_missing(monkeypatch) -> None:
-    """Solver passes file_reader=None when pr_url is absent from metadata."""
+async def test_solver_passes_none_sandbox_when_daytona_not_configured(monkeypatch) -> None:
+    """When no sandbox backend is configured, sandbox_factory=None is passed."""
     captured: dict = {}
 
-    async def fake_run(*, repo, pr_number, pr_diff, file_reader=None, **kwargs):
-        captured["file_reader"] = file_reader
+    async def fake_run(*, repo, pr_number, pr_diff, sandbox_factory=None, **kwargs):
+        captured["sandbox_factory"] = sandbox_factory
         return ReviewFindings(summary="ok", findings=())
 
     monkeypatch.setattr("evals.solvers.review.run_review_sample", fake_run)
+    # Simulate no Daytona credentials configured.
+    monkeypatch.setattr("evals.solvers.review.build_sandbox_factory", lambda _: None)
 
     state = MagicMock()
     state.input_text = "diff"
@@ -207,4 +219,4 @@ async def test_solver_passes_no_file_reader_when_pr_url_missing(monkeypatch) -> 
 
     await openbot_review_solver()(state, MagicMock())
 
-    assert captured["file_reader"] is None
+    assert captured["sandbox_factory"] is None

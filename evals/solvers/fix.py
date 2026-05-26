@@ -1,9 +1,11 @@
 """Fix eval solver — thin Inspect AI adapter calling the openbot.evaluation facade.
 
 This solver replaces the old deepagents-based swe_fix.py. It:
-  1. Obtains a sandbox from the OpenBot product sandbox factory.
-  2. Calls ``openbot.evaluation.run_fix_sample`` which exercises the real
-     production fix workflow.
+  1. Obtains a *sandbox factory* from the OpenBot product sandbox layer.
+  2. Delegates the full sandbox lifecycle (create → clone → agent → close) to
+     ``openbot.evaluation.run_fix_sample`` — mirroring what the production
+     dispatcher._run_with_sandbox does.  The solver never opens or closes a
+     sandbox itself.
   3. Emits a ``SweBenchPrediction`` to ``state.metadata['prediction']``.
 
 If no sandbox backend is configured (``DAYTONA_API_KEY`` not set), it emits
@@ -63,17 +65,23 @@ def openbot_fix_solver(*, model: str | None = None):
                 )
                 return state
 
-            async with sandbox_factory() as sandbox:
-                outcome = await run_fix_sample(
-                    repo=repo,
-                    issue_number=0,
-                    issue_title=f"SWE-bench fix: {instance_id}",
-                    issue_body=issue_body,
-                    base_sha=base_commit,
-                    clone_url=f"https://github.com/{repo}.git",
-                    sandbox=sandbox,
-                    run_id=instance_id,
-                )
+            # Delegate the full sandbox lifecycle to OpenBot's runner:
+            #   sandbox_factory() → open sandbox
+            #   sandbox.clone(clone_url, base_commit, ...) → clone repo
+            #   DeepAgentsFixResponder → fix loop
+            #   sandbox.close() → cleanup (context-manager exit)
+            # SWE-bench repos are public — empty clone_token works for HTTPS.
+            outcome = await run_fix_sample(
+                repo=repo,
+                issue_number=0,
+                issue_title=f"SWE-bench fix: {instance_id}",
+                issue_body=issue_body,
+                base_sha=base_commit,
+                clone_url=f"https://github.com/{repo}.git",
+                sandbox_factory=sandbox_factory,
+                clone_token="",
+                run_id=instance_id,
+            )
 
             patch = ""
             if outcome.attempt is not None:

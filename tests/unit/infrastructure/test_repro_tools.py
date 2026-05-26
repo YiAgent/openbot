@@ -1,14 +1,16 @@
-"""make_repro_tools — read-only sandbox tool subset for the reproduce agent.
+"""make_repro_tools — test-authoring sandbox tool set for the reproduce agent.
 
 Mirrors ``tests/infrastructure/agents/test_fix_tools.py`` conventions:
 hand-rolled ``_StubSandbox`` that records calls and replays canned
 results, so wiring is asserted without dragging in the real sandbox.
 
-The security-critical assertion is the forbidden-set contract — see
-``test_make_repro_tools_excludes_mutating_tools`` and the matching
-profile test. The reproduce agent must not ship write_file, git_diff,
-or search_files; widening the surface is a deliberate code change in
-both this file and the profile test.
+The tool-surface contract is:
+  Allowed: read_file, write_file, list_files, run_command, git_diff, search_files
+  Forbidden: commit_and_push (repo mutation / push; fix-agent only)
+
+Widening the surface beyond these six tools — or adding commit_and_push —
+is a deliberate code change that must be mirrored here and in the
+profile test (``test_deepagents_repro.py``).
 """
 
 from __future__ import annotations
@@ -25,21 +27,23 @@ from openbot.infrastructure.agents._repro_tools import make_repro_tools
 
 @dataclass
 class _StubSandbox:
-    """Minimal SandboxPort impl — only the read-only surface is needed.
+    """Minimal SandboxPort impl — covers the full test-authoring surface.
 
-    write_file / git_diff / commit_and_push raise AssertionError so a
-    reproduce-tool that accidentally calls into them fails loudly. The
-    forbidden-set test asserts those tools aren't *exposed*; these
-    asserts add belt-and-braces on the *call* path.
+    commit_and_push raises AssertionError so a reproduce-tool that
+    accidentally calls it fails loudly. The tool-set contract test
+    asserts that tool is not *exposed*; this adds belt-and-braces on
+    the *call* path.
     """
 
     workspace: str = "/workspace/repo"
     files: dict[str, str] = field(default_factory=dict)
+    written: dict[str, str] = field(default_factory=dict)
     run_calls: list[dict[str, Any]] = field(default_factory=list)
     run_result: ExecResult = field(
         default_factory=lambda: ExecResult(stdout="", stderr="", exit_code=0, timed_out=False)
     )
     listing: list[str] = field(default_factory=list)
+    diff_result: str = ""
 
     async def clone(self, *args: object, **kwargs: object) -> None:
         raise AssertionError("repro tools must not call clone()")
@@ -48,7 +52,7 @@ class _StubSandbox:
         return self.files.get(path, "")
 
     async def write_file(self, path: str, content: str) -> None:
-        raise AssertionError("repro tools must not call write_file()")
+        self.written[path] = content
 
     async def list_files(self, *, path: str = ".", max: int = 200) -> list[str]:
         return list(self.listing)
@@ -64,7 +68,7 @@ class _StubSandbox:
         return self.run_result
 
     async def git_diff(self) -> str:
-        raise AssertionError("repro tools must not call git_diff()")
+        return self.diff_result
 
     async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
         raise AssertionError("repro tools must not call commit_and_push()")
@@ -96,29 +100,33 @@ def _tool(tools: list[Any], name: str) -> Any:
 
 
 @pytest.mark.unit
-def test_make_repro_tools_returns_exactly_three_named_tools() -> None:
+def test_make_repro_tools_returns_exactly_six_named_tools() -> None:
     sandbox = _StubSandbox()
     tools = make_repro_tools(sandbox=sandbox, event=_event())  # type: ignore[arg-type]
     names = sorted(t.name for t in tools)
-    assert names == ["list_files", "read_file", "run_command"]
+    assert names == [
+        "git_diff",
+        "list_files",
+        "read_file",
+        "run_command",
+        "search_files",
+        "write_file",
+    ]
 
 
-def test_make_repro_tools_excludes_mutating_tools() -> None:
-    """Spec §3.5 forbidden-set: real fix-tool names that would leak or mutate.
+def test_make_repro_tools_excludes_repo_push_tools() -> None:
+    """commit_and_push must never be exposed to the reproduce agent.
 
-    Asserting against the actual ``_fix_tools`` names — not invented
-    strings like ``apply_patch`` — keeps the contract honest. If
-    ``_fix_tools`` ever renames write_file, this test will still
-    enforce the *spirit* of the contract because the new name will
-    not appear here, but a paired-rename audit in code review is the
-    only way to catch a stealth-rename. See the profile-level contract
-    test for the matching assertion.
+    The reproduce agent writes test files and runs them locally.
+    It must not be able to push commits to remote — that is the fix
+    agent's job. Asserting against the actual sandbox method name keeps
+    this contract honest against renames.
     """
     sandbox = _StubSandbox()
     tools = make_repro_tools(sandbox=sandbox, event=_event())  # type: ignore[arg-type]
     names = {t.name for t in tools}
-    assert names.isdisjoint({"write_file", "git_diff", "search_files"}), (
-        f"reproduce tool surface must stay read-only; got: {sorted(names)}"
+    assert "commit_and_push" not in names, (
+        f"commit_and_push must not be exposed to the reproduce agent; got: {sorted(names)}"
     )
 
 
@@ -132,6 +140,22 @@ async def test_read_file_delegates_to_sandbox() -> None:
     assert await read_file.coroutine(path="README.md") == "# repo\n"
 
 
+async def test_write_file_delegates_to_sandbox() -> None:
+    sandbox = _StubSandbox()
+    tools = make_repro_tools(sandbox=sandbox, event=_event())  # type: ignore[arg-type]
+    write_file = _tool(tools, "write_file")
+    await write_file.coroutine(path="tests/test_repro_42.py", content="def test_bug(): ...")
+    assert sandbox.written == {"tests/test_repro_42.py": "def test_bug(): ..."}
+
+
+async def test_git_diff_delegates_to_sandbox() -> None:
+    diff = "diff --git a/tests/test_repro_42.py b/tests/test_repro_42.py\n+def test_bug(): ..."
+    sandbox = _StubSandbox(diff_result=diff)
+    tools = make_repro_tools(sandbox=sandbox, event=_event())  # type: ignore[arg-type]
+    git_diff = _tool(tools, "git_diff")
+    assert await git_diff.coroutine() == diff
+
+
 async def test_list_files_delegates_to_sandbox() -> None:
     sandbox = _StubSandbox(listing=["src/", "tests/", "pyproject.toml"])
     tools = make_repro_tools(sandbox=sandbox, event=_event())  # type: ignore[arg-type]
@@ -140,6 +164,31 @@ async def test_list_files_delegates_to_sandbox() -> None:
         "src/",
         "tests/",
         "pyproject.toml",
+    ]
+
+
+async def test_search_files_runs_grep_via_sandbox() -> None:
+    """search_files shells out to grep via sandbox.run(), not sandbox.search_files().
+
+    The tool parses stdout lines from grep output, so the stub must
+    supply the expected grep-style output through run_result.stdout.
+    """
+    grep_output = "src/api/list.py:42: pop()\nsrc/api/list.py:55:     pop(extra)"
+    sandbox = _StubSandbox(
+        run_result=ExecResult(stdout=grep_output, stderr="", exit_code=0, timed_out=False)
+    )
+    tools = make_repro_tools(sandbox=sandbox, event=_event())  # type: ignore[arg-type]
+    search_files = _tool(tools, "search_files")
+    result = await search_files.coroutine(pattern="pop()", path_glob="src/**/*.py")
+    assert result == ["src/api/list.py:42: pop()", "src/api/list.py:55:     pop(extra)"]
+    # Verify grep was invoked with the pattern and include filter.
+    assert sandbox.run_calls[0]["command"] == [
+        "grep",
+        "-rn",
+        "pop()",
+        "--include",
+        "src/**/*.py",
+        ".",
     ]
 
 

@@ -9,21 +9,30 @@ Public surface kept stable:
   - ``state.metadata["candidate_findings_json"]`` — JSON string for trace export.
   - ``state.metadata["agent_raw_output"]`` — summary text from ReviewFindings.
 
-File-fetching design:
-  The solver creates a ``GitHubFileReader`` from the sample's ``pr_url`` and
-  ``base_sha`` metadata and injects it into the eval runner.  This lets the
-  review agent's ``read_file`` / ``grep_repo`` tool calls hit the real GitHub
-  API at the correct base commit, without duplicating file-fetching logic in
-  the Inspect AI eval layer (which would violate the decoupling principle).
+File-fetching design (unified sandbox pattern):
+  The solver passes ``sandbox_factory`` (from ``build_sandbox_factory(settings)``)
+  together with ``base_sha`` and ``clone_url`` to ``run_review_sample``.  The
+  runner opens a Daytona sandbox, clones the repo at ``base_sha``, and wraps it
+  in a ``SandboxFileReader`` so the review agent's ``read_file`` / ``grep_repo``
+  tool calls read from the local clone — no live GitHub API dependency, no rate
+  limits, deterministic at the exact commit.
+
+  When no sandbox backend is configured (DAYTONA_API_KEY not set), the runner
+  falls back to an empty file map; the agent reviews using the diff alone.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Literal, TypedDict
 
+from openbot.application.sandbox_factory_deps import build_sandbox_factory
+from openbot.core.settings import Settings
 from openbot.evaluation import run_review_sample
+
+logger = logging.getLogger(__name__)
 
 # Pattern: https://github.com/<owner>/<repo>/pull/<number>
 _PR_URL_RE = re.compile(
@@ -118,29 +127,33 @@ def openbot_review_solver(
                 github_repo = str(md.get("repo", "unknown/repo"))
                 pr_number = int(md.get("pr_number") or 0)
 
-            # Build a live file reader when we have enough metadata to do so.
-            # This lets the agent's read_file / grep_repo tool calls hit the
-            # real GitHub API at the correct base commit rather than receiving
-            # empty strings from the default in-memory file map.
-            file_reader = None
+            # Build a sandbox factory for file access.
+            # The runner opens a Daytona sandbox, clones the repo at base_sha,
+            # and serves file reads from the local clone — no GitHub API needed.
             base_sha = str(md.get("base_sha") or "")
-            if github_repo and base_sha:
-                from openbot.evaluation.github_file_reader import GitHubFileReader
-
-                file_reader = GitHubFileReader(repo=github_repo, ref=base_sha)
+            clone_url = f"https://github.com/{github_repo}.git" if github_repo else ""
+            settings = Settings()
+            sandbox_factory = build_sandbox_factory(settings)
+            if sandbox_factory is None:
+                logger.warning(
+                    "review_solver: no sandbox configured (DAYTONA_API_KEY not set); "
+                    "review agent will work from diff alone (no file reads)."
+                )
 
             findings_obj = await run_review_sample(
                 repo=github_repo,
                 pr_number=pr_number,
                 pr_diff=diff,
                 run_id=sample_id,
-                file_reader=file_reader,
+                sandbox_factory=sandbox_factory,
+                base_sha=base_sha,
+                clone_url=clone_url,
             )
 
-            eval_findings = _domain_findings_to_eval(findings_obj.findings)
-            findings_json = json.dumps({"findings": eval_findings}, ensure_ascii=False)
+            findings_list = _domain_findings_to_eval(findings_obj.findings)
+            findings_json = json.dumps({"findings": findings_list}, ensure_ascii=False)
 
-            state.metadata["candidate_findings"] = eval_findings
+            state.metadata["candidate_findings"] = findings_list
             state.metadata["candidate_findings_json"] = findings_json
             state.metadata["agent_raw_output"] = findings_obj.summary
             state.output.completion = findings_json

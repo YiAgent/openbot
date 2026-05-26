@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from openbot.domain.events import EventKind, UnifiedEvent
+
+if TYPE_CHECKING:
+    from openbot.evaluation.github_file_reader import GitHubFileReader
 
 
 class EvalSideEffectError(RuntimeError):
@@ -45,6 +48,10 @@ class EvalChannelAdapter:
     pr_diff: str
     # Optional repo file map for read_file / grep_repo.
     files: dict[str, str] = field(default_factory=dict)
+    # Optional live file reader (GitHubFileReader).  When set, read_file and
+    # grep_repo delegate to it instead of the in-memory ``files`` map, giving
+    # the review agent access to the real GitHub API at a specific commit.
+    file_reader: GitHubFileReader | None = field(default=None)
     # Optional issue dict for get_issue.
     issue: dict[str, Any] = field(
         default_factory=lambda: {
@@ -96,7 +103,24 @@ class EvalChannelAdapter:
         return self.pr_diff
 
     async def read_file(self, event: UnifiedEvent, path: str) -> str:
+        """Return file content.  Delegates to ``file_reader`` when set."""
+        if self.file_reader is not None:
+            return await self.file_reader.read_file(path)
         return self.files.get(path, "")
+
+    async def list_repo_paths(self, event: UnifiedEvent, root: str = ".") -> list[str]:
+        """Return repo-relative paths under ``root`` (used by chat ``list_files`` tool).
+
+        Delegates to ``file_reader.list_files`` when the reader supports it
+        (``SandboxFileReader`` does; ``GitHubFileReader`` does not — GitHub
+        Code Search API does not expose directory listings).  Falls back to
+        the in-memory ``files`` dict keys when no reader is wired.
+        """
+        if self.file_reader is not None and hasattr(self.file_reader, "list_files"):
+            return await self.file_reader.list_files(root)
+        # In-memory fallback: return files whose paths live under root.
+        prefix = "" if root == "." else root.rstrip("/") + "/"
+        return [p for p in self.files if not prefix or p.startswith(prefix)]
 
     async def grep_repo(
         self,
@@ -106,7 +130,13 @@ class EvalChannelAdapter:
         path_glob: str | None = None,
         max_matches: int = 20,
     ) -> list[str]:
-        """Return lines matching ``pattern`` across ``self.files``."""
+        """Return lines matching ``pattern``.  Delegates to ``file_reader`` when set."""
+        if self.file_reader is not None:
+            return await self.file_reader.grep_repo(
+                pattern=pattern,
+                path_glob=path_glob,
+                max_matches=max_matches,
+            )
         results: list[str] = []
         try:
             rx = re.compile(pattern)
@@ -138,9 +168,24 @@ class EvalChannelAdapter:
         return "fake-eval-token"
 
     async def update_check_run(
-        self, event: UnifiedEvent, check_run_id: int, **kwargs: Any
+        self,
+        event: UnifiedEvent,
+        check_run_id: int,
+        status: str = "completed",
+        conclusion: str | None = None,
+        completed_at: str | None = None,
+        output: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {"ok": True, "id": check_run_id}
+
+    async def update_comment(
+        self,
+        event: UnifiedEvent,
+        comment_id: int,
+        message: str,
+    ) -> dict[str, Any]:
+        """Update an existing comment (no-op in eval context)."""
+        return {"ok": True, "id": comment_id}
 
     # ── writes (captured) ────────────────────────────────────────────────────
 

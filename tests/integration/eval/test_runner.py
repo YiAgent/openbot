@@ -6,11 +6,14 @@ is to wire the correct event + adapter, not to test the responders.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openbot.domain.checkout import CloneStrategy
 from openbot.domain.fix import FixAttempt, FixOutcome
+from openbot.domain.repro import ReproOutcome, ReproStatus
 from openbot.domain.review import ReviewFindings
 from openbot.evaluation.runner import (
     run_chat_sample,
@@ -55,7 +58,7 @@ async def test_run_review_sample_passes_diff_to_adapter(monkeypatch) -> None:
     diff_text = "--- a/x.py\n+++ b/x.py"
     captured_adapter = {}
 
-    async def fake_review(event, *, adapter, run_id=None):
+    async def fake_review(event, *, adapter, run_id=None, **_kwargs):
         captured_adapter["adapter"] = adapter
         return ReviewFindings(summary="ok", findings=())
 
@@ -79,7 +82,7 @@ async def test_run_review_sample_passes_diff_to_adapter(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_run_fix_sample_calls_responder(monkeypatch) -> None:
-    """run_fix_sample passes issue data to the fix responder."""
+    """run_fix_sample opens sandbox, clones, then calls the fix responder."""
     attempt = FixAttempt(
         summary="patched",
         files_changed=("foo.py",),
@@ -97,7 +100,15 @@ async def test_run_fix_sample_calls_responder(monkeypatch) -> None:
         lambda: mock_responder,
     )
 
-    fake_sandbox = MagicMock()
+    # Build a factory that yields a mock sandbox — simulating what
+    # build_sandbox_factory(settings) returns in production.
+    fake_sandbox = AsyncMock()
+    fake_sandbox.clone = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_factory():
+        yield fake_sandbox
+
     result = await run_fix_sample(
         repo="org/repo",
         issue_number=3,
@@ -105,10 +116,20 @@ async def test_run_fix_sample_calls_responder(monkeypatch) -> None:
         issue_body="Traceback...",
         base_sha="a" * 40,
         clone_url="https://github.com/org/repo.git",
-        sandbox=fake_sandbox,
+        sandbox_factory=fake_factory,
     )
 
     assert result is expected
+
+    # Verify clone was called with correct args before the agent ran.
+    fake_sandbox.clone.assert_awaited_once_with(
+        repo_url="https://github.com/org/repo.git",
+        ref="a" * 40,
+        token="",
+        strategy=CloneStrategy.SHALLOW,
+    )
+
+    # Verify the responder received the correct event.
     mock_responder.fix_for_event.assert_called_once()
     call_kwargs = mock_responder.fix_for_event.call_args
     event = call_kwargs.args[0]
@@ -144,11 +165,56 @@ async def test_run_chat_sample_calls_responder(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_test_generation_sample_raises_not_implemented() -> None:
-    """Stub raises NotImplementedError — v0.1 doesn't support test gen."""
-    with pytest.raises(NotImplementedError, match=r"v0\.1"):
-        await run_test_generation_sample(
-            repo="org/repo",
-            pr_number=1,
-            pr_diff="",
-        )
+async def test_run_test_generation_sample_calls_responder(monkeypatch) -> None:
+    """run_test_generation_sample opens sandbox, clones, then calls the repro responder."""
+    expected = ReproOutcome(
+        status=ReproStatus.REPRODUCED,
+        summary="Test reproduces the bug.",
+        command="python -m pytest tests/test_repro_42.py -v",
+        exit_code=1,
+        output_excerpt="FAILED tests/test_repro_42.py::test_bug",
+        hypothesis="Off-by-one in parser",
+        repro_artifact="diff --git a/tests/test_repro_42.py ...",
+        repro_artifact_filename="tests/test_repro_42.py",
+    )
+
+    mock_responder = MagicMock()
+    mock_responder.reproduce_for_event = AsyncMock(return_value=expected)
+    monkeypatch.setattr(
+        "openbot.evaluation.runner.DeepAgentsReproResponder",
+        lambda: mock_responder,
+    )
+
+    fake_sandbox = AsyncMock()
+    fake_sandbox.clone = AsyncMock()
+
+    @asynccontextmanager
+    async def fake_factory():
+        yield fake_sandbox
+
+    result = await run_test_generation_sample(
+        instance_id="org__repo-42",
+        repo="org/repo",
+        issue_number=42,
+        problem_statement="Parser crashes on empty input.",
+        base_sha="b" * 40,
+        clone_url="https://github.com/org/repo.git",
+        sandbox_factory=fake_factory,
+    )
+
+    assert result is expected
+
+    # Verify the sandbox was cloned at the correct ref before the agent ran.
+    fake_sandbox.clone.assert_awaited_once_with(
+        repo_url="https://github.com/org/repo.git",
+        ref="b" * 40,
+        token="",
+        strategy=CloneStrategy.SHALLOW,
+    )
+
+    # Verify the repro responder received the correct event.
+    mock_responder.reproduce_for_event.assert_called_once()
+    call_kwargs = mock_responder.reproduce_for_event.call_args
+    event = call_kwargs.args[0]
+    assert event.repo == "org/repo"
+    assert event.issue_number == 42

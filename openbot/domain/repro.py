@@ -45,14 +45,14 @@ class ReproOutcome:
     a shell command (REPRODUCED, NOT_REPRODUCED, and AGENT_FAILED-after-run
     paths). INSUFFICIENT_INFO outcomes leave them ``None``.
 
-    ``repro_artifact`` is the agent's verbatim repro script body — a
-    string, kept inline in the audit row (capped at the same 2000-char
-    budget as ``output_excerpt`` via the responder). v0.2 fix-handoff
-    will promote this to an on-disk script; until then inline keeps the
-    audit row self-contained.
+    ``repro_artifact`` is the git unified diff of the test file the agent
+    wrote to reproduce the bug (output of ``git diff HEAD``).  Kept inline
+    in the audit row and used as ``model_patch`` when exporting SWT-bench
+    predictions.  ``None`` when reproduction was not achieved or info was
+    insufficient.
 
-    ``repro_artifact_filename`` is the suggested filename for that v0.2
-    promotion (e.g. ``"repro_reproduced.sh"``). Both fields are paired:
+    ``repro_artifact_filename`` is the path of the test file written
+    (e.g. ``"tests/test_repro_12907.py"``).  Both fields are paired:
     both ``None`` or both set — pinned by tests, not ``__post_init__``.
     """
 

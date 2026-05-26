@@ -1,10 +1,10 @@
 """DeepAgentsReproResponder + ReproProfile — wiring and contract tests.
 
 Mirrors ``test_deepagents_fix.py``; the security-critical row is
-``test_build_tools_returns_read_only_subset`` which pins the tool
-whitelist against the **real** ``_fix_tools`` names so a stealth
-rename in ``_fix_tools.make_fix_tools`` can't quietly widen the
-reproduce-agent's surface.
+``test_build_tools_returns_test_authoring_surface`` which pins the
+allowed tool set (read_file, write_file, list_files, run_command,
+git_diff, search_files) and the single forbidden surface
+(commit_and_push — repo mutation that only the fix agent may do).
 
 The ``ReproProfile`` lives under ``Feature.TRIAGE`` (not a new
 feature) because reproduce is a sub-step *inside* the triage workflow
@@ -53,28 +53,34 @@ class _StubAdapter:
 
 @dataclass
 class _StubSandbox:
-    """The reproduce agent only needs an object with the read-only
-    SandboxPort surface; ``make_repro_tools`` calls ``read_file`` /
-    ``list_files`` / ``run`` on it. The fake agent we monkeypatch
+    """The reproduce agent needs the test-authoring SandboxPort surface:
+    ``read_file`` / ``write_file`` / ``list_files`` / ``run`` /
+    ``git_diff`` / ``search_files``. The fake agent we monkeypatch
     never invokes the tools, so the stub stays empty."""
 
 
 def _valid_outcome_dict(status: str = "reproduced") -> dict[str, Any]:
     """Shape matching ``ReproOutcomeSchema`` for a REPRODUCED outcome.
 
-    Each test that needs a different status overrides only the fields
-    that change — keeps the asserts honest about which field matters.
+    ``repro_artifact`` is a git unified diff of the written test file
+    (output of ``git_diff()``); ``repro_artifact_filename`` is the path
+    of the pytest test file. Both fields are paired — both set or both
+    None. Each test that needs a different status overrides only the
+    fields that change — keeps the asserts honest about which field
+    matters.
     """
 
     return {
         "status": status,
         "summary": "IndexError reproduced on empty list",
-        "command": "pytest -q tests/test_list.py",
+        "command": "python -m pytest tests/test_repro_42.py -v",
         "exit_code": 1,
-        "output_excerpt": "IndexError: list index out of range",
+        "output_excerpt": "FAILED tests/test_repro_42.py::test_bug",
         "hypothesis": "pop() called without length guard at api/list.py:42",
-        "repro_artifact": "#!/usr/bin/env bash\npytest -q tests/test_list.py\n",
-        "repro_artifact_filename": "repro_reproduced.sh",
+        "repro_artifact": (
+            "diff --git a/tests/test_repro_42.py b/tests/test_repro_42.py\n+def test_bug(): ..."
+        ),
+        "repro_artifact_filename": "tests/test_repro_42.py",
     }
 
 
@@ -127,7 +133,7 @@ def test_system_prompt_contains_insufficient_info_early_exit() -> None:
 
     Spec §6.2 contract: ``system_prompt(request)`` must contain the
     ``INSUFFICIENT_INFO`` early-exit instruction. Tool surface is
-    pinned separately by ``test_build_tools_returns_read_only_subset``
+    pinned separately by ``test_build_tools_returns_test_authoring_surface``
     — that's the real security boundary, not prompt content."""
     from openbot.infrastructure.agents.deepagents_repro import ReproProfile
 
@@ -162,25 +168,34 @@ def test_user_message_contains_issue_context() -> None:
 # ── Tool whitelist contract (security-critical) ─────────────────────────────
 
 
-def test_build_tools_returns_read_only_subset() -> None:
+def test_build_tools_returns_test_authoring_surface() -> None:
     """**The** security-critical test for this profile.
 
-    The whitelist is a hard ceiling — the reproduce agent must never
-    gain access to mutating or repo-leaking surfaces. Asserting against
-    the *real* fix-tool names (not invented strings like ``apply_patch``)
-    means this test would catch a stealth rename in ``_fix_tools`` that
-    accidentally widened the reproduce surface.
+    The reproduce agent writes pytest files, runs them, and captures the
+    diff — so it needs the test-authoring surface:
+      allowed: read_file, write_file, list_files, run_command, git_diff,
+               search_files
+      forbidden: commit_and_push (only the fix agent may push to remote)
+
+    Asserting against the real sandbox method name means a rename in the
+    sandbox port would surface here rather than silently widening the
+    forbidden surface.
     """
     from openbot.infrastructure.agents.deepagents_repro import ReproProfile
 
     request = AgentRequest(event=_event(), input={}, sandbox=_StubSandbox())  # type: ignore[arg-type]
     tools = ReproProfile().build_tools(request)
     names = {t.name for t in tools}
-    assert names <= {"read_file", "list_files", "run_command"}, (
-        f"reproduce surface must stay read-only; got: {sorted(names)}"
-    )
-    assert names.isdisjoint({"write_file", "git_diff", "search_files"}), (
-        f"forbidden fix-tool name leaked into reproduce surface: {sorted(names)}"
+    assert names == {
+        "read_file",
+        "write_file",
+        "list_files",
+        "run_command",
+        "git_diff",
+        "search_files",
+    }, f"reproduce surface diverged from expected test-authoring set; got: {sorted(names)}"
+    assert "commit_and_push" not in names, (
+        f"commit_and_push must not be exposed to the reproduce agent; got: {sorted(names)}"
     )
 
 
@@ -204,9 +219,9 @@ def test_parse_result_returns_repro_outcome() -> None:
     outcome = ReproProfile().parse_result({"structured_response": _valid_outcome_dict()})
     assert isinstance(outcome, ReproOutcome)
     assert outcome.status is ReproStatus.REPRODUCED
-    assert outcome.command == "pytest -q tests/test_list.py"
+    assert outcome.command == "python -m pytest tests/test_repro_42.py -v"
     assert outcome.exit_code == 1
-    assert outcome.repro_artifact_filename == "repro_reproduced.sh"
+    assert outcome.repro_artifact_filename == "tests/test_repro_42.py"
 
 
 def test_parse_result_missing_structured_response_raises() -> None:
@@ -242,12 +257,12 @@ async def test_repro_responder_delegates_to_runtime(monkeypatch: pytest.MonkeyPa
         return ReproOutcome(
             status=ReproStatus.REPRODUCED,
             summary="delegated",
-            command="pytest -q",
+            command="python -m pytest tests/test_repro_42.py -v",
             exit_code=1,
-            output_excerpt="…",
-            hypothesis="…",
-            repro_artifact="#!/bin/sh\npytest -q\n",
-            repro_artifact_filename="repro_reproduced.sh",
+            output_excerpt="FAILED tests/test_repro_42.py::test_bug",
+            hypothesis="Off-by-one in parser",
+            repro_artifact="diff --git a/tests/test_repro_42.py ...",
+            repro_artifact_filename="tests/test_repro_42.py",
         )
 
     monkeypatch.setattr(BaseDeepAgentRuntime, "run", fake_run)
