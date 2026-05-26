@@ -78,8 +78,7 @@ artifacts/
 *.sqlite
 *.sqlite3
 *.db
-log-www/
-# Local eval / agent runs
+# Local eval / agent runs — all output unified under evals/results/
 eval-logs/
 inspect-logs/
 # inspect-ai default log dir; PRD §8.4 forbids commit
@@ -88,7 +87,6 @@ logs/
 *.eval
 .inspect/
 .langgraph/
-logs-www/
 # Docker
 docker-compose.override.yml
 

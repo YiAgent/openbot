@@ -78,7 +78,7 @@ class PredictionsSettings(BaseSettings):
     model_config = _SETTINGS_CONFIG
 
     output_dir: Path = Field(
-        default=Path("evals/outputs"), validation_alias=PREDICTIONS_OUTPUT_DIR_ENV
+        default=Path("evals/results/predictions"), validation_alias=PREDICTIONS_OUTPUT_DIR_ENV
     )
 
 

@@ -44,7 +44,7 @@ from openbot.infrastructure.sandboxes.daytona import (
 # "Snapshot exclusions".
 _SWEEP_FILE_PATTERNS: tuple[str, ...] = (".env*", "*.pem", "*.key")
 _SWEEP_DIR_NAMES: tuple[str, ...] = (".langgraph", ".inspect", ".doppler")
-_SWEEP_DIR_PATHS: tuple[str, ...] = ("evals/logs",)
+_SWEEP_DIR_PATHS: tuple[str, ...] = ("evals/results",)
 
 if TYPE_CHECKING:
     from openbot.application.sandbox_handle import SandboxedHandle

@@ -3,15 +3,17 @@ from pathlib import Path
 from typing import TypedDict
 
 # Constants - Evaluation Log Directories
-# All harness artifacts live under a single root so they don't scatter
-# across the repo when invoked from project root via the Makefile.
-# See evals/logs/swt_bench/README for layout.
-_LOG_ROOT = Path("evals/logs/swt_bench")
+# All harness artifacts live under evals/results/ so output is unified.
+# Reports (grading verdicts) go to evals/results/reports/test/,
+# run logs go to evals/results/logs/test/.
+_RESULTS_ROOT = Path("evals/results")
+_LOG_ROOT = _RESULTS_ROOT / "logs" / "test"
+_REPORTS_ROOT = _RESULTS_ROOT / "reports" / "test"
 BASE_IMAGE_BUILD_DIR = _LOG_ROOT / "image_build" / "base"
 ENV_IMAGE_BUILD_DIR = _LOG_ROOT / "image_build" / "env"
 INSTANCE_IMAGE_BUILD_DIR = _LOG_ROOT / "image_build" / "instances"
 RUN_INSTANCE_LOG_DIR = _LOG_ROOT / "run_instances"
-EVALUATION_RESULTS_DIR = _LOG_ROOT / "results"
+EVALUATION_RESULTS_DIR = _REPORTS_ROOT
 LOCKS_DIR = _LOG_ROOT / "locks"
 
 

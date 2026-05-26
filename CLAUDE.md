@@ -145,7 +145,7 @@ Session 开始时主动检查 `docs/superpowers/plans/` 和 `docs/superpowers/sp
 
 ## Forbidden
 
-- Do not commit: `.env*`, local DBs, `evals/logs/`, `.langgraph/`, `.inspect/`, `.doppler/`.
+- Do not commit: `.env*`, local DBs, `evals/results/`, `.langgraph/`, `.inspect/`, `.doppler/`.
 - Do not put LLM-behavior or prompt-quality assertions in `tests/` — those belong in `evals/` (PRD §8.3).
 - Do not bypass pre-commit hooks (`--no-verify`).
 
