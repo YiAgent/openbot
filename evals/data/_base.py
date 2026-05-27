@@ -81,7 +81,10 @@ class EvalDataset(ABC):
             client = Client()
         try:
             ds = client.read_dataset(dataset_name=self.dataset_version)
-        except LookupError:
+        except Exception:
+            # LangSmith SDK raises LangSmithNotFoundError (not LookupError)
+            # when the dataset doesn't exist. Catch all exceptions to be
+            # resilient to SDK version changes.
             ds = client.create_dataset(
                 dataset_name=self.dataset_version,
                 description=self.description,
