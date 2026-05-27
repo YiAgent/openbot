@@ -153,8 +153,8 @@ class DeepAgentsReviewResponder:
         adapter: ChannelAdapterPort,
         run_id: str | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
-        per_task_cap_usd: Decimal,
-        session_factory: Any,
+        per_task_cap_usd: Decimal = Decimal("1.50"),
+        session_factory: Any = None,
     ) -> ReviewFindings:
         if event.pr_number is None:
             raise ValueError("deepagents_review_requires_pr_number")

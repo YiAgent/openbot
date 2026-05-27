@@ -59,8 +59,8 @@ HF_TOKEN := $(shell doppler secrets get HF_TOKEN --project openbot --config dev 
 export HF_TOKEN
 
 LIMIT           ?= 5
-VIEW_LOG_DIR    ?= logs
-VIEW_OUTPUT_DIR ?= logs-www
+VIEW_LOG_DIR    ?= results/logs
+VIEW_OUTPUT_DIR ?= results/viewer
 VIEW_HOST       ?= 127.0.0.1
 VIEW_PORT       ?= 8123
 VIEW_SERVER_LOG ?= /tmp/openbot-inspect-view.log
@@ -72,7 +72,7 @@ VIEW_SERVER_LOG ?= /tmp/openbot-inspect-view.log
 DISPLAY         ?= rich
 LOG_LEVEL       ?= info
 ifndef LOG_DIR
-LOG_DIR         := logs/$(shell date +%Y%m%d-%H%M%S)
+LOG_DIR         := results/logs/$(shell date +%Y%m%d-%H%M%S)
 endif
 
 # ─── Resilience flags (overridable) ─────────────────────────────
@@ -99,7 +99,7 @@ endif
 #                  samples are excluded from the metric *and* from feedback
 #                  upload, and the run terminates once the failure rate
 #                  crosses ``FAIL_ON_ERROR``.
-MAX_SAMPLES     ?= 4
+MAX_SAMPLES     ?= 2
 ATTEMPT_TIMEOUT ?= 180
 RETRY_ON_ERROR  ?= 2
 FAIL_ON_ERROR   ?= 0.1
@@ -241,9 +241,9 @@ endif
 #   GRADE_INSTANCE_IDS   — optional space-separated instance subset
 #
 # The harness writes:
-#   evals/logs/swt_bench/run_instances/<run-id>/<instance>/{test_output.txt, eval.log, …}
-#   evals/logs/swt_bench/results/<run-id>.json   (per-instance verdicts)
-GRADE_PREDICTIONS  ?= $(shell ls -1t outputs/test_swt_bench_verified/*.predictions.jsonl 2>/dev/null | head -1)
+#   evals/results/logs/test/run_instances/<run-id>/<instance>/{test_output.txt, eval.log, …}
+#   evals/results/reports/test/<run-id>.json   (per-instance verdicts)
+GRADE_PREDICTIONS  ?= $(shell ls -1t results/predictions/test_swt_bench_verified/*.predictions.jsonl 2>/dev/null | head -1)
 GRADE_MAX_WORKERS  ?= 4
 GRADE_RUN_ID       ?= openbot-$(shell date -u +%Y%m%dT%H%M%SZ)
 GRADE_DATASET      ?= princeton-nlp/SWE-bench_Verified
@@ -261,9 +261,9 @@ writeback-test: ## Writeback SWT harness verdicts → LangSmith swt_bench_pass_a
 	@# the `../evals/...` glob (relative to evals/) gets re-resolved
 	@# under repo-root, ending up one dir too high.
 	@if [ -z "$(GRADE_REPORT)" ]; then \
-		LATEST="$$(ls -1t ../evals/logs/swt_bench/results/*.json 2>/dev/null | head -1)"; \
+		LATEST="$$(ls -1t ../evals/results/reports/test/*.json 2>/dev/null | head -1)"; \
 		if [ -z "$$LATEST" ]; then \
-			echo "no evals/logs/swt_bench/results/*.json — run make grade-test first" >&2; \
+			echo "no evals/results/reports/test/*.json — run make grade-test first" >&2; \
 			exit 1; \
 		fi; \
 		GRADE_REPORT="$$(cd "$$(dirname "$$LATEST")" && pwd)/$$(basename "$$LATEST")"; \
@@ -271,7 +271,7 @@ writeback-test: ## Writeback SWT harness verdicts → LangSmith swt_bench_pass_a
 		GRADE_REPORT="$(GRADE_REPORT)"; \
 	fi; \
 	if [ -z "$(GRADE_EXPERIMENT)" ]; then \
-		LATEST_PRED="$$(ls -1t outputs/test_swt_bench_verified/*.predictions.jsonl 2>/dev/null | head -1)"; \
+		LATEST_PRED="$$(ls -1t results/predictions/test_swt_bench_verified/*.predictions.jsonl 2>/dev/null | head -1)"; \
 		EXP_NAME="$$(basename "$$LATEST_PRED" .predictions.jsonl)"; \
 	else \
 		EXP_NAME="$(GRADE_EXPERIMENT)"; \
@@ -284,7 +284,7 @@ writeback-test: ## Writeback SWT harness verdicts → LangSmith swt_bench_pass_a
 
 grade-test: ## Run vendored SWT-bench harness on remote docker (DOCKER_HOST) against GRADE_PREDICTIONS
 	@if [ -z "$(GRADE_PREDICTIONS)" ]; then \
-		echo "no predictions.jsonl under evals/outputs/test_swt_bench_verified/ — run make smoke-test first" >&2; \
+		echo "no predictions.jsonl under evals/results/predictions/test_swt_bench_verified/ — run make smoke-test first" >&2; \
 		exit 1; \
 	fi
 	@printf '\033[36m▶ swt-bench grade\033[0m %s\n  \033[2mDOCKER_HOST=%s run_id=%s workers=%s\033[0m\n' \
@@ -328,29 +328,28 @@ grade-test: ## Run vendored SWT-bench harness on remote docker (DOCKER_HOST) aga
 #                            (default `swebench`; docker-mode only —
 #                            Modal builds its own image per instance)
 #   GRADE_FIX_REPORT_DIR   — where swebench writes <run_id>.<model>.json
-#                            (default `evals/logs/swe_bench/results` —
-#                            kept under evals/logs/ so all harness
+#                            (default `evals/results/reports/fix` —
+#                            kept under evals/results/ so all harness
 #                            artefacts stay together; writeback picks
 #                            the most recent json from this dir)
 #   GRADE_FIX_CACHE_LEVEL  — none|base|env|instance (docker-mode only,
 #                            default `env`)
-GRADE_FIX_PREDICTIONS  ?= $(shell ls -1t outputs/fix_swe_bench_verified/*.predictions.jsonl 2>/dev/null | head -1)
+GRADE_FIX_PREDICTIONS  ?= $(shell ls -1t results/predictions/fix_swe_bench_verified/*.predictions.jsonl 2>/dev/null | head -1)
 GRADE_FIX_MODAL        ?= true
 GRADE_FIX_MAX_WORKERS  ?= 4
 GRADE_FIX_RUN_ID       ?= openbot-fix-$(shell date -u +%Y%m%dT%H%M%SZ)
 GRADE_FIX_DATASET      ?= princeton-nlp/SWE-bench_Verified
 GRADE_FIX_INSTANCE_IDS ?=
 GRADE_FIX_NAMESPACE    ?= swebench
-# Mirrors the SWT layout (evals/logs/swt_bench/{results,…}) so all
-# harness artefacts stay under evals/logs/ instead of scattering at
-# repo root. swebench writes `<model>.<run_id>.json` relative to cwd,
+# All harness artefacts stay under evals/results/ for unified output.
+# swebench writes `<model>.<run_id>.json` relative to cwd,
 # so the recipe cd's here before invoking the CLI.
-GRADE_FIX_REPORT_DIR   ?= evals/logs/swe_bench/results
+GRADE_FIX_REPORT_DIR   ?= evals/results/reports/fix
 GRADE_FIX_CACHE_LEVEL  ?= env
 
 grade-fix: ## Run pip-installed swebench harness (Modal by default) against GRADE_FIX_PREDICTIONS
 	@if [ -z "$(GRADE_FIX_PREDICTIONS)" ]; then \
-		echo "no predictions.jsonl under evals/outputs/fix_swe_bench_verified/ — run make smoke-fix first" >&2; \
+		echo "no predictions.jsonl under evals/results/predictions/fix_swe_bench_verified/ — run make smoke-fix first" >&2; \
 		exit 1; \
 	fi
 	@if [ "$(GRADE_FIX_MODAL)" = "true" ]; then \
@@ -402,9 +401,6 @@ writeback-fix: ## Writeback SWE harness verdicts → LangSmith swe_bench_pass_at
 	@# Resolve paths to absolute BEFORE the `cd ..` below — otherwise the
 	@# `../<report_dir>/*.json` glob (relative to evals/) gets re-resolved
 	@# under repo-root, ending up one dir too high.
-	@# Resolve report path BEFORE the `cd ..` below; otherwise the
-	@# ../<dir>/ glob (relative to evals/) gets re-resolved one dir too
-	@# high.
 	@if [ -z "$(GRADE_FIX_REPORT)" ]; then \
 		LATEST="$$(ls -1t ../$(GRADE_FIX_REPORT_DIR)/*.json 2>/dev/null | head -1)"; \
 		if [ -z "$$LATEST" ]; then \
@@ -416,7 +412,10 @@ writeback-fix: ## Writeback SWE harness verdicts → LangSmith swe_bench_pass_at
 		GRADE_FIX_REPORT="$(GRADE_FIX_REPORT)"; \
 	fi; \
 	if [ -z "$(GRADE_FIX_EXPERIMENT)" ]; then \
-		LATEST_PRED="$$(ls -1t outputs/fix_swe_bench_verified/*.predictions.jsonl 2>/dev/null | head -1)"; \
+		LATEST_PRED="$$(ls -1t results/predictions/fix_swe_bench_verified/*.predictions.jsonl 2>/dev/null | head -1)"; \
+		# Since build_task() now pre-generates the experiment name using
+		# make_experiment_name() and passes it to prediction_exporter(run_label=),
+		# the predictions filename IS the experiment name — no transformation needed.
 		EXP_NAME="$$(basename "$$LATEST_PRED" .predictions.jsonl)"; \
 	else \
 		EXP_NAME="$(GRADE_FIX_EXPERIMENT)"; \
@@ -443,15 +442,15 @@ endif
 # up at 24, and a run where 7 samples errored gets the 7 reruns.
 #
 # Pass ``LOG=<path>`` to resume an explicit log; the default ``resume``
-# target finds the most-recent ``.eval`` under ``evals/logs/`` and
+# target finds the most-recent ``.eval`` under ``evals/results/logs/`` and
 # resumes it.
 RESUME_FLAGS ?= --fail-on-error=$(FAIL_ON_ERROR) --retry-on-error=$(RETRY_ON_ERROR) --attempt-timeout $(ATTEMPT_TIMEOUT) --max-samples $(MAX_SAMPLES) --log-level $(LOG_LEVEL) --display $(DISPLAY)
 
 resume: ## Resume the most recent partial eval (override with LOG=path/to/file.eval)
 ifndef LOG
-	@LATEST="$$(ls -1t evals/logs/*/*.eval 2>/dev/null | head -1)"; \
+	@LATEST="$$(ls -1t evals/results/logs/*/*.eval 2>/dev/null | head -1)"; \
 	if [ -z "$$LATEST" ]; then \
-		echo "no .eval logs under evals/logs/ — run a make smoke-* target first" >&2; \
+		echo "no .eval logs under evals/results/logs/ — run a make smoke-* target first" >&2; \
 		exit 1; \
 	fi; \
 	printf '\033[36m▶ inspect eval-retry\033[0m %s\n' "$$LATEST"; \
@@ -478,6 +477,27 @@ sandbox-clean: ## Force-remove all leftover eval sandbox containers
 		echo "removing $$(echo $$ids | wc -w | tr -d ' ') sandbox container(s)…"; \
 		docker rm -f $$ids; \
 	fi
+
+# ─── Daytona sandbox housekeeping ───────────────────────────────
+# List and delete orphaned Daytona sandboxes that consume CPU quota.
+# These are left behind when the Inspect process is killed or crashes
+# before the sandbox context manager's finally block runs.
+sandbox-status-daytona: ## List all Daytona sandboxes
+	@$(DOPPLER) $(PY) python -c "\
+import daytona; \
+d = daytona.Daytona(); \
+items = d.list().items or []; \
+print(f'Found {len(items)} Daytona sandbox(es):'); \
+[print(f'  {s.id}  state={s.state}  created={getattr(s, \"created_at\", \"?\")}') for s in items]"
+
+sandbox-clean-daytona: ## Delete ALL Daytona sandboxes (reclaim CPU quota)
+	@$(DOPPLER) $(PY) python -c "\
+import daytona; \
+d = daytona.Daytona(); \
+items = d.list().items or []; \
+print(f'Deleting {len(items)} Daytona sandbox(es)...'); \
+[d.delete(s) for s in items]; \
+print('Done — all Daytona sandboxes deleted.')"
 
 # Reap dangling per-sample SWE-bench / SWT-bench images. The DockerSandboxBackend
 # now removes its own images on aclose, but images pulled by the *Inspect*

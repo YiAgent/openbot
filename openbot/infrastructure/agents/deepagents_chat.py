@@ -160,8 +160,8 @@ class DeepAgentsChatResponder:
         run_id: str | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         adapter: Any | None = None,
-        per_task_cap_usd: Decimal,
-        session_factory: Any,
+        per_task_cap_usd: Decimal = Decimal("1.50"),
+        session_factory: Any = None,
     ) -> str:
         return await self._runtime.run(
             ChatProfile(),

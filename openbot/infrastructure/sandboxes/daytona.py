@@ -32,7 +32,28 @@ _SHALLOW_HISTORY_DEPTH = 50
 
 _logger = logging.getLogger(__name__)
 
-_DEFAULT_IMAGE = "python:3.11-slim"
+# Image.debian_slim() installs gcc, gfortran, build-essential — required
+# for C-extension projects (astropy/erfa, numpy, etc.) whose pip install
+# needs a working compiler toolchain.  The plain "python:X.Y-slim" image
+# lacks these and causes silent install failures inside the sandbox.
+_DEFAULT_IMAGE: Any = None  # lazily built by _get_default_image()
+
+
+def _get_default_image() -> Any:
+    """Build the default Image once per process (expensive Dockerfile gen).
+
+    Uses ``Image.debian_slim()`` which ships gcc/gfortran/build-essential
+    (required for C-extension projects like astropy/erfa).  We pin
+    ``setuptools<72`` because astropy 4.x and other older science packages
+    import ``setuptools.dep_util`` which was removed in setuptools 72+.
+    """
+    global _DEFAULT_IMAGE
+    if _DEFAULT_IMAGE is None:
+        daytona_mod = _get_daytona_module()
+        _DEFAULT_IMAGE = daytona_mod.Image.debian_slim("3.11").pip_install("setuptools<72")
+    return _DEFAULT_IMAGE
+
+
 _WORKSPACE = "/workspace/repo"
 _INSTALL_GIT_SCRIPT = (
     "set -euo pipefail; "
@@ -184,7 +205,7 @@ class DaytonaSandboxAdapter(SandboxPort):
             s.daytona_server_url,
         )
         daytona_mod = _get_daytona_module()
-        params = daytona_mod.CreateSandboxFromImageParams(image=_DEFAULT_IMAGE)
+        params = daytona_mod.CreateSandboxFromImageParams(image=_get_default_image())
         sandbox = await asyncio.to_thread(client.create, params)
         # Ensure git is present and the workspace exists.
         await asyncio.to_thread(sandbox.process.exec, _INSTALL_GIT_SCRIPT, timeout=60)
@@ -283,7 +304,8 @@ class DaytonaSandboxAdapter(SandboxPort):
     async def read_file(self, path: str) -> str:
         full = f"{self.workspace}/{path}" if not path.startswith("/") else path
         try:
-            data = await asyncio.to_thread(self._sandbox.files.download, full)
+            # SDK: sandbox.fs.download_file(remote_path) -> bytes
+            data = await asyncio.to_thread(self._sandbox.fs.download_file, full)
         except Exception:
             return ""
         if isinstance(data, bytes):
@@ -295,7 +317,8 @@ class DaytonaSandboxAdapter(SandboxPort):
 
     async def write_file(self, path: str, content: str) -> None:
         full = f"{self.workspace}/{path}" if not path.startswith("/") else path
-        await asyncio.to_thread(self._sandbox.files.upload, full, content.encode("utf-8"))
+        # SDK: sandbox.fs.upload_file(file_bytes, remote_path) — bytes first
+        await asyncio.to_thread(self._sandbox.fs.upload_file, content.encode("utf-8"), full)
 
     async def list_files(self, *, path: str = ".", max: int = 200) -> list[str]:
         target = (
@@ -327,17 +350,42 @@ class DaytonaSandboxAdapter(SandboxPort):
         # injection-safe even when individual args contain spaces or quotes.
         joined = " ".join(shlex.quote(a) for a in command)
         cmd = f"cd {shlex.quote(self.workspace)} && {env_prefix}{joined}"
-        response = await asyncio.to_thread(self._sandbox.process.exec, cmd, timeout=timeout_seconds)
-        extras: dict[str, Any] = getattr(response, "additional_properties", {}) or {}
-        exit_code = (
-            response.exit_code if response.exit_code is not None else int(extras.get("code") or 0)
-        )
-        return ExecResult(
-            stdout=str(response.result or ""),
-            stderr="",
-            exit_code=int(exit_code),
-            timed_out=bool(extras.get("timed_out", False)),
-        )
+
+        # Retry transient IP resolution failures (Daytona occasionally can't
+        # resolve the container IP immediately after sandbox creation).
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = await asyncio.to_thread(
+                    self._sandbox.process.exec, cmd, timeout=timeout_seconds
+                )
+                extras: dict[str, Any] = getattr(response, "additional_properties", {}) or {}
+                exit_code = (
+                    response.exit_code
+                    if response.exit_code is not None
+                    else int(extras.get("code") or 0)
+                )
+                return ExecResult(
+                    stdout=str(response.result or ""),
+                    stderr="",
+                    exit_code=int(exit_code),
+                    timed_out=bool(extras.get("timed_out", False)),
+                )
+            except Exception as exc:
+                last_exc = exc
+                if "resolve container IP" in str(exc) or "no IP address" in str(exc):
+                    wait = 2 ** (attempt + 1)
+                    _logger.warning(
+                        "daytona_run_transient_ip_retry attempt=%d wait=%ds sandbox_id=%s",
+                        attempt + 1,
+                        wait,
+                        getattr(self._sandbox, "id", "?"),
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                raise
+        # All retries exhausted — raise the last transient error.
+        raise last_exc  # type: ignore[misc]
 
 
 __all__ = ["DaytonaSandboxAdapter"]

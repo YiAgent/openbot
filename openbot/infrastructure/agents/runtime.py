@@ -178,6 +178,11 @@ def _validate_sandbox(profile: AgentProfile[Any], request: AgentRequest) -> None
 class BaseDeepAgentRuntime:
     """Shared DeepAgents execution engine."""
 
+    def __init__(self) -> None:
+        # Populated after each run() with token usage and agent messages.
+        # Eval solvers read this to propagate to Inspect AI's state.
+        self._last_agent_metadata: dict[str, Any] = {}
+
     async def run(
         self,
         profile: AgentProfile[DomainResult],
@@ -249,9 +254,14 @@ class BaseDeepAgentRuntime:
                 "repo": request.event.repo,
                 "actor": request.event.actor,
                 "model": display_name(model),
-                "checkpoint_enabled": effective_checkpointer is not None,
-                "sandbox_present": request.sandbox is not None,
-                **dict(request.metadata),
+                "checkpoint_enabled": str(effective_checkpointer is not None),
+                "sandbox_present": str(request.sandbox is not None),
+                # Serialize non-string metadata values so LangChain propagation
+                # doesn't silently drop them (bool/Decimal/callable → str).
+                **{
+                    k: str(v) if not isinstance(v, str) else v
+                    for k, v in (request.metadata or {}).items()
+                },
             },
         )
         if effective_checkpointer is not None:
@@ -263,11 +273,14 @@ class BaseDeepAgentRuntime:
         # root traces.  The CallbackHandler is created INSIDE the context so
         # it inherits the active OTel ContextVar set by start_as_current_observation.
         # No-op when LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set.
+        from openbot.infrastructure.agents._token_callback import TokenUsageCallback
+
+        token_cb = TokenUsageCallback()
         trace_name = f"{profile.feature.value}-{profile.agent_name}"
         with langfuse_agent_trace(name=trace_name, session_id=request.run_id or ""):
             lf_callbacks = [h for h in [get_langfuse_handler()] if h is not None]
-            if lf_callbacks:
-                config["callbacks"] = lf_callbacks  # pyright: ignore[reportGeneralTypeIssues]
+            all_callbacks = [*lf_callbacks, token_cb]
+            config["callbacks"] = all_callbacks  # pyright: ignore[reportGeneralTypeIssues]
 
             invoke_coro = agent.ainvoke(
                 {"messages": [{"role": "user", "content": profile.user_message(request)}]},
@@ -303,6 +316,23 @@ class BaseDeepAgentRuntime:
             except TypeError:
                 # request.metadata is a frozen mapping — log only.
                 _logger.warning("budget_partial_metadata_unmutable")
+
+        # Capture token usage from the callback so eval solvers can propagate
+        # it to Inspect AI's state.metadata["model_usage"].
+        raw_messages = raw.get("messages", []) if isinstance(raw, dict) else []
+        agent_messages: list[dict[str, str]] = []
+        for msg in raw_messages:
+            role = getattr(msg, "type", None) or getattr(msg, "role", "unknown")
+            content = getattr(msg, "content", "")
+            if isinstance(content, str):
+                agent_messages.append({"role": role, "content": content})
+            else:
+                agent_messages.append({"role": role, "content": str(content)})
+
+        self._last_agent_metadata = {
+            "token_usage": token_cb.usage,
+            "messages": agent_messages,
+        }
 
         # Soft-finalize: if the profile expects a structured response but
         # middleware terminated the graph (e.g. ModelCallLimitMiddleware

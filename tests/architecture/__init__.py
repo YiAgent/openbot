@@ -1,1 +1,0 @@
-"""Architecture / import-graph tests."""

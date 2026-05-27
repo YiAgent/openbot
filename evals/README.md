@@ -112,7 +112,7 @@ There is **no sandbox** in this flow because the model only reads a diff and emi
 1. The task loads the SWE-bench dataset from HuggingFace.
 2. The OpenBot product sandbox factory provisions a sandbox cloned at `base_commit` (Daytona by default; Modal / Docker swappable via `OPENBOT_SANDBOX_BACKEND`).
 3. `evals/solvers/fix.py` calls `openbot.evaluation.run_fix_sample(...)`, which exercises the production `DeepAgentsFixResponder`.
-4. `prediction_exporter` captures the `git diff` and appends it to `evals/outputs/.../*.predictions.jsonl`.
+4. `prediction_exporter` captures the `git diff` and appends it to `evals/results/predictions/.../*.predictions.jsonl`.
 5. **Real grading is offline** via the official SWE-bench Docker harness.
 
 ### 3. Test generation: `test_swt_bench`
@@ -272,7 +272,7 @@ OPENBOT_MODEL=mimo-v2.5 make -C evals smoke-fix
 OPENBOT_MODEL=mimo-v2.5 make -C evals smoke-test
 
 # point the viewer at Makefile-produced smoke logs or a different port
-make -C evals view-open VIEW_LOG_DIR=evals/logs VIEW_OUTPUT_DIR=evals/logs-www
+make -C evals view-open VIEW_LOG_DIR=evals/results/logs VIEW_OUTPUT_DIR=evals/results/viewer
 make -C evals view-open VIEW_PORT=8124
 ```
 
@@ -341,11 +341,11 @@ samples are skipped — so a 50-sample run that was killed at sample 23
 resumes at 24, and a run where 7 samples errored gets exactly 7 reruns.
 
 ```bash
-# resume the most recent partial run under evals/logs/
+# resume the most recent partial run under evals/results/logs/
 make -C evals resume
 
 # resume an explicit log
-make -C evals resume LOG=evals/logs/20260516-165534-review-full/-I*.eval
+make -C evals resume LOG=evals/results/logs/20260516-165534-review-full/-I*.eval
 ```
 
 Resume inherits the same resilience flags as the original run.

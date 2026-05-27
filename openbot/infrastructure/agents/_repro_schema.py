@@ -64,11 +64,15 @@ class _ReproOutcomeModel(BaseModel):
     )
     repro_artifact: str | None = Field(
         default=None,
-        description="Inline repro-script body; paired with ``repro_artifact_filename``.",
+        description=(
+            "Git unified diff (output of git_diff()) of the test file written "
+            "to reproduce the bug.  Used verbatim as SWT-bench model_patch. "
+            "Paired with repro_artifact_filename; both None or both set."
+        ),
     )
     repro_artifact_filename: str | None = Field(
         default=None,
-        description="Suggested filename for v0.2 fix-handoff.",
+        description="Path of the test file written (e.g. 'tests/test_repro_12907.py').",
     )
 
     @field_validator("output_excerpt", mode="before")

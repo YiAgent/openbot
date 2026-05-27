@@ -283,8 +283,8 @@
 <body>
 
 <div class="page-header">
-  <h1>🤖 OpenBot <span class="badge">v0.1 · GitHub Only</span></h1>
-  <p>完整业务流程 — Webhook 接收 · 分发调度 · 预检中间件链 · Worker 消费者 · 四大工作流处理器</p>
+  <h1>🤖 OpenBot <span class="badge">v0.1 · GitHub Only · TaskSpec v3 · W1–W8</span></h1>
+  <p>完整业务流程 — Webhook 接收 · 分发调度 · 预检中间件链 · Worker 消费者 · 四大工作流处理器（含 Repro 子 Agent）</p>
 </div>
 
 <div class="legend">
@@ -398,7 +398,7 @@
 
   <!-- PHASE 2 -->
   <div class="section">
-    <div class="phase-label">Phase 2 — Webhook 异步段（decide_and_enqueue · BackgroundTask 或 Worker 读 v1/v2）</div>
+    <div class="phase-label">Phase 2 — Webhook 异步段（decide_and_enqueue · legacy 兼容路径 · Worker 读 TaskSpec v3）</div>
     <div class="two-col">
       <div class="pipeline">
         <div class="node node-usecase">
@@ -568,9 +568,29 @@
               <span class="ws-detail">load_for_repo(adapter, event) — 读取 .openbot/config.yaml</span>
             </div>
             <div class="ws-item">
+              <span class="ws-badge">W4.5</span>
+              <span class="ws-name">还原 classifier_output</span>
+              <span class="ws-detail">parse_classifier_output：从 TaskSpec dict 还原为 typed output</span>
+            </div>
+            <div class="ws-item">
               <span class="ws-badge">W5</span>
               <span class="ws-name">execute_handler</span>
-              <span class="ws-detail">无 preflight（已在 decide_and_enqueue 中执行）→ dispatch.handler(ctx)</span>
+              <span class="ws-detail">无 preflight（已在 webhook 中执行）→ _run_with_sandbox → dispatch.handler(ctx)</span>
+            </div>
+            <div class="ws-item">
+              <span class="ws-badge">W6</span>
+              <span class="ws-name">Attempt 计数</span>
+              <span class="ws-detail">Redis 原子计数器 openbot:workflows:retries:{entry_id}（7天 TTL）</span>
+            </div>
+            <div class="ws-item">
+              <span class="ws-badge">W7</span>
+              <span class="ws-name">Cancellation 生命周期</span>
+              <span class="ws-detail">注册 cancellation slot → handler 执行 → deregister</span>
+            </div>
+            <div class="ws-item">
+              <span class="ws-badge">W8</span>
+              <span class="ws-name">完成处理</span>
+              <span class="ws-detail">REVIEW 场景 store_reviewed_sha；XACK 确认消费</span>
             </div>
           </div>
         </div>
@@ -644,10 +664,14 @@
           <ul class="workflow-steps">
             <li><span class="ws-icon">🎯</span><span class="ws-text"><strong>触发</strong>：issue.opened / edited / reopened / labeled / unlabeled</span></li>
             <li><span class="ws-icon">🛡️</span><span class="ws-text">防卫：非 ISSUE_OPENED 跳过；bot actor 跳过</span></li>
-            <li><span class="ws-icon">💬</span><span class="ws-text">adapter.reply 在 Issue 下发布 ACK 评论（@actor 可见）</span></li>
+            <li><span class="ws-icon">💬</span><span class="ws-text">sticky_reply：创建或复用 ACK 评论（评论 ID 持久化到 run）</span></li>
+            <li class="ws-agent"><span class="ws-icon">🔬</span><span class="ws-text"><strong>Reproduce 子 Agent</strong>：sandbox policy = REQUIRED 且 handle 可用时触发</span></li>
+            <li><span class="ws-icon">📦</span><span class="ws-text">_should_run_reproduce → derive_sandbox_policy(classifier) + sandbox_handle 检查</span></li>
+            <li><span class="ws-icon">🤖</span><span class="ws-text">DeepAgentsReproResponder：sandbox 内写 pytest 复现 bug → ReproOutcome</span></li>
+            <li><span class="ws-icon">📝</span><span class="ws-text">render_final_comment：REPRODUCED / NOT_REPRODUCED / INSUFFICIENT_INFO / AGENT_FAILED</span></li>
             <li class="ws-success"><span class="ws-icon">✅</span><span class="ws-text">audit_lifecycle(TRIAGE) STARTED → COMPLETED，outcome = comment_id</span></li>
           </ul>
-          <div class="note" style="margin-top:8px">🚧 路线图：自动打标签 · 优先级判断 · Sandbox Issue 复现</div>
+          <div class="note" style="margin-top:8px">Repro 仅在 classifier 判定 type=bug + has_reproduction_info + 非 spam 时运行</div>
         </div>
       </div>
 
@@ -681,15 +705,15 @@
             <li><span class="ws-icon">🎯</span><span class="ws-text"><strong>触发</strong>：issue.assigned（assignee.type == "Bot"）</span></li>
             <li><span class="ws-icon">📋</span><span class="ws-text">get_issue：获取 body、clone_url、base_sha、default_branch</span></li>
             <li><span class="ws-icon">🔑</span><span class="ws-text">get_installation_token：获取临时 GitHub 安装令牌</span></li>
-            <li class="ws-sandbox"><span class="ws-icon">📦</span><span class="ws-text"><strong>打开 Sandbox</strong>：ctx.sandbox_factory() → DaytonaSandboxAdapter</span></li>
-            <li class="ws-sandbox"><span class="ws-icon">🐙</span><span class="ws-text">sandbox.clone：token 注入 HTTPS URL，克隆到 Daytona 云端</span></li>
+            <li class="ws-sandbox"><span class="ws-icon">📦</span><span class="ws-text"><strong>Sandbox Gate</strong>：_run_with_sandbox — 先尝试 cache.acquire()（warm path）</span></li>
+            <li class="ws-sandbox"><span class="ws-icon">🐙</span><span class="ws-text">Cache miss → factory() → sandbox.clone → 构建 SandboxedHandle → _safe_publish(cache)</span></li>
             <li class="ws-agent"><span class="ws-icon">🤖</span><span class="ws-text"><strong>DeepAgentsFixResponder</strong>：Agent 在 sandbox 内执行修复 → FixOutcome</span></li>
             <li class="ws-success"><span class="ws-icon">✅</span><span class="ws-text">tests_passed：create_branch → commit_and_push → open_pull_request → 评论 PR URL</span></li>
             <li class="ws-fail"><span class="ws-icon">❌</span><span class="ws-text">tests_failed：评论截断的测试输出（≤4000 chars）</span></li>
           </ul>
           <div class="error-paths">
-            <span class="error-path">sandbox 未配置</span>
-            <span class="error-path">get_issue 失败</span>
+            <span class="error-path">sandbox factory 为 None（API key 未配置）</span>
+            <span class="error-path">checkout 解析失败</span>
             <span class="error-path">clone 失败</span>
             <span class="error-path">agent 失败</span>
             <span class="error-path">push 失败</span>
@@ -774,10 +798,10 @@
                               │       ├─ CANCEL → signal prev_run + XACK → 202
                               │       └─ IGNORE → 202 (晚到 webhook)
                               ├─ S4: create_check_run (PR only, sync)
-                              └─ S5: XADD v2 → <span style="color:var(--color-infra)">Redis Stream</span>
+                              └─ S5: TaskSpec.from_event_and_dispatch → XADD → <span style="color:var(--color-infra)">Redis Stream</span>
                                        │         └─ Redis 不可用 → BackgroundTask
                                        ▼
-                              <span style="color:var(--color-usecase)">decide_and_enqueue</span> (dispatcher)
+                              <span style="color:var(--color-usecase)">decide_and_enqueue</span> (dispatcher · 可选 legacy 路径)
                               ├─ load EffectiveConfig (.openbot/config.yaml)
                               ├─ Preflight Chain (10 middlewares, 首个 BLOCKED 短路)
                               │   └─ BLOCKED → audit_log + announce_once reply → return
@@ -791,20 +815,24 @@
                               <span style="color:var(--color-worker)">consume_loop</span> (worker)
                               ├─ XAUTOCLAIM (reclaim idle PEL &gt; 60s)
                               ├─ XREADGROUP count=8 block=5s
-                              └─ _execute_task_spec (v3) / run_dispatch (v1/v2)
+                              └─ _execute_task_spec (v3)
                                   ├─ W1: cancel quick-check (initial_labels)
                                   ├─ W2: spec.to_event() → UnifiedEvent
                                   ├─ W3: dispatch_for() + upgrade_dispatch
                                   ├─ W4: load_for_repo (EffectiveConfig)
-                                  ├─ W5: execute_handler (no preflight for v3)
-                                  └─ XACK / retry ≤3 / DLQ
+                                  ├─ W4.5: parse_classifier_output (typed)
+                                  ├─ W5: execute_handler → _run_with_sandbox
+                                  ├─ W6: attempt counter (Redis retries:{id})
+                                  ├─ W7: cancellation register/deregister
+                                  ├─ W8: store_reviewed_sha + XACK
+                                  └─ retry ≤3 / DLQ
                                            │
                  ┌───────────────┬──────────┴──────────┬───────────────┐
                  ▼               ▼                      ▼               ▼
            <span style="color:var(--color-triage)">TRIAGE</span>           <span style="color:var(--color-review)">REVIEW</span>                 <span style="color:var(--color-fix)">FIX</span>            <span style="color:var(--color-chat)">CHAT</span>
            ACK 评论         DeepAgents LLM          Sandbox Agent    命令解析
-                            过滤 Findings            Daytona 克隆      help / freeform
-                            PR Review API 提交       push + open PR   LLM 回复
+           + Repro Agent    过滤 Findings            warm-cache 路径   help / freeform
+           (sandbox gate)   PR Review API 提交       push + open PR   LLM 回复
       </pre>
     </div>
   </div>

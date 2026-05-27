@@ -1,23 +1,17 @@
 # openbot/infrastructure/agents/_repro_tools.py
-"""LangChain tool wrappers for the reproduce agent — read-only subset.
+"""LangChain tool wrappers for the reproduce agent.
 
-The reproduce loop only needs to *inspect* the repo and *execute* the
-user's reproduction command; it must never mutate the workspace or
-produce a diff. Surface is therefore narrower than ``make_fix_tools``:
+The reproduce agent writes a test file that captures the bug, runs it to
+confirm the failure, then calls ``git_diff`` to produce the patch.  The
+tool surface therefore mirrors ``make_fix_tools`` minus any production-code
+mutation:
 
-    {read_file, list_files, run_command}
+    {read_file, write_file, list_files, run_command, git_diff, search_files}
 
-The three closures below are deliberate copies of the same closures in
-``_fix_tools`` rather than re-exports — the spec asks for "semantics
-identical to ``_fix_tools``" and copying keeps that contract stable
-without coupling the fix-tool factory to a read-only consumer. If a
-behavioural fix lands in ``_fix_tools.read_file`` / ``list_files`` /
-``run_command``, mirror it here (and the contract test in
-``tests/infrastructure/agents/test_repro_tools.py`` will catch a
-forbidden-surface regression).
-
-Budget is enforced by ToolCallLimitMiddleware at the runtime layer —
-this module deliberately does no rate limiting of its own.
+``write_file`` and ``git_diff`` are intentionally included — the agent's job
+is to author a *test* that reproduces the bug, not a production-code fix.
+Closures are deliberate copies from ``_fix_tools`` (same rationale: keeps
+each surface's contract stable without coupling the implementations).
 """
 
 from __future__ import annotations
@@ -45,28 +39,45 @@ def make_repro_tools(
     sandbox: SandboxPort,
     event: UnifiedEvent,  # reserved for per-event logging, mirrors _fix_tools
 ) -> list[StructuredTool]:
-    """Build the per-run reproduce tool list (read-only)."""
+    """Build the per-run reproduce tool list."""
 
     async def read_file(path: str) -> str:
         return await sandbox.read_file(path)
+
+    async def write_file(path: str, content: str) -> str:
+        await sandbox.write_file(path, content)
+        return f"wrote {len(content)} bytes to {path}"
 
     async def list_files(path: str = ".", max: int = 200) -> list[str]:
         return await sandbox.list_files(path=path, max=max)
 
     async def run_command(command: list[str], timeout_seconds: int = 60) -> dict[str, Any]:
-        # Clamp LLM-supplied timeout to prevent a single tool call from
-        # occupying a thread-pool slot for an unbounded duration. The
-        # agent-level wall_seconds=180 ceiling (AgentRunLimits) guards
-        # the full run, but an individual call could stall the asyncio
-        # thread pool before that limit fires.
         result = await sandbox.run(command=command, timeout_seconds=min(timeout_seconds, 300))
         return _exec_result_to_dict(result)
+
+    async def git_diff() -> str:
+        return await sandbox.git_diff()
+
+    async def search_files(pattern: str, path_glob: str | None = None) -> list[str]:
+        cmd: list[str] = ["grep", "-rn", pattern]
+        if path_glob:
+            cmd.extend(["--include", path_glob])
+        cmd.append(".")
+        result = await sandbox.run(command=cmd, timeout_seconds=30)
+        if result.exit_code not in (0, 1):
+            return []
+        return [line for line in result.stdout.splitlines() if line.strip()]
 
     return [
         StructuredTool.from_function(
             coroutine=read_file,
             name="read_file",
             description="Read a UTF-8 file from the sandbox workspace.",
+        ),
+        StructuredTool.from_function(
+            coroutine=write_file,
+            name="write_file",
+            description="Write (or replace) a file in the sandbox workspace.",
         ),
         StructuredTool.from_function(
             coroutine=list_files,
@@ -78,7 +89,24 @@ def make_repro_tools(
             name="run_command",
             description=(
                 "Run an argv-list command in the workspace. Returns "
-                "{stdout, stderr, exit_code, timed_out}."
+                "{stdout, stderr, exit_code, timed_out}. "
+                "No shell features: no pipes (|), redirects (>, 2>/dev/null), "
+                "or operators (&& ||) — each list element is one argument. "
+                "exit_code=1 means the command failed normally; "
+                "exit_code=4 from pytest means collection error (missing import), not a test failure."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=git_diff,
+            name="git_diff",
+            description="Return the working-tree unified diff after writing your test file.",
+        ),
+        StructuredTool.from_function(
+            coroutine=search_files,
+            name="search_files",
+            description=(
+                "grep -rn for `pattern` across the workspace, optionally "
+                "filtered by `path_glob`. Returns lines formatted `path:line:fragment`."
             ),
         ),
     ]

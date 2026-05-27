@@ -7,12 +7,12 @@ Architecture:
 - The "scorer" is :func:`evals.data._predictions.prediction_exporter`,
   which validates the agent's :class:`SweBenchPrediction` against the
   official schema and appends it to
-  ``evals/outputs/fix_swe_bench/<run-label>.predictions.jsonl``.
+  ``evals/results/predictions/fix_swe_bench_verified/<run-label>.predictions.jsonl``.
 - **Actual grading happens offline** via the SWE-bench Docker harness:
 
     python -m swebench.harness.run_evaluation \\
         --dataset_name princeton-nlp/SWE-bench_Verified \\
-        --predictions_path evals/outputs/fix_swe_bench/<run>.predictions.jsonl \\
+        --predictions_path evals/results/predictions/fix_swe_bench_verified/<run>.predictions.jsonl \\
         --max_workers 8 --run_id openbot-{date}
 
 Run::

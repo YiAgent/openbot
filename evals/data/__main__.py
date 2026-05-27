@@ -11,6 +11,10 @@ Verbs:
         --report PATH             Path to Docker harness JSON report.
         --experiment NAME         LangSmith experiment project name.
         --dry-run                 Plan only, no create_feedback calls.
+    writeback-usage
+        --experiment NAME         LangSmith experiment project name.
+        [--trace-project NAME]    Trace project (default: LANGSMITH_PROJECT_EVAL).
+        [--dry-run]               Plan only, no update_run calls.
     inspect  <suite>              Print dataset status. Read-only.
 """
 
@@ -49,10 +53,27 @@ def main(argv: list[str] | None = None) -> int:
     wb.add_argument("--experiment", required=True)
     wb.add_argument("--dry-run", action="store_true")
 
+    wbu = sub.add_parser("writeback-usage")
+    wbu.add_argument("--experiment", required=True)
+    wbu.add_argument("--trace-project", default=None)
+    wbu.add_argument("--dry-run", action="store_true")
+
     insp = sub.add_parser("inspect")
     insp.add_argument("suite")
 
     args = p.parse_args(argv)
+
+    if args.cmd == "writeback-usage":
+        from evals.data._writeback_usage import run_usage_writeback
+
+        s = run_usage_writeback(
+            experiment_name=args.experiment,
+            trace_project=args.trace_project,
+            dry_run=args.dry_run,
+        )
+        print(s)
+        return 0
+
     suite = _resolve(args.suite)
 
     if args.cmd == "collect":

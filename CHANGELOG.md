@@ -24,6 +24,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
   fails-safe by replacing the chunk with a fixed audit string.
 - New `safety` config section and `budget.per_task_cap_usd` field
   (PRD §4.5/§4.8).
+### Added
+
+- Triage reproduce stage: bug issues with reproduction info now run a bounded
+  sandbox agent and post the outcome to the same sticky comment (slices R1–R5).
+  Tool surface is read-only (`read_file`, `list_files`, `run_command`); no
+  working-tree mutation.
+
+### Changed
+
+- `derive_sandbox_policy` for triage now requires `type == "bug" AND
+  has_reproduction_info` before returning `REQUIRED`. Non-reproducible triage
+  events no longer provision a sandbox.
+- `_StickyReply.update` accepts `fallback_on_update_error=True` to post a
+  second `reply()` if the `update_comment` PATCH fails, preventing lost
+  outcomes on transient GitHub API errors.
+
 ### Fixed
 
 - Re-point broken closure-spec and evals-runtime-redesign links in

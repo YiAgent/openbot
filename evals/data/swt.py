@@ -52,11 +52,13 @@ class SwtDataset(EvalDataset):
 
     @staticmethod
     def classify(report: dict[str, Any]) -> Iterable[tuple[str, float, str]]:
-        for iid in report.get("resolved", []):
+        # The vendored harness writes "resolved_ids" / "unresolved_ids" / "error_ids";
+        # accept both the short and long forms for forward-compat.
+        for iid in report.get("resolved_ids", report.get("resolved", [])):
             yield (iid, 1.0, "swt-bench resolved")
-        for iid in report.get("unresolved", []):
+        for iid in report.get("unresolved_ids", report.get("unresolved", [])):
             yield (iid, 0.0, "swt-bench unresolved")
-        for iid in report.get("error", []):
+        for iid in report.get("error_ids", report.get("error", [])):
             yield (iid, 0.0, "swt-bench error")
 
     def writeback_grades(

@@ -37,7 +37,7 @@ Docker harness:
 
     python -m swebench.harness.run_evaluation \\
         --dataset_name princeton-nlp/SWE-bench_Verified \\
-        --predictions_path evals/outputs/fix_swe_bench_verified/<name>.predictions.jsonl \\
+        --predictions_path evals/results/predictions/fix_swe_bench_verified/<name>.predictions.jsonl \\
         --max_workers 8 --run_id openbot-{date}
 
 For SWT-Bench, swap to ``swtbench.run_evaluation`` with the test-patch flag.
