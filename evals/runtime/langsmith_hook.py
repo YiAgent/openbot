@@ -190,6 +190,91 @@ def _build_session(
     )
 
 
+def _aggregate_usage(
+    *,
+    output_usage: Any,  # ModelUsage | None
+    model_usage: dict[str, Any],  # dict[str, ModelUsage]
+) -> dict[str, int] | None:
+    """Aggregate token usage from Inspect AI sample data.
+
+    ``sample.output.usage`` covers the last model call; ``sample.model_usage``
+    is a per-model aggregate across the whole sample.  We prefer the aggregate
+    when available (multi-call samples) and fall back to the single-call value.
+    Returns ``None`` when no usage data exists (e.g. custom solvers that bypass
+    Inspect's model mechanism).
+    """
+    agg: dict[str, int] = {}
+
+    # Per-model aggregate (preferred — covers multi-call samples).
+    for _model_label, mu in (model_usage or {}).items():
+        for field in (
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+        ):
+            val = getattr(mu, field, None) or 0
+            agg[field] = agg.get(field, 0) + val
+        cost = getattr(mu, "total_cost", None)
+        if cost is not None:
+            agg["total_cost_micros"] = agg.get("total_cost_micros", 0) + int(cost * 1_000_000)
+
+    # If per-model aggregate is empty, fall back to single-call usage.
+    if not agg and output_usage is not None:
+        for field in ("input_tokens", "output_tokens", "total_tokens"):
+            val = getattr(output_usage, field, None) or 0
+            if val:
+                agg[field] = val
+        cost = getattr(output_usage, "total_cost", None)
+        if cost is not None:
+            agg["total_cost_micros"] = int(cost * 1_000_000)
+
+    return agg or None
+
+
+def _build_outputs(
+    *,
+    completion: str | None,
+    sample_metadata: dict[str, Any],
+    scores: dict[str, Score],
+) -> dict[str, Any]:
+    """Build a rich outputs dict for the LangSmith run.
+
+    Includes the completion text, prediction data (when the solver stored
+    it in ``state.metadata["prediction"]``), repro status, and score
+    values — so the Experiment dashboard shows meaningful results without
+    drilling into the metadata sidebar.
+    """
+    outputs: dict[str, Any] = {}
+    if completion:
+        outputs["completion"] = completion
+
+    # Surface prediction data (model_patch for SWE/SWT-bench, answer for chat).
+    prediction = sample_metadata.get("prediction")
+    if isinstance(prediction, dict):
+        patch = prediction.get("model_patch", "")
+        outputs["model_patch_preview"] = (patch[:2000] + "…") if len(patch) > 2000 else patch
+        outputs["model_patch_len"] = len(patch)
+        outputs["has_patch"] = bool(patch.strip())
+
+    # Surface repro status for SWT-bench.
+    repro_status = sample_metadata.get("repro_status")
+    if repro_status is not None:
+        outputs["repro_status"] = str(repro_status)
+
+    # Surface solver errors.
+    solver_error = sample_metadata.get("solver_error")
+    if solver_error:
+        outputs["solver_error"] = str(solver_error)
+
+    # Surface score values for quick glance.
+    for scorer_name, score in scores.items():
+        val = getattr(score, "value", None)
+        if val is not None:
+            outputs[f"score_{scorer_name}"] = val
+
+    return outputs
+
+
 def _post_sample(
     *,
     client: Any,
@@ -199,6 +284,9 @@ def _post_sample(
     completion: str | None,
     sample_metadata: dict[str, Any],
     scores: dict[str, Score],
+    # ── new: token usage from Inspect AI ───────────────────────────────────
+    output_usage: Any = None,  # sample.output.usage (ModelUsage | None)
+    model_usage: dict[str, Any] | None = None,  # sample.model_usage
 ) -> None:
     example_id = session.example_index.get(instance_id)
     if example_id is None:
@@ -218,25 +306,39 @@ def _post_sample(
 
     run_id = uuid.uuid4()
     now = _now()
+
+    # ── token usage ────────────────────────────────────────────────────────
+    usage = _aggregate_usage(output_usage=output_usage, model_usage=model_usage or {})
+
+    # ── rich outputs ───────────────────────────────────────────────────────
+    outputs = _build_outputs(
+        completion=completion,
+        sample_metadata=sample_metadata,
+        scores=scores,
+    )
+
     try:
-        client.create_run(
-            id=run_id,
-            name=instance_id,
-            project_name=session.experiment_name,
-            run_type="llm",
-            inputs={"instance_id": instance_id, "issue": sample_input},
-            outputs={"completion": completion},
-            start_time=now,
-            end_time=now,
-            reference_example_id=example_id,
-            extra={
+        run_kwargs: dict[str, Any] = {
+            "id": run_id,
+            "name": instance_id,
+            "project_name": session.experiment_name,
+            "run_type": "llm",
+            "inputs": {"instance_id": instance_id, "issue": sample_input},
+            "outputs": outputs,
+            "start_time": now,
+            "end_time": now,
+            "reference_example_id": example_id,
+            "extra": {
                 "metadata": {
                     **session.extra_metadata,
                     "instance_id": instance_id,
                     "sample_metadata": sample_metadata,
                 }
             },
-        )
+        }
+        if usage:
+            run_kwargs["usage"] = usage
+        client.create_run(**run_kwargs)
     except Exception as exc:
         logger.warning(
             "langsmith hook: create_run failed for instance_id=%r: %s",
@@ -352,15 +454,41 @@ class _LangSmithExperimentHook(Hooks):
         client = Client()
         sample = data.sample
         scores = sample.scores or {}
-        completion = sample.output.completion if sample.output is not None else None
+        output = sample.output
+        completion = output.completion if output is not None else None
+
+        # Extract token usage from Inspect AI's tracked data.
+        output_usage = getattr(output, "usage", None) if output is not None else None
+        model_usage = getattr(sample, "model_usage", None) or {}
+
+        # Resolve sample input — may be a string or a list of chat messages.
+        raw_input = sample.input
+        if isinstance(raw_input, str):
+            sample_input = raw_input
+        elif isinstance(raw_input, list):
+            # Flatten chat messages to a readable string for the LangSmith UI.
+            parts: list[str] = []
+            for msg in raw_input:
+                role = getattr(msg, "role", "unknown")
+                content = getattr(msg, "content", "")
+                if isinstance(content, str):
+                    parts.append(f"[{role}] {content[:500]}")
+                else:
+                    parts.append(f"[{role}] {str(content)[:500]}")
+            sample_input = "\n".join(parts)
+        else:
+            sample_input = str(raw_input) if raw_input else ""
+
         _post_sample(
             client=client,
             session=session,
             instance_id=str(sample.id),
-            sample_input=sample.input if isinstance(sample.input, str) else "",
+            sample_input=sample_input,
             completion=completion,
             sample_metadata=dict(sample.metadata or {}),
             scores=scores,
+            output_usage=output_usage,
+            model_usage=model_usage,
         )
 
     async def on_task_end(self, data: TaskEnd) -> None:

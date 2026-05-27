@@ -245,7 +245,8 @@ def test_post_sample_creates_anchor_run_with_instance_id_name(monkeypatch) -> No
     assert run["project_name"] == "ds-solver-202000"
     assert run["reference_example_id"] == "ex-1"
     assert run["inputs"]["instance_id"] == "instA"
-    assert run["outputs"] == {"completion": "diff goes here"}
+    assert run["outputs"]["completion"] == "diff goes here"
+    assert run["outputs"]["score_f1"] == 0.75
 
     assert len(fake.created_feedback) == 1
     fb = fake.created_feedback[0]
