@@ -89,7 +89,11 @@ def make_repro_tools(
             name="run_command",
             description=(
                 "Run an argv-list command in the workspace. Returns "
-                "{stdout, stderr, exit_code, timed_out}."
+                "{stdout, stderr, exit_code, timed_out}. "
+                "No shell features: no pipes (|), redirects (>, 2>/dev/null), "
+                "or operators (&& ||) — each list element is one argument. "
+                "exit_code=1 means the command failed normally; "
+                "exit_code=4 from pytest means collection error (missing import), not a test failure."
             ),
         ),
         StructuredTool.from_function(

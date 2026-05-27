@@ -162,6 +162,27 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ─── LLM model routing ──────────────────────────────────────────────────
+    # The primary model used by all DeepAgents profiles (triage, chat, review,
+    # fix, repro).  Read from OPENBOT_DEEPAGENTS_MODEL; defaults to
+    # "anthropic/glm-5.1" for backward compat with the beehears proxy.
+    deepagents_model: str = Field(
+        default="anthropic/glm-5.1",
+        description=(
+            "Primary LLM model for all DeepAgents profiles. "
+            "Uses LiteLLM provider/name format (e.g. 'anthropic/glm-5.1'). "
+            "Env: OPENBOT_DEEPAGENTS_MODEL."
+        ),
+    )
+    # Fallback model when the primary returns 5xx / rate-limits.
+    deepagents_fallback_model: str = Field(
+        default="openai/gpt-5-mini",
+        description=(
+            "Fallback LLM model when the primary is unavailable. "
+            "Env: OPENBOT_DEEPAGENTS_FALLBACK_MODEL."
+        ),
+    )
+
     debug: bool = Field(default=False, description="Verbose logs; never enable in production.")
 
     # ─── Debug echo (state-machine slice) ───

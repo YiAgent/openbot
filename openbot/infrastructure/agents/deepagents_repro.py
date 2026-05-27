@@ -92,8 +92,12 @@ Workflow when reproduction info IS present:
    containing one or more pytest test functions that trigger the reported failure.
 5. Use ``run_command`` to run the test: ``["python", "-m", "pytest", \
    "tests/test_repro_<N>.py", "-v"]``.
-   - Test FAILS (non-zero exit, output shows the expected error) → \
+   - exit_code=1 (test failed, output shows the expected error) → \
 ``status="reproduced"``. Set ``command`` to the pytest invocation.
+   - exit_code=4 (pytest collection error — conftest import failed, \
+missing package) → NOT reproduced. Install the missing package with \
+``run_command(["pip", "install", "<pkg>"])`` and retry once. If still \
+failing, return ``status="not_reproduced"`` with an explanation.
    - Test PASSES unexpectedly → refine the test and retry once. If still \
 passing, return ``status="not_reproduced"`` with an explanation.
 6. Call ``git_diff`` to capture the unified diff of your test file.

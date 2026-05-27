@@ -38,6 +38,8 @@ Sandbox lifecycle (unified for all four evals):
 
 from __future__ import annotations
 
+import logging
+import re
 import uuid
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -57,6 +59,8 @@ if TYPE_CHECKING:
     from openbot.domain.fix import FixOutcome
     from openbot.domain.repro import ReproOutcome
     from openbot.domain.review import ReviewFindings
+
+_logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -84,6 +88,118 @@ async def _open_sandbox_if_configured(
             yield sandbox
     else:
         yield None
+
+
+async def _setup_repo_env(sandbox: SandboxPort) -> None:
+    """Install the repo's test dependencies after cloning (best-effort).
+
+    Handles C-extension projects (astropy, numpy, scipy, etc.) whose
+    ``pip install -e ".[test]"`` fails under pip's default build-isolation
+    because the isolated build env gets a fresh setuptools that may be
+    incompatible with the project's build system.
+
+    Strategy:
+      1. Read ``pyproject.toml`` [build-system].requires and install
+         those build deps into the sandbox (so ``--no-build-isolation``
+         can use them).
+      2. ``pip install -e ".[test]" --no-build-isolation`` — uses the
+         sandbox image's pre-installed build toolchain.
+      3. Retry with ``[tests]`` and ``[testing]`` extras.
+      4. Fallback: ``pip install pytest`` — bare minimum so the agent
+         can at least attempt to run tests.
+
+    Never raises — a failed setup is logged; the agent proceeds and may
+    hit missing-import errors at collection time, which is still better
+    than burning model-call budget on ``pip install`` inside the agent.
+    """
+    # ── Step 1: install build-system requirements from pyproject.toml ──
+    # This ensures --no-build-isolation has all the build deps available.
+    build_deps = await _read_build_requires(sandbox)
+    if build_deps:
+        result = await sandbox.run(
+            command=["pip", "install", "--quiet", *build_deps],
+            timeout_seconds=180,
+        )
+        _logger.debug(
+            "repo_env_build_deps count=%d exit=%d",
+            len(build_deps),
+            result.exit_code,
+        )
+
+    # ── Step 2: editable install with test extras (--no-build-isolation) ──
+    for extras in (".[test]", ".[tests]", ".[testing]"):
+        result = await sandbox.run(
+            command=[
+                "pip",
+                "install",
+                "--quiet",
+                "-e",
+                extras,
+                "--no-build-isolation",
+            ],
+            timeout_seconds=300,
+        )
+        if result.exit_code == 0:
+            _logger.debug("repo_env_setup_ok extras=%s (no-build-isolation)", extras)
+            return
+        _logger.debug(
+            "repo_env_setup_fail extras=%s exit=%d",
+            extras,
+            result.exit_code,
+        )
+
+    # ── Step 3: fallback — at least get pytest ──
+    result = await sandbox.run(
+        command=["pip", "install", "--quiet", "pytest"],
+        timeout_seconds=60,
+    )
+    _logger.debug("repo_env_setup_fallback exit_code=%d", result.exit_code)
+
+
+async def _read_build_requires(sandbox: SandboxPort) -> list[str]:
+    """Extract [build-system].requires from the repo's pyproject.toml.
+
+    Returns an empty list if pyproject.toml is missing, malformed, or
+    the sandbox read fails.  Filters out version pins and environment
+    markers so ``pip install`` gets the bare package names — the pinned
+    versions in pyproject.toml may conflict with the sandbox's Python
+    version or installed packages.
+    """
+    import tomllib
+
+    try:
+        raw = await sandbox.read_file("pyproject.toml")
+    except Exception:
+        return []
+    if not raw or not raw.strip():
+        return []
+
+    try:
+        data = tomllib.loads(raw)
+    except Exception:
+        return []
+
+    build_system = data.get("build-system", {})
+    requires = build_system.get("requires", [])
+    if not isinstance(requires, list):
+        return []
+
+    # Strip version specifiers and environment markers:
+    #   "setuptools>=42" → "setuptools"
+    #   "cython==0.29.22" → "cython"
+    #   'importlib-metadata; python_version == "3.7"' → skip
+    deps: list[str] = []
+    for req in requires:
+        if not isinstance(req, str):
+            continue
+        # Skip env markers (e.g. "; python_version == '3.7'")
+        if ";" in req:
+            continue
+        # Take package name only (before any version specifier)
+        match = re.match(r"^([A-Za-z0-9_.-]+)", req)
+        if match:
+            deps.append(match.group(1))
+    return deps
 
 
 def _make_event(
@@ -414,6 +530,7 @@ async def run_test_generation_sample(
             token=clone_token,
             strategy=CloneStrategy.BLOBLESS,
         )
+        await _setup_repo_env(sandbox)
         return await DeepAgentsReproResponder().reproduce_for_event(
             event,
             adapter=adapter,

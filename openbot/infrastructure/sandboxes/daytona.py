@@ -32,7 +32,28 @@ _SHALLOW_HISTORY_DEPTH = 50
 
 _logger = logging.getLogger(__name__)
 
-_DEFAULT_IMAGE = "python:3.11-slim"
+# Image.debian_slim() installs gcc, gfortran, build-essential — required
+# for C-extension projects (astropy/erfa, numpy, etc.) whose pip install
+# needs a working compiler toolchain.  The plain "python:X.Y-slim" image
+# lacks these and causes silent install failures inside the sandbox.
+_DEFAULT_IMAGE: Any = None  # lazily built by _get_default_image()
+
+
+def _get_default_image() -> Any:
+    """Build the default Image once per process (expensive Dockerfile gen).
+
+    Uses ``Image.debian_slim()`` which ships gcc/gfortran/build-essential
+    (required for C-extension projects like astropy/erfa).  We pin
+    ``setuptools<72`` because astropy 4.x and other older science packages
+    import ``setuptools.dep_util`` which was removed in setuptools 72+.
+    """
+    global _DEFAULT_IMAGE
+    if _DEFAULT_IMAGE is None:
+        daytona_mod = _get_daytona_module()
+        _DEFAULT_IMAGE = daytona_mod.Image.debian_slim("3.11").pip_install("setuptools<72")
+    return _DEFAULT_IMAGE
+
+
 _WORKSPACE = "/workspace/repo"
 _INSTALL_GIT_SCRIPT = (
     "set -euo pipefail; "
@@ -184,7 +205,7 @@ class DaytonaSandboxAdapter(SandboxPort):
             s.daytona_server_url,
         )
         daytona_mod = _get_daytona_module()
-        params = daytona_mod.CreateSandboxFromImageParams(image=_DEFAULT_IMAGE)
+        params = daytona_mod.CreateSandboxFromImageParams(image=_get_default_image())
         sandbox = await asyncio.to_thread(client.create, params)
         # Ensure git is present and the workspace exists.
         await asyncio.to_thread(sandbox.process.exec, _INSTALL_GIT_SCRIPT, timeout=60)

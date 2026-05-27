@@ -16,6 +16,8 @@ from openbot.domain.fix import FixAttempt, FixOutcome
 from openbot.domain.repro import ReproOutcome, ReproStatus
 from openbot.domain.review import ReviewFindings
 from openbot.evaluation.runner import (
+    _read_build_requires,
+    _setup_repo_env,
     run_chat_sample,
     run_fix_sample,
     run_review_sample,
@@ -187,6 +189,17 @@ async def test_run_test_generation_sample_calls_responder(monkeypatch) -> None:
 
     fake_sandbox = AsyncMock()
     fake_sandbox.clone = AsyncMock()
+    # _setup_repo_env reads pyproject.toml then calls sandbox.run.
+    # Return a minimal pyproject.toml with build-system.requires so the
+    # build-deps install step is exercised.
+    fake_sandbox.read_file = AsyncMock(
+        return_value=(
+            "[build-system]\n"
+            'requires = ["setuptools>=42", "wheel", "cython==0.29.22"]\n'
+            'build-backend = "setuptools.build_meta"\n'
+        ),
+    )
+    fake_sandbox.run = AsyncMock(return_value=MagicMock(exit_code=0))
 
     @asynccontextmanager
     async def fake_factory():
@@ -212,9 +225,120 @@ async def test_run_test_generation_sample_calls_responder(monkeypatch) -> None:
         strategy=CloneStrategy.BLOBLESS,
     )
 
+    # Verify _setup_repo_env ran:
+    # 1. read_file("pyproject.toml") to extract build-system.requires
+    fake_sandbox.read_file.assert_awaited_once_with("pyproject.toml")
+    # 2. pip install build deps (setuptools, wheel, cython — version pins stripped)
+    fake_sandbox.run.assert_awaited()
+    build_deps_cmd = fake_sandbox.run.call_args_list[0].kwargs["command"]
+    assert build_deps_cmd[:3] == ["pip", "install", "--quiet"]
+    assert "setuptools" in build_deps_cmd
+    assert "wheel" in build_deps_cmd
+    assert "cython" in build_deps_cmd
+    # Version specifiers should be stripped — no ">=42" or "==0.29.22"
+    for dep in build_deps_cmd[3:]:
+        assert ">=" not in dep and "==" not in dep
+    # 3. editable install with --no-build-isolation
+    editable_install_cmd = fake_sandbox.run.call_args_list[1].kwargs["command"]
+    assert editable_install_cmd == [
+        "pip",
+        "install",
+        "--quiet",
+        "-e",
+        ".[test]",
+        "--no-build-isolation",
+    ]
+
     # Verify the repro responder received the correct event.
     mock_responder.reproduce_for_event.assert_called_once()
     call_kwargs = mock_responder.reproduce_for_event.call_args
     event = call_kwargs.args[0]
     assert event.repo == "org/repo"
     assert event.issue_number == 42
+
+
+# ── _read_build_requires ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_read_build_requires_strips_version_pinning() -> None:
+    """Version specifiers and env markers are stripped; bare names returned."""
+    toml = (
+        "[build-system]\n"
+        "requires = [\n"
+        '    "setuptools>=42",\n'
+        '    "wheel",\n'
+        '    "cython==0.29.22",\n'
+        '    "numpy>=1.19,<2.0",\n'
+        '    "jinja2>=2.10; python_version > \\"3.6\\"",\n'
+        "]\n"
+        'build-backend = "setuptools.build_meta"\n'
+    )
+    sandbox = AsyncMock()
+    sandbox.read_file = AsyncMock(return_value=toml)
+
+    deps = await _read_build_requires(sandbox)
+
+    assert deps == ["setuptools", "wheel", "cython", "numpy"]
+    # jinja2 is skipped because it has an env marker (; python_version ...)
+
+
+@pytest.mark.asyncio
+async def test_read_build_requires_empty_when_no_pyproject() -> None:
+    """Returns [] when pyproject.toml is missing or empty."""
+    for raw in ("", "  ", None):
+        sandbox = AsyncMock()
+        sandbox.read_file = AsyncMock(return_value=raw)
+        assert await _read_build_requires(sandbox) == []
+
+
+@pytest.mark.asyncio
+async def test_read_build_requires_empty_when_no_build_system() -> None:
+    """Returns [] when pyproject.toml has no [build-system] section."""
+    toml = '[project]\nname = "foo"\nversion = "1.0"\n'
+    sandbox = AsyncMock()
+    sandbox.read_file = AsyncMock(return_value=toml)
+    assert await _read_build_requires(sandbox) == []
+
+
+@pytest.mark.asyncio
+async def test_read_build_requires_handles_read_error() -> None:
+    """Returns [] when read_file raises (e.g. sandbox file not found)."""
+    sandbox = AsyncMock()
+    sandbox.read_file = AsyncMock(side_effect=FileNotFoundError)
+    assert await _read_build_requires(sandbox) == []
+
+
+# ── _setup_repo_env ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_setup_repo_env_skips_build_deps_when_no_pyproject() -> None:
+    """When pyproject.toml is missing, _setup_repo_env skips build-deps and
+    goes straight to editable install."""
+    sandbox = AsyncMock()
+    sandbox.read_file = AsyncMock(return_value="")
+    sandbox.run = AsyncMock(return_value=MagicMock(exit_code=0))
+
+    await _setup_repo_env(sandbox)
+
+    # Only one run call: the editable install (no build-deps step)
+    assert sandbox.run.call_count == 1
+    cmd = sandbox.run.call_args_list[0].kwargs["command"]
+    assert "--no-build-isolation" in cmd
+
+
+@pytest.mark.asyncio
+async def test_setup_repo_env_falls_back_to_pytest_on_all_failures() -> None:
+    """When all editable installs fail, falls back to pip install pytest."""
+    sandbox = AsyncMock()
+    sandbox.read_file = AsyncMock(return_value="")
+    sandbox.run = AsyncMock(return_value=MagicMock(exit_code=1))
+
+    await _setup_repo_env(sandbox)
+
+    # Four calls: .[test], .[tests], .[testing] all fail → fallback pytest
+    # (no build-deps since pyproject.toml is empty)
+    assert sandbox.run.call_count == 4
+    last_cmd = sandbox.run.call_args_list[3].kwargs["command"]
+    assert last_cmd == ["pip", "install", "--quiet", "pytest"]
