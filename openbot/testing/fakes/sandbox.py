@@ -108,7 +108,9 @@ class FakeSandbox:
         """Return ``fake_diff``."""
         return self.fake_diff
 
-    async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
+    async def commit_and_push(
+        self, *, branch_ref: str, message: str, token: str, force: bool = False
+    ) -> None:
         """Record the push call. No-op otherwise."""
         self.push_calls.append({"branch_ref": branch_ref, "message": message})
 

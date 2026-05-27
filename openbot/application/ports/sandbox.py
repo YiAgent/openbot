@@ -133,12 +133,16 @@ class SandboxPort(Protocol):
         """
         ...
 
-    async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
+    async def commit_and_push(
+        self, *, branch_ref: str, message: str, token: str, force: bool = False
+    ) -> None:
         """Stage all changes, commit with ``message``, push to
         ``branch_ref`` on origin. ``token`` is interpolated into the
         push URL as ``https://x-access-token:{token}@github.com/...``
-        (or ignored for ``file://`` origins in tests). Raises on push
-        failure.
+        (or ignored for ``file://`` origins in tests). When ``force`` is
+        True, uses ``--force-with-lease`` to overwrite an existing remote
+        branch (e.g. retry after a branch-already-exists conflict).
+        Raises on push failure.
         """
         ...
 

@@ -116,6 +116,12 @@ def _branch_name(*, issue_number: int, base_sha: str) -> str:
     return f"openbot/fix-issue-{issue_number}-{_short_sha(base_sha)}"
 
 
+def _is_branch_already_exists(exc: Exception) -> bool:
+    """Return True if the exception indicates GitHub 422 'Reference already exists'."""
+    exc_str = str(exc).lower()
+    return "already exists" in exc_str or "422" in exc_str
+
+
 def _pr_title(issue_title: str, issue_number: int) -> str:
     head = (issue_title or "").strip().replace("\n", " ")
     if not head:
@@ -271,14 +277,26 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
                 return
 
             branch = _branch_name(issue_number=issue_number, base_sha=base_sha)
+            branch_existed = False
 
             try:
                 await adapter.create_branch(event, branch, base_sha)
-            except Exception:
-                _logger.exception("fix_create_branch_failed", extra=_log_extra(event))
-                await sticky.update(_BRANCH_CONFLICT)
-                audit.outcome = "create_branch_failed"
-                return
+            except Exception as exc:
+                # GitHub returns 422 "Reference already exists" when the branch
+                # was created on a previous attempt at the same SHA. Instead of
+                # discarding the fix, detect this and force-push to update the
+                # existing branch.
+                if _is_branch_already_exists(exc):
+                    _logger.info(
+                        "fix_branch_already_exists",
+                        extra={**_log_extra(event), "branch": branch},
+                    )
+                    branch_existed = True
+                else:
+                    _logger.exception("fix_create_branch_failed", extra=_log_extra(event))
+                    await sticky.update(_BRANCH_CONFLICT)
+                    audit.outcome = "create_branch_failed"
+                    return
 
             # ③ Checkpoint after branch creation.
             if run_id:
@@ -301,6 +319,7 @@ async def maybe_run_fix(ctx: PreflightContext) -> None:
                     branch_ref=branch,
                     message=f"openbot: fix #{issue_number}",
                     token=fresh_token,
+                    force=branch_existed,
                 )
             except Exception:
                 _logger.exception("fix_push_failed", extra=_log_extra(event))
