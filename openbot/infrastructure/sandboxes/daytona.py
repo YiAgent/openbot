@@ -350,17 +350,42 @@ class DaytonaSandboxAdapter(SandboxPort):
         # injection-safe even when individual args contain spaces or quotes.
         joined = " ".join(shlex.quote(a) for a in command)
         cmd = f"cd {shlex.quote(self.workspace)} && {env_prefix}{joined}"
-        response = await asyncio.to_thread(self._sandbox.process.exec, cmd, timeout=timeout_seconds)
-        extras: dict[str, Any] = getattr(response, "additional_properties", {}) or {}
-        exit_code = (
-            response.exit_code if response.exit_code is not None else int(extras.get("code") or 0)
-        )
-        return ExecResult(
-            stdout=str(response.result or ""),
-            stderr="",
-            exit_code=int(exit_code),
-            timed_out=bool(extras.get("timed_out", False)),
-        )
+
+        # Retry transient IP resolution failures (Daytona occasionally can't
+        # resolve the container IP immediately after sandbox creation).
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = await asyncio.to_thread(
+                    self._sandbox.process.exec, cmd, timeout=timeout_seconds
+                )
+                extras: dict[str, Any] = getattr(response, "additional_properties", {}) or {}
+                exit_code = (
+                    response.exit_code
+                    if response.exit_code is not None
+                    else int(extras.get("code") or 0)
+                )
+                return ExecResult(
+                    stdout=str(response.result or ""),
+                    stderr="",
+                    exit_code=int(exit_code),
+                    timed_out=bool(extras.get("timed_out", False)),
+                )
+            except Exception as exc:
+                last_exc = exc
+                if "resolve container IP" in str(exc) or "no IP address" in str(exc):
+                    wait = 2 ** (attempt + 1)
+                    _logger.warning(
+                        "daytona_run_transient_ip_retry attempt=%d wait=%ds sandbox_id=%s",
+                        attempt + 1,
+                        wait,
+                        getattr(self._sandbox, "id", "?"),
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                raise
+        # All retries exhausted — raise the last transient error.
+        raise last_exc  # type: ignore[misc]
 
 
 __all__ = ["DaytonaSandboxAdapter"]

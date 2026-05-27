@@ -110,7 +110,7 @@ svg .arrowhead { fill: none; }
 <body>
 <div id="app">
 <header>
-  <h1>🤖 OpenBot <span class="badge">当前代码状态 · TaskSpec v3</span></h1>
+  <h1>🤖 OpenBot <span class="badge">当前代码状态 · TaskSpec v3 · W1–W8 · Sandbox Cache</span></h1>
   <div class="toolbar">
     <button class="btn active" id="btn-anim" onclick="toggleAnim()">⏸ 暂停流动</button>
     <button class="btn btn-sim" id="btn-sim" onclick="runSimulate()">▶ 模拟一次请求</button>
@@ -172,11 +172,11 @@ svg .arrowhead { fill: none; }
 <!-- 11. exec → CHAT -->
 <path id="p11" class="conn-path" d="M480,1018 C480,1058 838,1058 838,1078" stroke="#8957e5" stroke-width="1.5" marker-end="url(#arr)"/>
 
-<!-- Current implementation gap (dashed) -->
-<path id="p-fallback" class="conn-path" d="M715,330 C820,330 820,594 726,594"
-  stroke="#656d76" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arr)" opacity=".7"/>
-<rect class="conn-label-bg" x="724" y="444" width="146" height="14" rx="3"/>
-<text class="conn-label" x="728" y="454">当前缺口：未注入 sandbox factory</text>
+<!-- Sandbox warm-cache path (dashed) -->
+<path id="p-cache" class="conn-path" d="M715,330 C820,330 820,594 726,594"
+  stroke="#f0883e" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#arr-orange)" opacity=".7"/>
+<rect class="conn-label-bg" x="714" y="444" width="166" height="14" rx="3"/>
+<text class="conn-label" x="718" y="454">Sandbox warm-cache 复用路径</text>
 
 <!-- Connection labels -->
 <rect class="conn-label-bg" x="418" y="115" width="124" height="13" rx="2"/>
@@ -269,9 +269,9 @@ svg .arrowhead { fill: none; }
   <foreignObject class="node-fo" x="220" y="545" width="520" height="98">
     <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
       <div class="icon">⚙️</div>
-      <div class="title">Worker · 恢复任务上下文</div>
-      <div class="sub">取消快检 → 重建事件 → 重新路由 → 加载配置 → 反序列化 classifier_output</div>
-      <div class="hint">失败会重试，超过上限进入 dead stream</div>
+      <div class="title">Worker · W1–W8 恢复并执行</div>
+      <div class="sub">取消快检 → 重建事件 → 重新路由 → 加载配置 → classifier → handler → attempt → cancel lifecycle</div>
+      <div class="hint">失败会重试 ≤3 次，超过上限进入 dead stream</div>
     </div>
   </foreignObject>
 </g>
@@ -283,8 +283,8 @@ svg .arrowhead { fill: none; }
   <foreignObject class="node-fo" x="335" y="700" width="290" height="67">
     <div xmlns="http://www.w3.org/1999/xhtml" class="nfo">
       <div class="icon">🧱</div>
-      <div class="title">Sandbox Gate · provision / degrade</div>
-      <div class="sub">静态策略 + classifier 输出合并；缺少 factory 时 handler 无沙箱运行</div>
+      <div class="title">Sandbox Gate · warm-cache / cold / degrade</div>
+      <div class="sub">cache.acquire() → factory() → clone → handler；缺失时 graceful degrade</div>
     </div>
   </foreignObject>
 </g>
@@ -328,9 +328,10 @@ svg .arrowhead { fill: none; }
       <ul class="wf-steps">
         <li style="border-color:#3fb950">📌 Issue opened / edited / reopened / label event</li>
         <li style="border-color:#3fb950">🛡️ 机器人自身操作自动跳过</li>
-        <li style="border-color:#3fb950">💬 当前实现：新建 issue 发布 ACK</li>
+        <li style="border-color:#3fb950">💬 sticky_reply 创建或复用 ACK 评论</li>
+        <li style="border-color:#f778ba">🔬 Repro Agent：sandbox 内写 pytest 复现 bug</li>
+        <li style="border-color:#3fb950">📝 ReproOutcome → 渲染最终评论</li>
         <li style="border-color:#3fb950">✅ 记录完整处理日志</li>
-        <li style="border-color:#3fb950">🚧 路线图：自动标签 · 优先级判断</li>
       </ul>
     </div>
   </foreignObject>
@@ -366,11 +367,11 @@ svg .arrowhead { fill: none; }
         <li style="border-color:#f0883e">📌 Issue 被指派给 OpenBot</li>
         <li style="border-color:#f0883e">📋 读取 issue 描述和代码版本</li>
         <li style="border-color:#f0883e">🔑 申请临时访问凭证</li>
-        <li style="border-color:#f0883e">📦 需要 sandbox_handle 才进入修复循环</li>
-        <li style="border-color:#f0883e">🐙 sandbox 内 clone 仓库并执行命令</li>
+        <li style="border-color:#f0883e">📦 Sandbox Gate：先尝试 warm-cache 路径</li>
+        <li style="border-color:#f0883e">🐙 cache miss → factory() → sandbox.clone</li>
         <li style="border-color:#f778ba">🤖 AI 分析问题，尝试修复并测试</li>
         <li style="border-color:#3fb950">✅ 测试通过 → 自动提交 PR</li>
-        <li style="border-color:#f85149">⚠️ 当前 worker 未注入 factory 时会清晰降级</li>
+        <li style="border-color:#f85149">⚠️ factory 未注入时清晰降级</li>
       </ul>
     </div>
   </foreignObject>
@@ -448,7 +449,7 @@ const DETAIL = {
   ingest: {
     type: '事件接收与分发', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
     title: '🔀 事件接收与 TaskSpec 构造', file: 'openbot/application/use_cases/ingest_webhook.py',
-    desc: '当前代码的接收侧核心路径。它去重、路由、做可选状态机转换，随后直接构造 TaskSpec v3 并写入 Redis Stream；旧的两段队列 / decide_and_enqueue 不再是主路径。',
+    desc: '接收侧核心路径。去重、路由、可选状态机转换，随后直接构造 TaskSpec v3 并写入 Redis Stream。当前主路径不再走两段队列 / decide_and_enqueue。',
     sections: [{
       label: '接收侧处理步骤',
       type: 'steps',
@@ -458,7 +459,7 @@ const DETAIL = {
         { num: '③', text: '状态机：有 runs_repo + resource_lock 时，对同一资源做 start / supersede / cancel / ignore 分类', tag: { label: '加锁', cls: 't-lock' } },
         { num: '↳', text: '判断结果：启动新任务 / 取代旧任务并启动新任务 / 仅发取消信号 / 事件已过期则丢弃' },
         { num: '④', text: '在 PR 上创建可见的进度标记（GitHub 上方的 ✓ / ✗ 图标）', tag: { label: 'GitHub', cls: 't-gh' } },
-        { num: '⑤', text: 'TaskSpec.from_event_and_dispatch：保存 run / resource / intent / raw event / check_run_id 等字段' },
+        { num: '⑤', text: 'TaskSpec.from_event_and_dispatch：保存 run / resource / intent / raw event / check_run_id / classifier_output 等字段' },
         { num: '⑥', text: '写入 Redis Stream；Redis 是必需依赖，失败则让 webhook 返回错误并依赖 GitHub 重试', tag: { label: '队列', cls: 't-redis' } },
       ]
     }]
@@ -480,8 +481,8 @@ const DETAIL = {
   },
   sandbox: {
     type: 'Sandbox Gate', typeColor: '#f0883e', typeBg: 'rgba(240,136,62,.12)',
-    title: '🧱 Sandbox Gate · provision / degrade', file: 'openbot/application/dispatcher.py',
-    desc: 'execute_handler 会在调用 workflow 前运行统一 sandbox gate：合并静态路由策略与 classifier 输出，决定是否需要 clone repo。当前 worker 尚未把 sandbox_factory 传入 execute_handler，因此需要 sandbox 的路径会进入 graceful degrade。',
+    title: '🧱 Sandbox Gate · warm-cache / cold / degrade', file: 'openbot/application/dispatcher.py',
+    desc: '_run_with_sandbox 在调用 workflow 前运行统一 sandbox 生命周期：合并静态路由策略与 classifier 输出，先尝试 warm-cache 复用，miss 时走 cold factory 路径 clone，缺失 factory 时 graceful degrade。',
     sections: [
       {
         label: '策略与执行',
@@ -489,52 +490,46 @@ const DETAIL = {
         items: [
           { num: '①', text: 'derive_sandbox_policy：静态 SandboxPolicy 与 classifier_output 做 OR merge，NO_SANDBOX 优先' },
           { num: '②', text: 'NO_SANDBOX：label-only / 取消 / 明确不需要读代码的请求直接调用 handler', tag: { label: '跳过 clone', cls: 't-pure' } },
-          { num: '③', text: '需要 sandbox 但 factory 为 None：记录 degrade 指标，handler 收到 ctx.sandbox_handle is None', tag: { label: '当前缺口', cls: 't-lock' } },
-          { num: '④', text: 'factory 可用时：resolve_checkout → get_installation_token → cache acquire → sandbox.clone' },
-          { num: '⑤', text: 'clone 成功后构造 SandboxedHandle，并在 sandbox 生命周期内调用 handler' },
-        ]
-      },
-      {
-        label: '当前代码缺口',
-        type: 'steps',
-        items: [
-          { num: '阻塞', text: 'openbot/infrastructure/queue/worker.py 调用 execute_handler 时未传 sandbox_factory / sandbox_cache' },
-          { num: '影响', text: 'fix.py 在 ctx.sandbox_handle is None 时不会跑修复循环，会给用户发 no-sandbox 降级评论' },
-          { num: '已有', text: 'DaytonaSandboxAdapter、SandboxPort、SandboxCachePort 与 dispatcher gate 已存在，缺的是 worker composition root wiring' },
+          { num: '③', text: '需要 sandbox 但 factory 为 None：记录 degrade 指标，handler 收到 ctx.sandbox_handle is None', tag: { label: 'degrade', cls: 't-lock' } },
+          { num: '④', text: 'Warm path：cache.acquire(checkout, token, installation_id) → 命中时直接复用，避免重复 clone', tag: { label: 'cache hit', cls: 't-redis' } },
+          { num: '⑤', text: 'Cold path：async with factory() → sandbox.clone → 构建 SandboxedHandle → _safe_publish(cache)', tag: { label: 'cold clone', cls: 't-lock' } },
+          { num: '⑥', text: 'clone 成功后在 sandbox 生命周期内调用 handler；finally 中 _safe_publish 回写缓存' },
         ]
       }
     ]
   },
   worker: {
     type: '后台 Worker', typeColor: '#e3b341', typeBg: 'rgba(227,179,65,.12)',
-    title: '⚙️ Worker · 恢复任务上下文', file: 'openbot/infrastructure/queue/worker.py',
-    desc: '持续运行的后台进程，从 Redis Stream 读取 TaskSpec v3，恢复 UnifiedEvent 和 Dispatch，再调用 execute_handler。它负责消费确认、重试、死信和取消生命周期。',
+    title: '⚙️ Worker · W1–W8 恢复并执行', file: 'openbot/infrastructure/queue/worker.py',
+    desc: '持续运行的后台进程，从 Redis Stream 读取 TaskSpec v3，通过 W1–W8 八步恢复上下文并执行。它负责消费确认、重试、死信、取消生命周期和 attempt 计数。',
     sections: [{
-      label: '每条任务的处理流程',
+      label: '每条任务的处理流程（W1–W8）',
       type: 'steps',
       items: [
-        { num: '①', text: '取消快检：任务执行前先检查是否已被用户取消，已取消则直接跳过' },
-        { num: '②', text: 'TaskSpec.to_event：从队列 payload 重建 UnifiedEvent' },
-        { num: '③', text: 'dispatch_for：重新计算要调用的工作流；若事件已不再可路由则 XACK 跳过', tag: { label: '纯逻辑', cls: 't-pure' } },
-        { num: '④', text: 'load_for_repo：加载仓库最新 .openbot/config.yaml 配置', tag: { label: 'GitHub', cls: 't-gh' } },
-        { num: '⑤', text: 'parse_classifier_output：把 TaskSpec 中的 dict 还原为 typed classifier output' },
-        { num: '⑥', text: '注册 cancellation slot，调用 execute_handler，结束后 deregister' },
-        { num: '—', text: '成功后：PR review 会记录 reviewed head SHA，随后 XACK 删除队列消息' },
-        { num: '—', text: '失败时：最多重试 3 次，仍失败则移入死信队列等待人工处理' },
+        { num: 'W1', text: 'Cancel 快检：initial_labels 含 cancel-openbot → XACK 跳过' },
+        { num: 'W2', text: 'TaskSpec.to_event：从队列 payload 重建 UnifiedEvent' },
+        { num: 'W3', text: 'dispatch_for + upgrade_dispatch：重新计算工作流路由', tag: { label: '纯逻辑', cls: 't-pure' } },
+        { num: 'W4', text: 'load_for_repo：加载仓库最新 .openbot/config.yaml 配置', tag: { label: 'GitHub', cls: 't-gh' } },
+        { num: 'W4.5', text: 'parse_classifier_output：把 TaskSpec 中的 dict 还原为 typed output' },
+        { num: 'W5', text: 'execute_handler → _run_with_sandbox → dispatch.handler(ctx)' },
+        { num: 'W6', text: 'Attempt 计数：Redis 原子计数器 retries:{entry_id}（7天 TTL）' },
+        { num: 'W7', text: 'Cancellation 生命周期：注册 slot → handler 执行 → deregister' },
+        { num: 'W8', text: '完成：REVIEW 场景 store_reviewed_sha；XACK 删除队列消息' },
+        { num: '—', text: '失败时：≤3 次重试（PEL XAUTOCLAIM 60s），超限移入 dead stream' },
       ]
     }]
   },
   context: {
     type: '工作流调度', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
     title: '🚀 execute_handler · 工作流调度', file: 'openbot/application/dispatcher.py',
-    desc: '当前 TaskSpec v3 worker 路径在这里组装 PreflightContext，然后经过 sandbox gate 调用具体 workflow handler。这个函数还负责 GitHub Check Run 成功 / 失败更新。',
+    desc: 'TaskSpec v3 worker 路径在这里组装 PreflightContext，然后经过 _run_with_sandbox sandbox gate 调用具体 workflow handler。sandbox 生命周期包含 warm-cache 复用和 cold factory 路径。',
     sections: [{
       label: '执行过程',
       type: 'steps',
       items: [
         { num: '①', text: '组装 PreflightContext：event、dispatch、config、adapter、redis、check_run_id、classifier_output、checkpointer' },
-        { num: '②', text: '运行 sandbox gate：决定 provision / cache acquire / clone / degrade' },
-        { num: '③', text: '调用对应工作流处理器：问题分类 / 代码审查 / 自动修复 / 对话交互' },
+        { num: '②', text: '_run_with_sandbox：derive_sandbox_policy → cache.acquire (warm) / factory (cold) / degrade' },
+        { num: '③', text: '调用对应工作流处理器：问题分类（含 Repro Agent） / 代码审查 / 自动修复 / 对话交互' },
         { num: '④', text: '成功后：将 PR 上的 Check Run 更新为 success', tag: { label: 'GitHub', cls: 't-gh' } },
         { num: '⑤', text: '失败后：将 Check Run 更新为 failure，并记录详细错误日志' },
       ]
@@ -543,14 +538,14 @@ const DETAIL = {
   exec: {
     type: '工作流入口', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
     title: '🚀 进入工作流处理器', file: 'openbot/application/use_cases/',
-    desc: 'dispatcher 最终调用四类 workflow handler。每个 handler 只关心业务行为，通过 PreflightContext 读取事件、配置、适配器、check run、sandbox handle 和 agent checkpointer。',
+    desc: 'router._resolve_handler(feature) 调度四类 workflow handler。每个 handler 通过 PreflightContext 读取事件、配置、适配器、check run、sandbox handle 和 agent checkpointer。',
     sections: [{
       label: '处理器边界',
       type: 'steps',
       items: [
-        { num: 'triage', text: 'maybe_run_triage：当前只在新建 issue 时发布 ACK' },
+        { num: 'triage', text: 'maybe_run_triage：sticky ACK + Repro Agent（sandbox policy=REQUIRED 时）' },
         { num: 'review', text: 'maybe_run_review：读取 diff，调用 DeepAgentsReviewResponder，发布 PR Review' },
-        { num: 'fix', text: 'maybe_run_fix：需要 sandbox_handle；缺失时发布 no-sandbox 降级说明' },
+        { num: 'fix', text: 'maybe_run_fix：_run_with_sandbox（warm-cache + cold factory），DeepAgentsFixResponder' },
         { num: 'chat', text: 'maybe_run_chat：解析 help / cancel / freeform，调用 DeepAgentsChatResponder' },
       ]
     }]
@@ -558,16 +553,19 @@ const DETAIL = {
   triage: {
     type: '工作流：问题分类', typeColor: '#3fb950', typeBg: 'rgba(63,185,80,.1)',
     title: '🏷️ 问题分类（Triage）', file: 'openbot/application/use_cases/triage.py',
-    desc: 'Issue 事件的第一响应。当前实现只在新建 issue 时发布确认评论；编辑、重开和标签事件进入路由但不会做完整自动分类。',
+    desc: 'Issue 事件的第一响应。新建 issue 时发布 sticky ACK 评论；当 classifier 判定为 bug 且有复现信息时，会启动 sandbox 内的 Reproduce 子 Agent 尝试写 pytest 复现 bug。',
     sections: [{
       label: '处理流程',
       type: 'steps',
       items: [
         { num: '①', text: '触发：用户创建、编辑、重开 issue，或给 issue 添加 / 删除标签' },
         { num: '②', text: '过滤：只在新建 issue 时主动回复；机器人自身操作自动跳过，防止死循环' },
-        { num: '③', text: '在 issue 下发布确认评论，通知用户 OpenBot 已收到并将处理' },
-        { num: '④', text: '记录完整处理日志（开始时间、结束时间、评论 ID 等）' },
-        { num: '🚧', text: '路线图：自动打标签 · 优先级判断 · 自动复现问题步骤' },
+        { num: '③', text: 'sticky_reply：创建或复用 ACK 评论（评论 ID 持久化到 run）', tag: { label: 'GitHub', cls: 't-gh' } },
+        { num: '④', text: 'Sandbox Gate：derive_sandbox_policy 检查 classifier 是否判定 type=bug + has_repro_info + 非 spam' },
+        { num: '⑤', text: '_should_run_reproduce：sandbox policy = REQUIRED 且 sandbox_handle 可用时触发 Repro Agent', tag: { label: 'AI', cls: 't-llm' } },
+        { num: '⑥', text: 'DeepAgentsReproResponder：sandbox 内写 pytest 复现 bug → ReproOutcome（REPRODUCED / NOT_REPRODUCED / INSUFFICIENT_INFO / AGENT_FAILED）' },
+        { num: '⑦', text: 'render_final_comment：将复现结果渲染到 sticky 评论上' },
+        { num: '⑧', text: '记录完整处理日志（开始时间、结束时间、评论 ID 等）' },
       ]
     }]
   },
@@ -592,15 +590,17 @@ const DETAIL = {
   fix: {
     type: '工作流：自动修复', typeColor: '#f0883e', typeBg: 'rgba(240,136,62,.12)',
     title: '🔧 自动修复（Fix）', file: 'openbot/application/use_cases/fix.py',
-    desc: 'Issue 被手动指派给 OpenBot 时触发。handler 已经实现 sandbox-backed 修复循环：读 issue、跑 DeepAgentsFixResponder、测试、push 分支并开 PR；但当前 worker 还没有注入 sandbox_factory，因此生产队列路径会先降级为 no-sandbox 回复。',
+    desc: 'Issue 被手动指派给 OpenBot 时触发。通过 _run_with_sandbox 统一生命周期管理 sandbox：先尝试 warm-cache 路径（cache.acquire），miss 时走 cold factory 路径（clone）。DeepAgentsFixResponder 在 sandbox 内执行修复并测试。',
     sections: [{
       label: '处理流程',
       type: 'steps',
       items: [
         { num: '①', text: '触发：仓库维护者将 issue 指派给 OpenBot' },
         { num: '②', text: '读取 issue 描述内容，以及当前仓库的代码版本信息', tag: { label: 'GitHub', cls: 't-gh' } },
-        { num: '③', text: '如果 ctx.sandbox_handle is None：直接评论 sandbox not configured，不触碰仓库' },
-        { num: '④', text: '如果 sandbox 可用：读取 sandbox checkout，调用 DeepAgentsFixResponder 修复并测试', tag: { label: 'AI', cls: 't-llm' } },
+        { num: '③', text: '_run_with_sandbox：derive_sandbox_policy 合并静态 + classifier 策略' },
+        { num: '④', text: 'Warm path：cache.acquire(checkout, token) → 命中时直接复用，避免重复 clone', tag: { label: 'cache', cls: 't-redis' } },
+        { num: '⑤', text: 'Cold path：factory() → sandbox.clone(repo_url, ref, token, strategy) → _safe_publish(cache)', tag: { label: 'sandbox', cls: 't-lock' } },
+        { num: '⑥', text: 'DeepAgentsFixResponder：在 sandbox 内分析问题、修复、测试 → FixOutcome', tag: { label: 'AI', cls: 't-llm' } },
         { num: '✓', text: '测试全部通过：创建分支、commit_and_push、open PR，并在 issue 下评论 PR 链接' },
         { num: '✗', text: '测试失败：评论详细失败信息；执行中会检查 cancellation checkpoint' },
       ]
@@ -711,9 +711,9 @@ const SIM_SEQUENCE = [
   { id: 'fastapi', detail: 'fastapi', label: '验证消息来源真实，识别事件类型' },
   { id: 'ingest',  detail: 'ingest',  label: '去重 → 路由 → 状态机 → Check Run → 构造 TaskSpec v3' },
   { id: 'redis-a', detail: 'redis',   label: 'TaskSpec v3 写入 Redis Stream' },
-  { id: 'decide',  detail: 'worker',  label: 'Worker 消费任务，恢复事件、路由和配置' },
-  { id: 'redis-b', detail: 'sandbox', label: 'Sandbox Gate 按策略 provision、跳过或降级' },
-  { id: 'worker',  detail: 'context', label: 'execute_handler 组装 PreflightContext 并调用 handler' },
+  { id: 'decide',  detail: 'worker',  label: 'Worker W1–W8：恢复事件、路由、配置、classifier' },
+  { id: 'redis-b', detail: 'sandbox', label: 'Sandbox Gate：warm-cache / cold factory / degrade' },
+  { id: 'worker',  detail: 'context', label: 'execute_handler → _run_with_sandbox → handler' },
   { id: 'exec',    detail: 'exec',    label: '进入对应工作流，更新 Check Run' },
   { id: 'review',  detail: 'review',  label: 'AI 审查代码，过滤意见，提交 PR Review' },
 ];

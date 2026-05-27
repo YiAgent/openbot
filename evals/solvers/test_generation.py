@@ -28,6 +28,7 @@ import logging
 
 from evals.data._predictions import SwtBenchPrediction, empty_swt_prediction
 from openbot.evaluation import run_test_generation_sample
+from openbot.evaluation.runner import pop_agent_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,13 @@ def openbot_test_generation_solver(*, model: str | None = None):
                 state.metadata["prediction_json"] = prediction.model_dump_json()
                 state.metadata["repro_status"] = outcome.status
                 state.output.completion = f"status={outcome.status} patch_len={len(model_patch)}"
+
+                # Propagate agent metadata (token usage, messages) to Inspect.
+                agent_meta = pop_agent_metadata(instance_id)
+                if agent_meta.token_usage:
+                    state.metadata["agent_token_usage"] = agent_meta.token_usage
+                if agent_meta.messages:
+                    state.metadata["agent_messages"] = agent_meta.messages
             except Exception as exc:
                 logger.exception(
                     "swt_bench_solver_error instance_id=%s error=%s",

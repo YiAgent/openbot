@@ -21,6 +21,8 @@ deployment without ``daytona`` installed can import this module freely.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import TYPE_CHECKING
@@ -28,6 +30,20 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from openbot.application.ports.sandbox import SandboxPort
     from openbot.core.settings import Settings
+
+_logger = logging.getLogger(__name__)
+
+# Global semaphore — caps concurrent sandbox creation across all eval solvers
+# so parallel Inspect samples don't blow past the Daytona org CPU limit.
+# 2 is conservative: each sandbox uses ~2-4 CPUs; the org limit is 10.
+_SANDBOX_SEM: asyncio.Semaphore | None = None
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    global _SANDBOX_SEM
+    if _SANDBOX_SEM is None:
+        _SANDBOX_SEM = asyncio.Semaphore(2)
+    return _SANDBOX_SEM
 
 
 def build_sandbox_factory(
@@ -55,11 +71,15 @@ def build_sandbox_factory(
     async def _factory() -> AsyncGenerator[SandboxPort, None]:
         from openbot.infrastructure.sandboxes.daytona import DaytonaSandboxAdapter
 
-        adapter = await DaytonaSandboxAdapter.create(settings=_settings)
-        try:
-            yield adapter
-        finally:
-            await adapter.close()
+        sem = _get_semaphore()
+        _logger.debug("sandbox_factory: waiting for semaphore (concurrency cap=2)")
+        async with sem:
+            _logger.debug("sandbox_factory: acquired semaphore, creating sandbox")
+            adapter = await DaytonaSandboxAdapter.create(settings=_settings)
+            try:
+                yield adapter
+            finally:
+                await adapter.close()
 
     return _factory  # type: ignore[return-value]
 

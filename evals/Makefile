@@ -99,7 +99,7 @@ endif
 #                  samples are excluded from the metric *and* from feedback
 #                  upload, and the run terminates once the failure rate
 #                  crosses ``FAIL_ON_ERROR``.
-MAX_SAMPLES     ?= 4
+MAX_SAMPLES     ?= 2
 ATTEMPT_TIMEOUT ?= 180
 RETRY_ON_ERROR  ?= 2
 FAIL_ON_ERROR   ?= 0.1
@@ -477,6 +477,27 @@ sandbox-clean: ## Force-remove all leftover eval sandbox containers
 		echo "removing $$(echo $$ids | wc -w | tr -d ' ') sandbox container(s)…"; \
 		docker rm -f $$ids; \
 	fi
+
+# ─── Daytona sandbox housekeeping ───────────────────────────────
+# List and delete orphaned Daytona sandboxes that consume CPU quota.
+# These are left behind when the Inspect process is killed or crashes
+# before the sandbox context manager's finally block runs.
+sandbox-status-daytona: ## List all Daytona sandboxes
+	@$(DOPPLER) $(PY) python -c "\
+import daytona; \
+d = daytona.Daytona(); \
+items = d.list().items or []; \
+print(f'Found {len(items)} Daytona sandbox(es):'); \
+[print(f'  {s.id}  state={s.state}  created={getattr(s, \"created_at\", \"?\")}') for s in items]"
+
+sandbox-clean-daytona: ## Delete ALL Daytona sandboxes (reclaim CPU quota)
+	@$(DOPPLER) $(PY) python -c "\
+import daytona; \
+d = daytona.Daytona(); \
+items = d.list().items or []; \
+print(f'Deleting {len(items)} Daytona sandbox(es)...'); \
+[d.delete(s) for s in items]; \
+print('Done — all Daytona sandboxes deleted.')"
 
 # Reap dangling per-sample SWE-bench / SWT-bench images. The DockerSandboxBackend
 # now removes its own images on aclose, but images pulled by the *Inspect*

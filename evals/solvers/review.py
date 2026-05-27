@@ -31,6 +31,7 @@ from typing import Literal, TypedDict
 from openbot.application.sandbox_factory_deps import build_sandbox_factory
 from openbot.core.settings import Settings
 from openbot.evaluation import run_review_sample
+from openbot.evaluation.runner import pop_agent_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,14 @@ def openbot_review_solver(
             state.metadata["candidate_findings_json"] = findings_json
             state.metadata["agent_raw_output"] = findings_obj.summary
             state.output.completion = findings_json
+
+            # Propagate agent metadata (token usage, messages) to Inspect.
+            agent_meta = pop_agent_metadata(sample_id)
+            if agent_meta.token_usage:
+                state.metadata["agent_token_usage"] = agent_meta.token_usage
+            if agent_meta.messages:
+                state.metadata["agent_messages"] = agent_meta.messages
+
             return state
 
         return _run

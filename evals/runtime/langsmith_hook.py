@@ -272,6 +272,18 @@ def _build_outputs(
         if val is not None:
             outputs[f"score_{scorer_name}"] = val
 
+    # Surface agent message history (tool calls, intermediate steps).
+    agent_messages = sample_metadata.get("agent_messages")
+    if agent_messages and isinstance(agent_messages, list):
+        outputs["agent_message_count"] = len(agent_messages)
+        # Include a preview of the last few messages for debugging.
+        preview = agent_messages[-5:] if len(agent_messages) > 5 else agent_messages
+        outputs["agent_messages_preview"] = [
+            {"role": m.get("role", "?"), "content": m.get("content", "")[:500]}
+            for m in preview
+            if isinstance(m, dict)
+        ]
+
     return outputs
 
 
@@ -309,6 +321,19 @@ def _post_sample(
 
     # ── token usage ────────────────────────────────────────────────────────
     usage = _aggregate_usage(output_usage=output_usage, model_usage=model_usage or {})
+    # Fallback: when Inspect's model tracking is empty (solvers bypass
+    # generate()), read token usage captured by our LangChain callback.
+    if not usage:
+        agent_usage = sample_metadata.get("agent_token_usage")
+        if agent_usage and isinstance(agent_usage, dict):
+            usage = {
+                "input_tokens": agent_usage.get("input_tokens", 0),
+                "output_tokens": agent_usage.get("output_tokens", 0),
+                "total_tokens": agent_usage.get("total_tokens", 0),
+            }
+            cost = agent_usage.get("total_cost")
+            if cost:
+                usage["total_cost_micros"] = int(float(cost) * 1_000_000)
 
     # ── rich outputs ───────────────────────────────────────────────────────
     outputs = _build_outputs(

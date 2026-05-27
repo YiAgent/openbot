@@ -20,6 +20,7 @@ from evals.data._predictions import SweBenchPrediction, empty_swe_prediction
 from openbot.application.sandbox_factory_deps import build_sandbox_factory
 from openbot.core.settings import Settings
 from openbot.evaluation import run_fix_sample
+from openbot.evaluation.runner import pop_agent_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,14 @@ def openbot_fix_solver(*, model: str | None = None):
             state.metadata["prediction"] = prediction.model_dump()
             state.metadata["prediction_json"] = prediction.model_dump_json()
             state.output.completion = prediction.model_dump_json()
+
+            # Propagate agent metadata (token usage, messages) to Inspect.
+            agent_meta = pop_agent_metadata(instance_id)
+            if agent_meta.token_usage:
+                state.metadata["agent_token_usage"] = agent_meta.token_usage
+            if agent_meta.messages:
+                state.metadata["agent_messages"] = agent_meta.messages
+
             return state
 
         return _run

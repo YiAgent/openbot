@@ -43,6 +43,7 @@ import re
 import uuid
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -59,6 +60,38 @@ if TYPE_CHECKING:
     from openbot.domain.fix import FixOutcome
     from openbot.domain.repro import ReproOutcome
     from openbot.domain.review import ReviewFindings
+
+
+@dataclass
+class AgentMetadata:
+    """Token usage and message history captured from a DeepAgents run."""
+
+    token_usage: dict[str, Any] = field(default_factory=dict)
+    messages: list[dict[str, str]] = field(default_factory=list)
+
+
+# Module-level store: run_id → AgentMetadata.  Solvers read from here
+# after calling run_*_sample, since frozen domain objects can't hold attrs.
+_agent_metadata_store: dict[str, AgentMetadata] = {}
+
+
+def _extract_and_store_metadata(responder: Any, run_id: str | None) -> None:
+    """Read token usage and messages from a responder's runtime and store."""
+    if not run_id:
+        return
+    runtime = getattr(responder, "_runtime", None)
+    if runtime is None:
+        return
+    last = getattr(runtime, "_last_agent_metadata", {})
+    _agent_metadata_store[run_id] = AgentMetadata(
+        token_usage=last.get("token_usage", {}),
+        messages=last.get("messages", []),
+    )
+
+
+def pop_agent_metadata(run_id: str) -> AgentMetadata:
+    """Retrieve and remove agent metadata for a run_id."""
+    return _agent_metadata_store.pop(run_id, AgentMetadata())
 
 
 _logger = logging.getLogger(__name__)
@@ -299,6 +332,7 @@ async def run_review_sample(
             per_task_cap_usd=Decimal("1.50"),
             session_factory=None,
         )
+        _extract_and_store_metadata(responder, run_id)
         return result
 
 
@@ -386,6 +420,7 @@ async def run_fix_sample(
             issue=issue,
             run_id=run_id,
         )
+        _extract_and_store_metadata(responder, run_id)
         return result
 
 
@@ -546,6 +581,7 @@ async def run_test_generation_sample(
             issue=issue,
             run_id=run_id,
         )
+        _extract_and_store_metadata(responder, run_id)
         return result
 
 
