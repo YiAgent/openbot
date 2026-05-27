@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from openbot.domain.repro import ReproOutcome
     from openbot.domain.review import ReviewFindings
 
+
 _logger = logging.getLogger(__name__)
 
 
@@ -290,13 +291,15 @@ async def run_review_sample(
             files=files or {},
             file_reader=resolved_reader,
         )
-        return await DeepAgentsReviewResponder().review_for_event(
+        responder = DeepAgentsReviewResponder()
+        result = await responder.review_for_event(
             event,
             adapter=adapter,
             run_id=run_id,
             per_task_cap_usd=Decimal("1.50"),
             session_factory=None,
         )
+        return result
 
 
 async def run_fix_sample(
@@ -375,13 +378,15 @@ async def run_fix_sample(
             token=clone_token,
             strategy=CloneStrategy.BLOBLESS,
         )
-        return await DeepAgentsFixResponder().fix_for_event(
+        responder = DeepAgentsFixResponder()
+        result = await responder.fix_for_event(
             event,
             adapter=adapter,
             sandbox=sandbox,
             issue=issue,
             run_id=run_id,
         )
+        return result
 
 
 async def run_chat_sample(
@@ -450,12 +455,14 @@ async def run_chat_sample(
                 pr_diff="",
                 file_reader=SandboxFileReader(sandbox),
             )
-        return await DeepAgentsChatResponder().reply_for_event(
+        responder = DeepAgentsChatResponder()
+        answer = await responder.reply_for_event(
             event,
             user_request=user_request,
             run_id=run_id,
             adapter=adapter,
         )
+        return answer
 
 
 async def run_test_generation_sample(
@@ -531,13 +538,15 @@ async def run_test_generation_sample(
             strategy=CloneStrategy.BLOBLESS,
         )
         await _setup_repo_env(sandbox)
-        return await DeepAgentsReproResponder().reproduce_for_event(
+        responder = DeepAgentsReproResponder()
+        result = await responder.reproduce_for_event(
             event,
             adapter=adapter,
             sandbox=sandbox,
             issue=issue,
             run_id=run_id,
         )
+        return result
 
 
 __all__ = [
