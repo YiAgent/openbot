@@ -35,26 +35,67 @@ class TokenUsageCallback(BaseCallbackHandler):
         self.model_name: str = "unknown"
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
-        """Extract token usage from each LLM call's output."""
+        """Extract token usage from each LLM call's output.
+
+        Token usage can appear in several places depending on the provider:
+          1. ``msg.usage_metadata`` — langchain-anthropic / langchain-openai
+          2. ``msg.response_metadata["usage"]`` — some providers (proxies)
+          3. ``llm_output["token_usage"]`` — older LangChain convention
+          4. ``llm_output["usage"]`` — some providers (e.g. Xiaomi proxy)
+        We try all sources but only count each once per call.
+        """
+        call_input = 0
+        call_output = 0
+        call_total = 0
+
         for generation_list in response.generations:
             for gen in generation_list:
                 msg = getattr(gen, "message", None)
                 if msg is None:
                     continue
-                # langchain-anthropic and langchain-openai both populate this.
+                # Source 1: usage_metadata (langchain-anthropic, langchain-openai)
                 usage = getattr(msg, "usage_metadata", None)
-                if usage is not None:
-                    self.input_tokens += getattr(usage, "input_tokens", 0) or 0
-                    self.output_tokens += getattr(usage, "output_tokens", 0) or 0
-                    self.total_tokens += getattr(usage, "total_tokens", 0) or 0
+                if usage and isinstance(usage, dict):
+                    call_input = max(call_input, usage.get("input_tokens", 0) or 0)
+                    call_output = max(call_output, usage.get("output_tokens", 0) or 0)
+                    call_total = max(call_total, usage.get("total_tokens", 0) or 0)
+                    continue  # primary source found, skip fallbacks for this msg
 
-        # Also check llm_output for providers that put usage there.
+                # Source 2: response_metadata["usage"] (proxy models)
+                resp_meta = getattr(msg, "response_metadata", None) or {}
+                resp_usage = resp_meta.get("usage")
+                if resp_usage and isinstance(resp_usage, dict):
+                    call_input = max(
+                        call_input,
+                        resp_usage.get("input_tokens", 0)
+                        or resp_usage.get("prompt_tokens", 0)
+                        or 0,
+                    )
+                    call_output = max(
+                        call_output,
+                        resp_usage.get("output_tokens", 0)
+                        or resp_usage.get("completion_tokens", 0)
+                        or 0,
+                    )
+                    call_total = max(
+                        call_total,
+                        resp_usage.get("total_tokens", 0) or 0,
+                    )
+
+        # Source 3 & 4: llm_output (older conventions)
         llm_output = response.llm_output or {}
-        token_usage = llm_output.get("token_usage", {})
-        if token_usage and not self.input_tokens:
-            self.input_tokens += token_usage.get("prompt_tokens", 0)
-            self.output_tokens += token_usage.get("completion_tokens", 0)
-            self.total_tokens += token_usage.get("total_tokens", 0)
+        if not call_input:
+            for key in ("token_usage", "usage"):
+                llm_usage = llm_output.get(key, {})
+                if llm_usage and isinstance(llm_usage, dict):
+                    call_input = max(call_input, llm_usage.get("prompt_tokens", 0) or 0)
+                    call_output = max(call_output, llm_usage.get("completion_tokens", 0) or 0)
+                    call_total = max(call_total, llm_usage.get("total_tokens", 0) or 0)
+                    break
+
+        self.input_tokens += call_input
+        self.output_tokens += call_output
+        self.total_tokens += call_total
 
         # Track model name for labeling.
         model_name = llm_output.get("model_name") or llm_output.get("model")

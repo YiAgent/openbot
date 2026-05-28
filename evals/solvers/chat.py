@@ -26,6 +26,7 @@ import logging
 from openbot.application.sandbox_factory_deps import build_sandbox_factory
 from openbot.core.settings import Settings
 from openbot.evaluation import run_chat_sample
+from openbot.evaluation.runner import pop_agent_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,14 @@ def openbot_chat_solver(*, model: str | None = None):
             )
 
             state.output.completion = answer
+
+            # Propagate agent metadata (token usage, messages) to Inspect.
+            agent_meta = pop_agent_metadata(sample_id)
+            if agent_meta.token_usage:
+                state.metadata["agent_token_usage"] = agent_meta.token_usage
+            if agent_meta.messages:
+                state.metadata["agent_messages"] = agent_meta.messages
+
             return state
 
         return _run

@@ -497,6 +497,7 @@ async def run_chat_sample(
             run_id=run_id,
             adapter=adapter,
         )
+        _extract_and_store_metadata(responder, run_id)
         return answer
 
 
