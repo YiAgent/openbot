@@ -78,15 +78,18 @@ prose outside the schema.
 """
 
 _REVIEW_LIMITS = AgentRunLimits(
-    # 100 gives ample headroom: tool_call_limit=5 (≈20 steps) + model
-    # calls after tool budget exhausted (≈30 more steps) = well within 100.
-    # The old value of 25 was too tight — middleware limits fire only after
-    # their counters are hit, but each LangGraph node (model, router, tool-
-    # exec) costs one recursion step, so "continue" after tools blocked
-    # still burns steps until model_call_limit terminates cleanly.
-    recursion_limit=100,
-    tool_call_limit=5,  # matches retired ToolBudget value
-    model_call_limit=10,
+    # Recursion limit: 200 gives headroom for tool calls + model calls +
+    # summarization middleware overhead. Each LangGraph node (model, router,
+    # tool-exec) costs one recursion step.
+    recursion_limit=200,
+    # Tool calls: 20 is generous for a review agent that may need to read
+    # multiple files, grep for patterns, and cross-reference. Summarization
+    # middleware compresses old tool outputs so context doesn't overflow.
+    tool_call_limit=20,
+    # Model calls: 20 allows thorough review with multiple reasoning passes.
+    # Fires AFTER tool_call_limit (tools blocked, model continues for
+    # final structured output). Soft-finalize is the safety net.
+    model_call_limit=20,
     model_timeout_s=120,
     max_retries=2,
     max_output_tokens=16_384,

@@ -362,7 +362,17 @@ def _post_sample(
             },
         }
         if usage:
-            run_kwargs["usage"] = usage
+            # LangSmith SDK expects usage in extra.metadata.usage_metadata
+            # with input_tokens/output_tokens/total_tokens keys.
+            # Top-level prompt_tokens/completion_tokens kwargs are silently ignored.
+            usage_metadata: dict[str, Any] = {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+            }
+            if "total_cost_micros" in usage:
+                usage_metadata["total_cost"] = usage["total_cost_micros"] / 1_000_000
+            run_kwargs["extra"]["metadata"]["usage_metadata"] = usage_metadata
         client.create_run(**run_kwargs)
     except Exception as exc:
         logger.warning(
