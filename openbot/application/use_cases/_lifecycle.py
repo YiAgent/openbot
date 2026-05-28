@@ -59,18 +59,19 @@ class _StickyReply:
     ``None`` and ``update`` is a silent no-op so callers never have to
     branch on it.
 
-    ``fallback_on_update_error`` (default ``False``) opts the caller into
-    *louder degradation* — when set, an update that has no placeholder
-    to patch, or whose PATCH raises, posts a fresh comment so the message
-    still lands. Even the fallback ``reply()`` keeps the silent-failure
-    contract: if it also raises, we log and return. Used by the reproduce
-    responder where losing the outcome row is worse than double-posting.
+    ``fallback_on_update_error`` (default ``True``) enables *louder
+    degradation* — when set, an update that has no placeholder to patch,
+    or whose PATCH raises, posts a fresh comment so the message still
+    lands. Even the fallback ``reply()`` keeps the silent-failure
+    contract: if it also raises, we log and return. Enabled by default
+    so transient GitHub API errors never leave the user with zero
+    feedback (a duplicate comment is better than silence).
     """
 
     comment_id: int | None
     _adapter: Any
     _event: Any
-    fallback_on_update_error: bool = False
+    fallback_on_update_error: bool = True
 
     async def update(self, message: str) -> None:
         """Replace the comment body via PATCH; optionally fall back to a new comment."""
@@ -107,7 +108,7 @@ async def sticky_reply(
     event: UnifiedEvent,
     *,
     initial: str,
-    fallback_on_update_error: bool = False,
+    fallback_on_update_error: bool = True,
 ) -> AsyncGenerator[_StickyReply, None]:
     """Post a placeholder comment; yield a handle to update it in-place.
 

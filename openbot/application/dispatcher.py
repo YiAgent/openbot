@@ -469,8 +469,14 @@ async def execute_handler(
 ) -> None:
     """Execute workflow handler directly — no preflight.
 
-    Used by the worker when processing a TaskSpec v3: the worker runs
-    the preflight chain before calling this. Never raises out.
+    Used by the worker when processing a TaskSpec v3. Never raises out
+    for ``Exception`` subclasses; ``BaseException`` (e.g.
+    ``CancelledError``) propagates so the outer cancel scope can handle
+    it.
+
+    TODO(#96): the preflight chain is not yet wired into the worker
+    path — ``run_preflight`` is never invoked. Once #96 lands, the
+    worker will run the full chain before calling this function.
 
     ``classifier_output`` is supplied by the worker (after
     ``parse_classifier_output``-rehydrating the dict from ``TaskSpec``),

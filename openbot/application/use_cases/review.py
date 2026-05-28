@@ -41,8 +41,6 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-_RESPONDER = DeepAgentsReviewResponder()
-
 # Posted as a COMMENT review when the responder fails — the PR author
 # sees a real signal instead of silence. Wraps a ``ReviewFindings``-like
 # shape so the same submission path handles success and failure.
@@ -63,7 +61,8 @@ async def _generate_review_findings(
     session_factory: Any,
 ) -> ReviewFindings:
     """Module-level seam — E2E tests monkeypatch this to avoid LLM calls."""
-    return await _RESPONDER.review_for_event(
+    responder = DeepAgentsReviewResponder()
+    return await responder.review_for_event(
         event,
         adapter=adapter,
         run_id=run_id,
