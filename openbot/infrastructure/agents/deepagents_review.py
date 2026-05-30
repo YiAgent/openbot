@@ -131,7 +131,12 @@ class ReviewProfile:
             "Review the diff and return a single structured object matching the schema."
         )
 
-    def build_tools(self, request: AgentRequest) -> Sequence[BaseTool]:
+    def build_tools(
+        self, request: AgentRequest, *, backend: Any | None = None
+    ) -> Sequence[BaseTool]:
+        if backend is not None:
+            # Backend provides all needed tools: read_file, grep, ls, glob, etc.
+            return []
         if request.adapter is None:
             return []
         return make_review_tools(adapter=request.adapter, event=request.event)

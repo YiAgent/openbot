@@ -281,7 +281,19 @@ class BaseDeepAgentRuntime:
         else:
             budget_state = None
 
-        tools = list(profile.build_tools(request))
+        # Construct backend adapter when a sandbox is present so DeepAgents'
+        # built-in tools (read_file, grep, ls, glob, write, edit, execute)
+        # route through the sandbox instead of the default empty StateBackend.
+        backend = None
+        if (
+            request.sandbox is not None
+            and profile.sandbox_requirement != SandboxRequirement.FORBIDDEN
+        ):
+            from openbot.infrastructure.sandboxes.backend_adapter import SandboxBackendAdapter
+
+            backend = SandboxBackendAdapter(request.sandbox)
+
+        tools = list(profile.build_tools(request, backend=backend))
 
         effective_checkpointer = None
         if profile.checkpoint_enabled and request.run_id and request.checkpointer is not None:
@@ -294,6 +306,7 @@ class BaseDeepAgentRuntime:
             response_format=profile.response_schema,
             middleware=middleware,
             checkpointer=effective_checkpointer,
+            backend=backend,
         )
 
         config = RunnableConfig(
