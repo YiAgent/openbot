@@ -15,4 +15,4 @@ if ! command -v pytest >/dev/null 2>&1; then
   exit 0
 fi
 
-exec pytest -q --ignore=evals --no-header -x
+exec pytest -q --ignore=evals --ignore=tests/real_service --no-header -x
