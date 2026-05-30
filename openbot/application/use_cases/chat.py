@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from openbot.application.middleware.preflight import PreflightContext
 
 _logger = logging.getLogger(__name__)
-_RESPONDER = DeepAgentsChatResponder()
 
 _ACK_TEMPLATE = (
     ":robot: Hi @{actor} — OpenBot received your message and is thinking.\n\n"
@@ -67,7 +66,8 @@ async def _generate_freeform_reply(
     per_task_cap_usd: Decimal,
     session_factory: Any,
 ) -> str:
-    return await _RESPONDER.reply_for_event(
+    responder = DeepAgentsChatResponder()
+    return await responder.reply_for_event(
         event,
         user_request=user_request,
         run_id=run_id,
@@ -172,12 +172,6 @@ async def maybe_run_chat(ctx: PreflightContext) -> None:
                         "chat_freeform_post_failed",
                         extra={"delivery_id": event.delivery_id, "repo": event.repo},
                     )
-            message = await _generate_freeform_reply(
-                event=event,
-                user_request=command.body_after_mention,
-                run_id=run_id,
-                checkpointer=checkpointer,
-            )
         except Exception:
             _logger.exception(
                 "chat_freeform_failed",

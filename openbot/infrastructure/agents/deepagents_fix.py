@@ -123,7 +123,9 @@ class FixProfile:
             "structured object matching the schema."
         )
 
-    def build_tools(self, request: AgentRequest) -> Sequence[BaseTool]:
+    def build_tools(
+        self, request: AgentRequest, *, backend: Any | None = None
+    ) -> Sequence[BaseTool]:
         # sandbox_requirement=REQUIRED so the runtime already raised
         # AgentSandboxRequiredError if sandbox is None. Cast is safe here.
         sandbox = request.sandbox
@@ -133,7 +135,7 @@ class FixProfile:
             )
         from openbot.infrastructure.agents._fix_tools import make_fix_tools
 
-        return make_fix_tools(sandbox=sandbox, event=request.event)
+        return make_fix_tools(sandbox=sandbox, event=request.event, backend=backend)
 
     def parse_result(self, result: Mapping[str, Any]) -> FixOutcome:
         structured = result.get("structured_response")

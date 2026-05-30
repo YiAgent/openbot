@@ -267,7 +267,9 @@ class DaytonaSandboxAdapter(SandboxPort):
         response = await asyncio.to_thread(self._sandbox.process.exec, diff_cmd, timeout=30)
         return response.result or ""
 
-    async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
+    async def commit_and_push(
+        self, *, branch_ref: str, message: str, token: str, force: bool = False
+    ) -> None:
         # Re-derive the remote URL inside the sandbox so we don't need to
         # carry repo_url through the use case. `git remote get-url origin`
         # returns the token-bearing URL we cloned with — that token may be
@@ -283,6 +285,7 @@ class DaytonaSandboxAdapter(SandboxPort):
             new_url = f"https://x-access-token:{token}@{tail}"
         else:
             new_url = _inject_token(old_url, token)
+        push_flag = "--force-with-lease" if force else ""
         push_script = (
             f"cd {shlex.quote(self.workspace)} && "
             "git config user.email 'openbot[bot]@users.noreply.github.com' && "
@@ -290,7 +293,7 @@ class DaytonaSandboxAdapter(SandboxPort):
             f"git checkout -b {shlex.quote(branch_ref)} && "
             "git add -A && "
             f"git commit -m {shlex.quote(message)} && "
-            f"git push {shlex.quote(new_url)} HEAD:{shlex.quote(branch_ref)}"
+            f"git push {push_flag} {shlex.quote(new_url)} HEAD:{shlex.quote(branch_ref)}"
         )
         push_resp = await asyncio.to_thread(self._sandbox.process.exec, push_script, timeout=120)
         if push_resp.exit_code not in (0, None):

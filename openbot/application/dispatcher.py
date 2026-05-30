@@ -326,6 +326,7 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
             return
 
     # ── Cold path — open factory and clone ────────────────────────────
+    handler_ran = False
     try:
         async with factory() as sandbox:
             try:
@@ -352,6 +353,7 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
                     bypass_source="degrade",
                 )
                 await dispatch.handler(ctx)
+                handler_ran = True
                 return
             # Happy path — sandbox + clone both succeeded. Emit ``none``
             # so the dashboard's "sandbox open" rate is computable.
@@ -364,6 +366,7 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
             ctx_with_handle = dataclasses.replace(ctx, sandbox_handle=cold_handle)
             try:
                 await dispatch.handler(ctx_with_handle)
+                handler_ran = True
             finally:
                 # Await publish *inside* the ``async with`` block so the
                 # sandbox is still alive when _safe_publish calls
@@ -384,6 +387,9 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
         # Factory itself blew up (connection failure to remote backend,
         # quota error, etc.). Last-ditch: call the handler without a
         # sandbox so it can at least post a "sandbox unavailable" reply.
+        # Skip if the handler already ran inside the with-block — the
+        # exception came from __aexit__ (e.g. adapter.close() failure),
+        # not from the factory setup.
         _logger.exception(
             "sandbox_factory_failed",
             extra={
@@ -395,7 +401,8 @@ async def _run_with_sandbox(ctx: PreflightContext) -> None:
         _emit_sandbox_metric(
             feature=dispatch.feature.value, policy=effective_policy, bypass_source="degrade"
         )
-        await dispatch.handler(ctx)
+        if not handler_ran:
+            await dispatch.handler(ctx)
 
 
 def build_preflight_chain() -> list:
@@ -462,8 +469,14 @@ async def execute_handler(
 ) -> None:
     """Execute workflow handler directly — no preflight.
 
-    Used by the worker when processing a TaskSpec v3: the webhook async
-    segment already ran the full preflight chain. Never raises out.
+    Used by the worker when processing a TaskSpec v3. Never raises out
+    for ``Exception`` subclasses; ``BaseException`` (e.g.
+    ``CancelledError``) propagates so the outer cancel scope can handle
+    it.
+
+    TODO(#96): the preflight chain is not yet wired into the worker
+    path — ``run_preflight`` is never invoked. Once #96 lands, the
+    worker will run the full chain before calling this function.
 
     ``classifier_output`` is supplied by the worker (after
     ``parse_classifier_output``-rehydrating the dict from ``TaskSpec``),

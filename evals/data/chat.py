@@ -20,21 +20,11 @@ class ChatDataset(EvalDataset):
     description: ClassVar[str] = "SWE-QA-Pro grounded chat tasks"
 
     def collect(self) -> list[CollectedExample]:
-        # Transitional: logic inlined in Task 15 when the build script is deleted.
-        from evals.scripts import build_chat_swe_qa_pro_dataset as _s
-
-        revision = _s.HF_REVISION
-        samples = _s._collect_samples(revision)
-        sha = _s._sha256_of_samples(samples)
-        return [
-            CollectedExample(
-                inputs=ex["inputs"],
-                outputs=ex.get("outputs"),
-                metadata=ex.get("metadata") or {},
-            )
-            for row in samples
-            for ex in [_s._row_to_example(row, sha, revision)]
-        ]
+        raise NotImplementedError(
+            "ChatDataset.collect() is not available — the build_chat_swe_qa_pro_dataset "
+            "script was removed in the evals refactor (Phase 1+2+3). Use `build_task()` "
+            "to create Inspect AI tasks directly, or load the dataset from HuggingFace."
+        )
 
     def example_to_sample(self, example: Any) -> Any:
         return qa_example_to_agent_sample(example)

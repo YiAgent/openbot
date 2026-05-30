@@ -44,11 +44,12 @@ _logger = logging.getLogger(__name__)
 
 _FLAG_PREFIX: Final = "openbot:run_cancel"
 
-# Flag TTL matches PRD §4.3 maximum agent budget (45 min) plus a safety
-# margin. Run IDs are derived per-event in the receive side so the
-# practical risk of "stale flag cancels a re-used run_id" is zero; the
-# TTL is just memory hygiene for the long tail.
-_FLAG_TTL_SECONDS: Final = 60 * 60
+# Flag TTL covers even the longest agent runs. The original 60-min TTL
+# could expire before a long-running fix (90+ min on Opus-tier models)
+# checked the flag. 24 h is generous enough for all realistic runs
+# without significantly inflating Redis memory. Run IDs are per-event
+# so stale-flag collision risk is zero; the TTL is memory hygiene.
+_FLAG_TTL_SECONDS: Final = 24 * 60 * 60
 
 
 # In-process registry. One entry per locally-running handler. We

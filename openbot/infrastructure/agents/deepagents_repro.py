@@ -213,7 +213,9 @@ class ReproProfile:
             "structured ReproOutcome matching the schema."
         )
 
-    def build_tools(self, request: AgentRequest) -> Sequence[BaseTool]:
+    def build_tools(
+        self, request: AgentRequest, *, backend: Any | None = None
+    ) -> Sequence[BaseTool]:
         # sandbox_requirement=REQUIRED is checked at the runtime layer too,
         # but a direct caller (e.g. an eval harness) could bypass that path.
         # Re-asserting here keeps the contract self-contained.
@@ -224,7 +226,7 @@ class ReproProfile:
             )
         from openbot.infrastructure.agents._repro_tools import make_repro_tools
 
-        return make_repro_tools(sandbox=sandbox, event=request.event)
+        return make_repro_tools(sandbox=sandbox, event=request.event, backend=backend)
 
     def parse_result(self, result: Mapping[str, Any]) -> ReproOutcome:
         structured = result.get("structured_response")

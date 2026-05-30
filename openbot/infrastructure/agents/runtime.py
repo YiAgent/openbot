@@ -44,12 +44,21 @@ _logger = logging.getLogger(__name__)
 # scope so it appears in tracing payloads under a stable name and stays
 # easy to grep when tuning.
 _BUDGET_FINALIZE_INSTRUCTION = (
-    "BUDGET REACHED. Stop calling tools. Using ONLY the information already "
-    "gathered in this conversation, emit one final response that conforms "
-    "exactly to the required schema. If the work is incomplete, set the "
-    "appropriate failure / partial fields in the schema (e.g. tests_passed=false, "
-    "include the last test_output you saw, list any files you actually edited). "
-    "Do not invent results you did not observe. Return the structured object now."
+    "=== BUDGET EXHAUSTED — FINAL OUTPUT REQUIRED ===\n\n"
+    "Your tool and model call budget has been reached. You MUST now produce "
+    "your final structured response based on everything you have gathered so far.\n\n"
+    "Rules:\n"
+    "1. Do NOT call any more tools — they are blocked.\n"
+    "2. Do NOT hallucinate or invent data you did not observe.\n"
+    "3. If you have partial information, produce the best output you can with what you have. "
+    "Partial results are always better than empty results.\n"
+    "4. If you truly have NO useful information (e.g. you never got to read the diff), "
+    "return a minimal valid response with an empty findings list and a summary explaining "
+    "that the review could not be completed due to budget limits.\n"
+    "5. Review the conversation history carefully — tool outputs, file contents, and grep "
+    "results you already gathered contain the information you need. Synthesize them into "
+    "your structured response NOW.\n\n"
+    "Return the structured object immediately."
 )
 
 _REGISTERED_MODELS: set[str] = set()
@@ -101,8 +110,21 @@ def _register_harness_profile(model: str) -> None:
         _logger.debug("HarnessProfile registration not available for model %s", model)
 
 
-def _build_standard_middleware(limits: AgentRunLimits) -> list[AgentMiddleware]:
-    """Standard safety middleware: repetition guard → tool cap → model cap.
+def _build_standard_middleware(
+    limits: AgentRunLimits,
+) -> list[AgentMiddleware]:
+    """Standard safety middleware: repetition guard → context mgmt → tool cap → model cap.
+
+    Middleware order (before_model executes top-to-bottom):
+      1. BudgetGuard        — cost tracking / cap enforcement
+      2. ToolCallRepetitionGuard — prevent repeated identical tool calls
+      3. ContextEditingMiddleware — clear old tool outputs when context grows
+      4. ToolCallLimitMiddleware  — cap tool calls (exit_behavior="continue")
+      5. ModelCallLimitMiddleware — cap model calls (exit_behavior="end")
+
+    NOTE: SummarizationMiddleware is NOT here — DeepAgents (v0.5.3+) already
+    includes its own in the base stack. Adding a second instance triggers
+    LangChain's duplicate-middleware assertion.
 
     Both budget caps use *soft* termination paths so the agent can always
     emit one last structured response after the cap fires:
@@ -114,11 +136,41 @@ def _build_standard_middleware(limits: AgentRunLimits) -> list[AgentMiddleware]:
         soft-finalize pass against the same chat model with
         ``with_structured_output`` to produce the schema-conforming reply.
 
-    Profiles that depend on this asymmetry should size limits so the tool
-    cap fires first (``model_call_limit > tool_call_limit``); the runtime's
-    soft-finalize is the safety net for the residual case.
+    Context management (item 3) runs before budget caps so the agent
+    works with compressed context when the conversation grows large.
     """
     stack: list[Any] = [make_budget_guard(), ToolCallRepetitionGuard()]
+
+    # ── Context management ──────────────────────────────────────────────
+    # Clear old tool outputs + summarize when context gets too large.
+    # These run before the model call so the agent always has manageable
+    # context, even after many tool interactions.
+    try:
+        from langchain.agents.middleware import (  # type: ignore[import]
+            ClearToolUsesEdit,
+            ContextEditingMiddleware,
+        )
+
+        stack.append(
+            ContextEditingMiddleware(
+                edits=[
+                    ClearToolUsesEdit(
+                        trigger=80_000,  # tokens before clearing old tool outputs
+                        keep=3,  # keep the 3 most recent tool results
+                        clear_tool_inputs=True,
+                    ),
+                ],
+            ),
+        )
+    except (ImportError, AttributeError):
+        _logger.debug("ContextEditingMiddleware not available")
+
+    # NOTE: SummarizationMiddleware is NOT added here — DeepAgents (v0.5.3+)
+    # already includes its own `create_summarization_middleware` in the base
+    # stack. Adding a second instance causes LangChain's duplicate-middleware
+    # assertion: "Please remove duplicate middleware instances."
+
+    # ── Budget caps ─────────────────────────────────────────────────────
     try:
         from langchain.agents.middleware import (  # type: ignore[import]
             ModelCallLimitMiddleware,
@@ -229,7 +281,19 @@ class BaseDeepAgentRuntime:
         else:
             budget_state = None
 
-        tools = list(profile.build_tools(request))
+        # Construct backend adapter when a sandbox is present so DeepAgents'
+        # built-in tools (read_file, grep, ls, glob, write, edit, execute)
+        # route through the sandbox instead of the default empty StateBackend.
+        backend = None
+        if (
+            request.sandbox is not None
+            and profile.sandbox_requirement != SandboxRequirement.FORBIDDEN
+        ):
+            from openbot.infrastructure.sandboxes.backend_adapter import SandboxBackendAdapter
+
+            backend = SandboxBackendAdapter(request.sandbox)
+
+        tools = list(profile.build_tools(request, backend=backend))
 
         effective_checkpointer = None
         if profile.checkpoint_enabled and request.run_id and request.checkpointer is not None:
@@ -242,6 +306,7 @@ class BaseDeepAgentRuntime:
             response_format=profile.response_schema,
             middleware=middleware,
             checkpointer=effective_checkpointer,
+            backend=backend,
         )
 
         config = RunnableConfig(
@@ -364,26 +429,62 @@ class BaseDeepAgentRuntime:
         """Recover a missing structured_response by asking the model once
         more with the schema bound directly. No tools are exposed.
 
-        Failure here is logged and re-raises through the existing
-        AgentStructuredOutputError path in ``profile.parse_result``.
+        Two attempts:
+          1. Full conversation history + _BUDGET_FINALIZE_INSTRUCTION
+          2. On failure: last 5 messages only + simpler prompt
+
+        Raises AgentBudgetExhaustedError if both attempts fail, so callers
+        can produce a graceful fallback instead of a cryptic schema error.
         """
         from langchain_core.messages import HumanMessage  # type: ignore[import]
 
         prior = raw.get("messages") or []
+        _logger.info("soft_finalize_start agent=%s messages=%d", profile_name, len(prior))
+
+        structured_model = chat_model.with_structured_output(schema)
+
+        # Attempt 1: full history + explicit budget instruction
         finalize_input: list[BaseMessage] = [
             *prior,
             HumanMessage(content=_BUDGET_FINALIZE_INSTRUCTION),
         ]
         try:
-            structured_model = chat_model.with_structured_output(schema)
             structured = await structured_model.ainvoke(finalize_input)
-        except Exception as exc:  # pragma: no cover — exercised by integration
+            _logger.info("soft_finalize_succeeded agent=%s attempt=1", profile_name)
+            return {**raw, "structured_response": structured}
+        except Exception as exc:
             _logger.warning(
-                "soft_finalize_failed agent=%s err=%s", profile_name, type(exc).__name__
+                "soft_finalize_failed agent=%s attempt=1 err=%s",
+                profile_name,
+                type(exc).__name__,
             )
-            return raw
-        _logger.info("soft_finalize_succeeded agent=%s", profile_name)
-        return {**raw, "structured_response": structured}
+
+        # Attempt 2: trimmed history (last 5 messages) + minimal prompt
+        trimmed = prior[-5:] if len(prior) > 5 else prior
+        simple_prompt = (
+            "The agent's budget was exhausted. Based on the conversation above, "
+            "produce a valid structured response matching the required schema. "
+            "If you have no useful information, return an empty/minimal valid response."
+        )
+        retry_input: list[BaseMessage] = [
+            *trimmed,
+            HumanMessage(content=simple_prompt),
+        ]
+        try:
+            structured = await structured_model.ainvoke(retry_input)
+            _logger.info("soft_finalize_succeeded agent=%s attempt=2", profile_name)
+            return {**raw, "structured_response": structured}
+        except Exception as exc:
+            _logger.error(
+                "soft_finalize_failed agent=%s attempt=2 err=%s — "
+                "raising AgentBudgetExhaustedError",
+                profile_name,
+                type(exc).__name__,
+            )
+            raise AgentBudgetExhaustedError(
+                f"Agent '{profile_name}' budget exhausted and soft-finalize failed "
+                f"after 2 attempts: {type(exc).__name__}"
+            ) from exc
 
 
 __all__ = ["BaseDeepAgentRuntime", "build_agent_chat_model"]

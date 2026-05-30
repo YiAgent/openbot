@@ -167,8 +167,8 @@ async def ingest_webhook(
       5. GitHub check run creation.
       6. Redis enqueue (raises if Redis unavailable).
     """
-    # ── 1. Dedup ─────────────────────────────────────────────────────────────
-    outcome = await dedup.check_and_mark(event.channel, event.delivery_id)
+    # ── 1. Dedup (read-only check; mark deferred to after enqueue) ──────────
+    outcome = await dedup.check(event.channel, event.delivery_id)
     if outcome is DedupOutcome.DUPLICATE:
         _logger.info(
             "webhook_duplicate_dropped",
@@ -325,6 +325,12 @@ async def ingest_webhook(
         classifier_output=None,
     )
     entry_id = await queue.enqueue_task_spec(spec)
+
+    # Mark dedup AFTER enqueue succeeds — if enqueue raises, the mark is
+    # not written and GitHub's retry will succeed instead of being silently
+    # dropped as "duplicate".
+    await dedup.mark(event.channel, event.delivery_id)
+
     return IngestResult(
         status="accepted",
         delivery_id=event.delivery_id,

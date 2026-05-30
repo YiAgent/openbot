@@ -126,7 +126,9 @@ class ChatProfile:
             f"{user_request}"
         )
 
-    def build_tools(self, request: AgentRequest) -> Sequence[BaseTool]:
+    def build_tools(
+        self, request: AgentRequest, *, backend: Any | None = None
+    ) -> Sequence[BaseTool]:
         adapter = getattr(request, "event_adapter", None)
         if adapter is None:
             # No adapter wired (e.g. test that built AgentRequest without
