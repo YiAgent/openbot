@@ -125,7 +125,7 @@ dev = [
     "aiosqlite>=0.20",          # in-memory SQLite via SQLAlchemy for unit tests
     "respx>=0.23",              # httpx mock router for ChannelAdapter contract tests
     "vcrpy>=6.0",               # cassette record/replay for real_service GitHub tests
-    "import-linter>=2.0",       # hexagonal layer boundary enforcement
+    "import-linter>=2.11",       # hexagonal layer boundary enforcement
     "pytest-cov>=7.1.0",
 ]
 
