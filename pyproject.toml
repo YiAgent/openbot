@@ -66,7 +66,7 @@ dependencies = [
     # pyproject lists these — we mirror the subset not already pulled
     # in elsewhere: `fire` for some CLI subcommands, `editdistance`
     # for patch-similarity heuristics inside extract_patches.py.
-    "fire>=0.5",
+    "fire>=0.7.1",
     "editdistance>=0.6",
     # Daytona-managed sandboxes (the default agent runtime, see
     # OPENBOT_SANDBOX_BACKEND). Modal is an optional sibling backend; install
