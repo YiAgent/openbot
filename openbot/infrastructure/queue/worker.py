@@ -248,6 +248,23 @@ async def _execute_task_spec(
                 "reason": preflight_decision.reason,
             },
         )
+        if spec.check_run_id:
+            try:
+                await adapter.update_check_run(
+                    event,
+                    spec.check_run_id,
+                    status="completed",
+                    conclusion="skipped",
+                    output={
+                        "title": "Analysis Skipped",
+                        "summary": preflight_decision.reason or "Skipped by preflight check.",
+                    },
+                )
+            except Exception:
+                _logger.exception(
+                    "check_run_update_failed_on_preflight_block",
+                    extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
+                )
         await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
         return
 
