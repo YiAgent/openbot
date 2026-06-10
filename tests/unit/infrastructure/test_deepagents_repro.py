@@ -56,7 +56,11 @@ class _StubSandbox:
     """The reproduce agent needs the test-authoring SandboxPort surface:
     ``read_file`` / ``write_file`` / ``list_files`` / ``run`` /
     ``git_diff`` / ``search_files``. The fake agent we monkeypatch
-    never invokes the tools, so the stub stays empty."""
+    never invokes the tools, so most of the surface stays empty.
+    ``workspace`` is required because ``SandboxBackendAdapter`` reads
+    it eagerly in ``__init__`` to compute its path prefix."""
+
+    workspace: str = "/workspace"
 
 
 def _valid_outcome_dict(status: str = "reproduced") -> dict[str, Any]:
