@@ -115,6 +115,40 @@ async def test_check_duplicates_with_results():
 
 
 @pytest.mark.asyncio
+async def test_check_duplicates_invokes_rerank_func():
+    """When supplied, rerank_func reorders the raw ANN hits and the result
+    reflects its ordering (not raw similarity order)."""
+    event = _make_event()
+    adapter = AsyncMock()
+    embed_func = AsyncMock(return_value=[0.1, 0.2, 0.3])
+    search_func = AsyncMock(
+        return_value=[
+            {"issue_number": 42, "title": "Similar issue", "similarity": 0.85},
+            {"issue_number": 99, "title": "Better match", "similarity": 0.78},
+        ]
+    )
+    # rerank flips the order — the lower-similarity hit is judged more relevant.
+    rerank_func = AsyncMock(
+        return_value=[
+            {"issue_number": 99, "title": "Better match", "similarity": 0.78},
+            {"issue_number": 42, "title": "Similar issue", "similarity": 0.85},
+        ]
+    )
+
+    result = await check_duplicates(
+        event,
+        adapter,
+        issue_title="New bug",
+        issue_body="Something broke",
+        embedding_func=embed_func,
+        search_func=search_func,
+        rerank_func=rerank_func,
+    )
+    rerank_func.assert_awaited_once()
+    assert [c.issue_number for c in result.candidates] == [99, 42]
+
+
+@pytest.mark.asyncio
 async def test_check_duplicates_handles_embedding_error():
     event = _make_event()
     adapter = AsyncMock()

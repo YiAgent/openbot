@@ -103,14 +103,25 @@ async def check_duplicates(
         if not similar:
             return DedupResult(candidates=[], comment="")
 
-        # Step 3: Rerank (optional)
+        # Step 3: Rerank (optional). When a rerank_func is supplied, let it
+        # reorder/trim the raw ANN hits (LLM rerank, PRD v0.2 §2.3); otherwise
+        # fall back to similarity order. Either way, keep the top `rerank_top`.
+        if rerank_func is not None:
+            reranked = await rerank_func(
+                issue_title=issue_title,
+                issue_body=issue_body,
+                candidates=similar,
+            )
+        else:
+            reranked = similar
+
         candidates = [
             DedupCandidate(
                 issue_number=s["issue_number"],
                 title=s["title"],
                 similarity=s["similarity"],
             )
-            for s in similar[:rerank_top]
+            for s in reranked[:rerank_top]
         ]
 
         # Step 4: Render comment

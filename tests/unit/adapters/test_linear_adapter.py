@@ -137,3 +137,19 @@ async def test_get_pr_comments_returns_empty(adapter: LinearAdapter) -> None:
     )
     result = await adapter.get_pr_comments(event, 1)
     assert result == []
+
+
+# ── aclose ───────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_aclose_is_idempotent(adapter: LinearAdapter) -> None:
+    """aclose() closes the cached GraphQL client and is safe to call twice
+    (the app shutdown path may run it once; tests construct many adapters)."""
+    # Force the lazy client into existence, then close it.
+    client = adapter._get_http()
+    assert client.is_closed is False
+    await adapter.aclose()
+    assert client.is_closed is True
+    # Second call is a no-op, not an error.
+    await adapter.aclose()

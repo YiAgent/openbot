@@ -7,16 +7,36 @@ Provider is selected via OPENBOT_EMBEDDING_PROVIDER env var.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from openbot.core.settings import get_settings
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
 _logger = logging.getLogger(__name__)
 
 _VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
 _OPENAI_URL = "https://api.openai.com/v1/embeddings"
+
+# Cache one engine per Postgres URL. A SQLAlchemy engine owns a connection
+# pool meant to outlive individual queries — creating one per call (and never
+# disposing it) leaks pools/file descriptors. Keyed by URL so a settings
+# change in tests still resolves to a fresh engine.
+_search_engines: dict[str, AsyncEngine] = {}
+
+
+def _get_search_engine(postgres_url: str) -> AsyncEngine:
+    """Return a process-wide async engine for the given URL, creating it once."""
+    engine = _search_engines.get(postgres_url)
+    if engine is None:
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        engine = create_async_engine(postgres_url)
+        _search_engines[postgres_url] = engine
+    return engine
 
 
 class EmbeddingService:
@@ -98,9 +118,8 @@ async def search_similar_issues(
 
     try:
         from sqlalchemy import text
-        from sqlalchemy.ext.asyncio import create_async_engine
 
-        engine = create_async_engine(postgres_url)
+        engine = _get_search_engine(postgres_url)
         async with engine.connect() as conn:
             # pgvector cosine distance: 1 - cosine_similarity
             query = text("""

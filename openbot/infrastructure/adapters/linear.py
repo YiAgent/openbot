@@ -71,6 +71,12 @@ class LinearAdapter(ChannelAdapter):
             )
         return self._http
 
+    async def aclose(self) -> None:
+        """Close the cached GraphQL client. Called on app shutdown."""
+        if self._http is not None:
+            await self._http.aclose()
+            self._http = None
+
     def verify_signature(self, body: bytes, headers: Mapping[str, str]) -> None:
         """Verify Linear webhook HMAC-SHA256 signature.
 
