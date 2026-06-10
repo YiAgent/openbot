@@ -47,6 +47,22 @@ class FakeDedup:
         """All check_and_mark() calls in order, as an immutable tuple."""
         return tuple(self._checks)
 
+    async def check(self, channel: str, delivery_id: str) -> DedupOutcome:
+        """Read-only duplicate check — does NOT mark."""
+        self._maybe_fail()
+        if self.responses:
+            outcome = self.responses.pop(0)
+        else:
+            key = (channel, delivery_id)
+            outcome = DedupOutcome.DUPLICATE if key in self._seen else DedupOutcome.FRESH
+        self._checks.append(DedupRecord(channel=channel, delivery_id=delivery_id, outcome=outcome))
+        return outcome
+
+    async def mark(self, channel: str, delivery_id: str) -> None:
+        """Mark a delivery as seen."""
+        if delivery_id:
+            self._seen.add((channel, delivery_id))
+
     async def check_and_mark(self, channel: str, delivery_id: str) -> DedupOutcome:
         """See :class:`openbot.application.ports.dedup.DedupPort`."""
         self._maybe_fail()

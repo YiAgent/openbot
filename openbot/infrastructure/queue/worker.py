@@ -33,7 +33,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Final
 
-from openbot.application.dispatcher import execute_handler
+from openbot.application.dispatcher import build_preflight_chain, execute_handler
 from openbot.application.router import dispatch_for, upgrade_dispatch
 
 # TODO(phase-2c): route through CancellationPort once worker composition root lands.
@@ -144,6 +144,14 @@ async def _execute_task_spec(
             resource_key=spec.resource_key,
         )
 
+    # W3.5: Bump attempt counter BEFORE any I/O so persistent failures
+    # (e.g. GitHub auth outage in load_for_repo) eventually DLQ instead
+    # of looping forever.
+    attempts = await _bump_attempt_counter(redis, entry_id)
+    if attempts > _MAX_ATTEMPTS:
+        await _ack_and_dlq(redis, entry_id, reason="max_attempts_v3_pre_dispatch")
+        return
+
     # W4: Load effective config (adapter needed for GitHub API calls in config loader).
     config = await load_for_repo(adapter, event)
 
@@ -191,10 +199,74 @@ async def _execute_task_spec(
                 exc_info=True,
             )
 
-    # W5-W8: Attempt counter + cancellation lifecycle.
-    attempts = await _bump_attempt_counter(redis, entry_id)
+    # W5-W8: Cancellation lifecycle.
     active_run_id = new_dispatch.run_id or new_dispatch.task_id
     cancellation_register(active_run_id)
+
+    # Defense-in-depth: re-signal cancellation for prev_run_id on dequeue.
+    # The webhook path also signals, but if Redis was unavailable at that
+    # point the flag was never written. This makes cancellation idempotent
+    # across dyno boundaries.
+    if spec.prev_run_id and spec.intent in ("supersede", "cancel"):
+        from openbot.application.state.cancellation import signal as _cancel_signal
+
+        try:
+            await _cancel_signal(redis, spec.prev_run_id)
+        except Exception:
+            _logger.warning(
+                "queue_v3_cancel_resignal_failed",
+                extra={"entry_id": entry_id, "prev_run_id": spec.prev_run_id},
+            )
+
+    # W5.5: Run the preflight middleware chain (kill switch, feature toggle,
+    # rate limit, budget, cancel-comment, fork-PR gate, etc.). The webhook
+    # fast-path skips these to stay within GitHub's 10s deadline; the worker
+    # has no such constraint.
+    from openbot.application.middleware.preflight import (
+        PreflightContext,
+        run_preflight,
+    )
+
+    preflight_ctx = PreflightContext(
+        event=event,
+        dispatch=new_dispatch,
+        config=config,
+        adapter=adapter,
+        session_factory=session_factory,
+        redis=redis,
+        check_run_id=spec.check_run_id,
+        sandbox_factory=sandbox_factory,
+        classifier_output=classifier_output,
+    )
+    preflight_decision = await run_preflight(preflight_ctx, build_preflight_chain())
+    if preflight_decision.result.value == "blocked":
+        _logger.info(
+            "queue_v3_preflight_blocked",
+            extra={
+                "entry_id": entry_id,
+                "delivery_id": spec.delivery_id,
+                "reason": preflight_decision.reason,
+            },
+        )
+        if spec.check_run_id:
+            try:
+                await adapter.update_check_run(
+                    event,
+                    spec.check_run_id,
+                    status="completed",
+                    conclusion="skipped",
+                    output={
+                        "title": "Analysis Skipped",
+                        "summary": preflight_decision.reason or "Skipped by preflight check.",
+                    },
+                )
+            except Exception:
+                _logger.exception(
+                    "check_run_update_failed_on_preflight_block",
+                    extra={"entry_id": entry_id, "delivery_id": spec.delivery_id},
+                )
+        await redis.xack(STREAM_NAME, GROUP_NAME, entry_id)
+        return
 
     try:
         try:

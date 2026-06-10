@@ -23,20 +23,11 @@ class ReviewDataset(EvalDataset):
         return asyncio.run(self._collect_async())
 
     async def _collect_async(self) -> list[CollectedExample]:
-        # Transitional: logic inlined in Task 15 when the build script is deleted.
-        from evals.scripts import build_review_martian_dataset as _s
-
-        samples = await _s._collect_samples()
-        sha = _s._sha256_of_samples(samples)
-        return [
-            CollectedExample(
-                inputs=ex["inputs"],
-                outputs=ex.get("outputs"),
-                metadata=ex.get("metadata") or {},
-            )
-            for row in samples
-            for ex in [_s._row_to_example(row, sha)]
-        ]
+        raise NotImplementedError(
+            "ReviewDataset.collect() is not available — the build_review_martian_dataset "
+            "script was removed in the evals refactor (Phase 1+2+3). Use `build_task()` "
+            "to create Inspect AI tasks directly, or load the dataset from HuggingFace."
+        )
 
     def example_to_sample(self, example: Any) -> Any:
         return review_example_to_sample(example)

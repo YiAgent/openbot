@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -42,11 +43,24 @@ def _to_psycopg_dsn(dsn: str) -> str:
     ``postgresql://...`` only — the ``+asyncpg`` dialect suffix makes
     psycopg's URL parser raise ``ProgrammingError: missing '=' after ...``.
 
+    Heroku's ``DATABASE_URL`` often ships ``?ssl=true`` which psycopg3
+    rejects (it expects ``sslmode``).  We normalise that here too.
+
     Stripping the dialect part here keeps the single
     ``OPENBOT_POSTGRES_URL`` setting as the source of truth without
     requiring callers to supply a second variable.
     """
-    return dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+    dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+    parsed = urlparse(dsn)
+    qs = parse_qs(parsed.query)
+    if "ssl" in qs:
+        ssl_val = qs.pop("ssl")[0]
+        qs.setdefault(
+            "sslmode",
+            "require" if ssl_val.lower() in ("true", "1", "require") else ssl_val,
+        )
+        dsn = urlunparse(parsed._replace(query=urlencode(qs, doseq=True)))
+    return dsn
 
 
 @asynccontextmanager

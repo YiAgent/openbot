@@ -104,7 +104,9 @@ class FakeSandboxAdapter:
         result = await self._run_inside(["git", "diff", "--no-color"])
         return result.stdout
 
-    async def commit_and_push(self, *, branch_ref: str, message: str, token: str) -> None:
+    async def commit_and_push(
+        self, *, branch_ref: str, message: str, token: str, force: bool = False
+    ) -> None:
         # Tests use file:// origins where the token is unused; production
         # uses Daytona which has its own commit_and_push (see C.5).
         steps: tuple[list[str], ...] = (

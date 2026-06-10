@@ -57,6 +57,40 @@ class WebhookDedup:
         self._redis = redis
         self._ttl = ttl_seconds
 
+    async def check(self, channel: str, delivery_id: str) -> DedupOutcome:
+        """Read-only duplicate check — does NOT mark."""
+        if not delivery_id:
+            return DedupOutcome.FRESH
+
+        if self._redis is None:
+            return DedupOutcome.FALLBACK_OPEN
+
+        key = f"{_KEY_PREFIX}:{channel}:{delivery_id}"
+        try:
+            exists = await self._redis.exists(key)
+        except Exception:
+            _logger.exception(
+                "dedup_redis_error_fail_open",
+                extra={"channel": channel, "delivery_id": delivery_id},
+            )
+            return DedupOutcome.FALLBACK_OPEN
+
+        return DedupOutcome.DUPLICATE if exists else DedupOutcome.FRESH
+
+    async def mark(self, channel: str, delivery_id: str) -> None:
+        """Mark a delivery as seen. Call after enqueue succeeds."""
+        if not delivery_id or self._redis is None:
+            return
+
+        key = f"{_KEY_PREFIX}:{channel}:{delivery_id}"
+        try:
+            await self._redis.set(key, "1", nx=True, ex=self._ttl)
+        except Exception:
+            _logger.exception(
+                "dedup_mark_failed",
+                extra={"channel": channel, "delivery_id": delivery_id},
+            )
+
     async def check_and_mark(self, channel: str, delivery_id: str) -> DedupOutcome:
         """Check whether (channel, delivery_id) was seen and atomically mark it.
 

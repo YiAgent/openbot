@@ -11,7 +11,7 @@ from inspect_ai.scorer import Scorer
 from evals.data._base import CollectedExample, EvalDataset, WritebackSummary
 from evals.data._predictions import SwtBenchPrediction, prediction_exporter
 from evals.data._samples import issue_row_to_sample
-from evals.data._utils import git_sha, resolve_model_label
+from evals.data._utils import git_sha, make_experiment_name, resolve_model_label
 from evals.data._writeback import run_writeback
 
 
@@ -87,12 +87,17 @@ class SwtDataset(EvalDataset):
         from evals.runtime.config import get_eval_config
 
         catalog = get_eval_config().catalog
+        experiment_name = make_experiment_name(
+            dataset_version=self.dataset_version,
+            solver_family=catalog.solver_family_baseline,
+        )
         return Task(
             dataset=self.load_for_inspect(),
             solver=solver,
             scorer=prediction_exporter(
                 dataset_version=self.dataset_version,
                 schema=SwtBenchPrediction,
+                run_label=experiment_name,
                 scorer_name=catalog.swt_export_feedback_key,
             ),
             metadata={
@@ -102,6 +107,7 @@ class SwtDataset(EvalDataset):
                 "model": resolve_model_label(),
                 "git_sha": git_sha(),
                 "instance_id_field": self.instance_id_field,
+                "langsmith_experiment_name": experiment_name,
                 **(extra_metadata or {}),
             },
         )

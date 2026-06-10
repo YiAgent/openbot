@@ -29,8 +29,16 @@ def make_fix_tools(
     *,
     sandbox: SandboxPort,
     event: UnifiedEvent,  # reserved for per-event logging
+    backend: Any | None = None,
 ) -> list[StructuredTool]:
-    """Build the per-run fix tool list."""
+    """Build the per-run fix tool list.
+
+    When ``backend`` is provided (DeepAgents SandboxBackendProtocol),
+    the backend already provides ``read_file``, ``write_file``,
+    ``search_files`` (grep), ``ls``, ``glob``, and ``execute``. We keep
+    only the tools the backend does NOT cover: ``list_files``, ``run_command``,
+    and ``git_diff``.
+    """
 
     async def read_file(path: str) -> str:
         return await sandbox.read_file(path)
@@ -64,7 +72,7 @@ def make_fix_tools(
             return []
         return [line for line in result.stdout.splitlines() if line.strip()]
 
-    return [
+    all_tools = [
         StructuredTool.from_function(
             coroutine=read_file,
             name="read_file",
@@ -102,6 +110,14 @@ def make_fix_tools(
             ),
         ),
     ]
+
+    if backend is not None:
+        # Backend provides read_file, write_file, search_files (grep), ls,
+        # glob, execute. Keep only tools the backend does NOT cover.
+        backend_covered = {"read_file", "write_file", "search_files"}
+        return [t for t in all_tools if t.name not in backend_covered]
+
+    return all_tools
 
 
 __all__ = ["make_fix_tools"]
