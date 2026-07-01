@@ -50,7 +50,7 @@ dependencies = [
     # Optional future judge provider for chat_swe_qa_pro. The current local
     # development scorer intentionally stays on Anthropic while documenting
     # its deviation from the paper's GPT-5 protocol.
-    "langchain-openai>=1.2.2",
+    "langchain-openai>=1.3.3",
     # Agent sandbox (PRD §3.1) — DeepAgents executes inside a per-sample
     # *local* Docker container via docker-py. Official benchmark Docker
     # harnesses (SWE-bench / SWT-bench) are run offline against the
