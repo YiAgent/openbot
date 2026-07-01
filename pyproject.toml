@@ -94,7 +94,7 @@ dependencies = [
     # /metrics endpoint for Heroku dyno metrics + future Prometheus
     # scraping. Default instrumentator exposes request count / latency
     # histograms; no PII, no body sampling.
-    "prometheus-fastapi-instrumentator>=8.0.0",
+    "prometheus-fastapi-instrumentator>=8.0.2",
     # Structured JSON logging. Formats stdlib log records as JSON lines
     # so Papertrail / log aggregators can search + filter on fields
     # rather than parsing text. Zero-API-change: existing
