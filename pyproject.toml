@@ -46,7 +46,7 @@ dependencies = [
     # Pinned to PyYAML (not ruamel) because we only need safe_load + the
     # config file is round-trip-stable already (PRs review the diff, not
     # the formatting). `yaml.safe_load` is required — `yaml.load` is banned.
-    "pyyaml>=6.0",
+    "pyyaml>=6.0.3",
     # Optional future judge provider for chat_swe_qa_pro. The current local
     # development scorer intentionally stays on Anthropic while documenting
     # its deviation from the paper's GPT-5 protocol.
