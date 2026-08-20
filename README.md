@@ -1,10 +1,18 @@
-# OpenBot
+<p align="center">
+  <img src="./docs/assets/openbot-logo.svg" alt="OpenBot" width="128" height="128">
+</p>
 
-> Open-source, self-hosted GitHub maintenance automation for teams that want to own their bot, prompts, models, data, and cost controls.
+<h1 align="center">OpenBot</h1>
 
-[![status](https://img.shields.io/badge/status-pre--alpha-orange)](./docs/prd/openbot-prd.md)
-[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
-[![python](https://img.shields.io/badge/python-3.12%2B-blue)](./pyproject.toml)
+<p align="center">
+  <em>Open-source, self-hosted GitHub maintenance automation for teams that want to own their bot, prompts, models, data, and cost controls.</em>
+</p>
+
+<p align="center">
+  <a href="./docs/prd/openbot-prd.md"><img alt="status" src="https://img.shields.io/badge/status-pre--alpha-orange"></a>
+  <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+  <a href="./pyproject.toml"><img alt="python" src="https://img.shields.io/badge/python-3.12%2B-blue"></a>
+</p>
 
 OpenBot is a GitHub App backend for maintainer workflows:
 

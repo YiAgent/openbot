@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"
+     role="img" aria-label="OpenBot logo: a simple rounded tortoise with a blue shell on a deep navy square.">
+  <title>OpenBot</title>
+  <rect width="512" height="512" fill="#0f172a"/>
+  <rect x="40" y="286" width="124" height="100" rx="50" fill="#e8eef7"/>
+  <rect x="348" y="286" width="124" height="100" rx="50" fill="#e8eef7"/>
+  <path d="M 66,304 C 66,186 142,124 256,124 C 370,124 446,186 446,304 Q 446,338 412,338 L 100,338 Q 66,338 66,304 Z" fill="#3b82f6"/>
+  <circle cx="256" cy="406" r="96" fill="#e8eef7"/>
+  <circle cx="220" cy="398" r="24" fill="#1d4ed8"/>
+  <circle cx="292" cy="398" r="24" fill="#1d4ed8"/>
+</svg>
