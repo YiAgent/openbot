@@ -18,7 +18,6 @@ keep them on any element you add.
 from __future__ import annotations
 
 import html
-import sys
 from pathlib import Path
 
 W, H = 1000, 960
@@ -470,18 +469,21 @@ A(
 A("  </g>")
 A("</svg>")
 
-DEFAULT_OUT = (
-    Path(__file__).resolve().parent.parent / "docs" / "assets" / "openbot-architecture.svg"
-)
+OUT = Path(__file__).resolve().parent.parent / "docs" / "assets" / "openbot-architecture.svg"
 
 
-def main(argv: list[str]) -> int:
-    out = Path(argv[1]) if len(argv) > 1 else DEFAULT_OUT
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"wrote {out} ({len(lines)} lines)")
+def main() -> int:
+    """Write the diagram to its one tracked location.
+
+    Deliberately takes no output-path argument: the SVG is committed at a
+    fixed path that README.md links to, so an override would only ever
+    produce an untracked copy the README cannot see.
+    """
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"wrote {OUT} ({len(lines)} lines)")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv))
+    raise SystemExit(main())
