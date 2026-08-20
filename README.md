@@ -250,6 +250,17 @@ point yet. The alpha readiness criteria are documented in
 
 OpenBot uses evals as product verification, not as a separate demo agent.
 
+![OpenBot eval architecture: an offline lane runs benchmark datasets through Inspect AI tasks, thin solvers and the openbot.evaluation facade into the production agent and sandbox, then scores and exports predictions; a planned online lane harvests traces and GitHub outcome signals from production runs into online eval and 30-day trend metrics. Both lanes write to LangSmith. A coverage strip lists the four product workflows: triage, review, fix and chat.](./docs/assets/openbot-eval-architecture.svg)
+
+Two lanes over one LangSmith substrate. The **offline** lane is what exists
+today: a benchmark dataset is driven through the *production* agent and
+sandbox via `openbot.evaluation`, so a suite measures the shipped code path
+rather than an eval-only copy of it. The **online** lane is v0.3 in the
+[eval PRD](./docs/prd/openbot-eval-prd.md) and is mostly unbuilt — the traces
+are already there, the outcome-signal collector and the online judge are not.
+Solid borders in the diagram are built; dashed borders are specified but not
+implemented.
+
 The target architecture is:
 
 ```text

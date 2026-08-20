@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 1012" width="1060" height="1012"
+     role="img" aria-label="OpenBot eval architecture: an offline lane runs benchmark datasets through Inspect AI tasks, thin solvers and the openbot.evaluation facade into the production agent and sandbox, then scores and exports predictions; a planned online lane harvests traces and GitHub outcome signals from production runs into online eval and 30-day trend metrics. Both lanes write to LangSmith. A coverage strip lists the four product workflows: triage, review, fix and chat."
+     data-quality-profile="showcase">
+  <title>OpenBot eval architecture</title>
+  <style>
+    text { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', 'Courier New', 'Microsoft YaHei', monospace; letter-spacing: 0.02em; }
+  </style>
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f0f1a"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <marker id="m-flow" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="m-flow-start" markerWidth="8" markerHeight="6" refX="0.5" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="m-state" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#10b981"/>
+    </marker>
+    <marker id="m-state-start" markerWidth="8" markerHeight="6" refX="0.5" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#10b981"/>
+    </marker>
+    <marker id="m-llm" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#a855f7"/>
+    </marker>
+    <marker id="m-llm-start" markerWidth="8" markerHeight="6" refX="0.5" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#a855f7"/>
+    </marker>
+    <marker id="m-policy" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f97316"/>
+    </marker>
+    <marker id="m-policy-start" markerWidth="8" markerHeight="6" refX="0.5" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#f97316"/>
+    </marker>
+    <marker id="m-eval" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#64748b"/>
+    </marker>
+    <marker id="m-eval-start" markerWidth="8" markerHeight="6" refX="0.5" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#64748b"/>
+    </marker>
+  </defs>
+  <rect data-graph-role="background" width="1060" height="1012" fill="url(#bg-grad)"/>
+  <text x="36" y="42" font-size="18" font-weight="700" fill="#e2e8f0">OpenBot — eval architecture</text>
+  <text x="36" y="62" font-size="11" fill="#94a3b8">two lanes over one LangSmith substrate: offline benchmarks driven through the production agent, online signal from production runs</text>
+  <text x="1024" y="42" font-size="11" fill="#64748b" text-anchor="end">v0.1 built · v0.3 planned</text>
+  <rect data-graph-role="container" id="cA" x="36" y="96" width="476" height="586" rx="10" fill="none" stroke="#334155" stroke-width="1" stroke-dasharray="6,5"/>
+  <text x="50" y="116" font-size="10" font-weight="700" fill="#64748b" letter-spacing="0.18em">OFFLINE · v0.1 · BUILT</text>
+  <rect data-graph-role="container" id="cB" x="548" y="96" width="476" height="586" rx="10" fill="none" stroke="#334155" stroke-width="1" stroke-dasharray="6,5"/>
+  <text x="562" y="116" font-size="10" font-weight="700" fill="#64748b" letter-spacing="0.18em">ONLINE · v0.3 · PLANNED</text>
+  <rect data-graph-role="container" id="cC" x="36" y="822" width="988" height="126" rx="10" fill="none" stroke="#334155" stroke-width="1" stroke-dasharray="6,5"/>
+  <text x="50" y="842" font-size="10" font-weight="700" fill="#64748b" letter-spacing="0.18em">COVERAGE — THE FOUR PRODUCT WORKFLOWS</text>
+  <path data-graph-role="edge" data-edge-id="ea1" data-source="a1" data-target="a2" d="M 274,198 L 274,238" fill="none" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#m-flow)"/>
+  <path data-graph-role="edge" data-edge-id="ea2" data-source="a2" data-target="a3" d="M 274,312 L 274,352" fill="none" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#m-flow)"/>
+  <path data-graph-role="edge" data-edge-id="ea3" data-source="a3" data-target="a4" d="M 274,426 L 274,466" fill="none" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#m-flow)"/>
+  <path data-graph-role="edge" data-edge-id="ea4" data-source="a4" data-target="a5" d="M 274,546 L 274,586" fill="none" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#m-flow)"/>
+  <path data-graph-role="edge" data-edge-id="ea5" data-source="a5" data-target="ls" d="M 274,660 L 274,722" fill="none" stroke="#10b981" stroke-width="1.8" marker-end="url(#m-state)"/>
+  <path data-graph-role="edge" data-edge-id="eb1" data-source="b1" data-target="b2" d="M 786,198 L 786,238" fill="none" stroke="#a855f7" stroke-width="1.8" marker-end="url(#m-llm)" stroke-dasharray="5,4"/>
+  <path data-graph-role="edge" data-edge-id="eb2" data-source="b2" data-target="b3" d="M 786,312 L 786,352" fill="none" stroke="#a855f7" stroke-width="1.8" marker-end="url(#m-llm)" stroke-dasharray="5,4"/>
+  <path data-graph-role="edge" data-edge-id="eb3" data-source="b3" data-target="b4" d="M 786,426 L 786,466" fill="none" stroke="#a855f7" stroke-width="1.8" marker-end="url(#m-llm)" stroke-dasharray="5,4"/>
+  <path data-graph-role="edge" data-edge-id="eb4" data-source="b4" data-target="b5" d="M 786,546 L 786,586" fill="none" stroke="#a855f7" stroke-width="1.8" marker-end="url(#m-llm)" stroke-dasharray="5,4"/>
+  <path data-graph-role="edge" data-edge-id="eb5" data-source="b5" data-target="ls" d="M 786,660 L 786,722" fill="none" stroke="#10b981" stroke-width="1.8" marker-end="url(#m-state)"/>
+  <rect data-graph-role="node" data-node-id="a1" x="58" y="132" width="432" height="66" rx="6" fill="#052e16" stroke="#059669" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="b1" x="570" y="132" width="432" height="66" rx="6" fill="#132a47" stroke="#3b82f6" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="a2" x="58" y="238" width="432" height="74" rx="6" fill="#132a47" stroke="#3b82f6" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="b2" x="570" y="238" width="432" height="74" rx="6" fill="#052e16" stroke="#059669" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="a3" x="58" y="352" width="432" height="74" rx="6" fill="#132a47" stroke="#3b82f6" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="b3" x="570" y="352" width="432" height="74" rx="6" fill="#131a28" stroke="#64748b" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <rect data-graph-role="node" data-node-id="a4" x="58" y="466" width="432" height="80" rx="6" fill="#1e1b4b" stroke="#7c3aed" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="b4" x="570" y="466" width="432" height="80" rx="6" fill="#1e1b4b" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <rect data-graph-role="node" data-node-id="a5" x="58" y="586" width="432" height="74" rx="6" fill="#1c1917" stroke="#ea580c" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="b5" x="570" y="586" width="432" height="74" rx="6" fill="#292214" stroke="#eab308" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <rect data-graph-role="node" data-node-id="ls" x="36" y="722" width="988" height="66" rx="6" fill="#052e16" stroke="#059669" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="c1" x="56" y="858" width="207" height="70" rx="6" fill="#0f172a" stroke="#475569" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <rect data-graph-role="node" data-node-id="c2" x="303" y="858" width="207" height="70" rx="6" fill="#132a47" stroke="#3b82f6" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="c3" x="550" y="858" width="207" height="70" rx="6" fill="#132a47" stroke="#3b82f6" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="c4" x="797" y="858" width="207" height="70" rx="6" fill="#132a47" stroke="#3b82f6" stroke-width="1.5"/>
+  <circle cx="78" cy="149" r="11" fill="#059669" fill-opacity="0.18" stroke="#059669" stroke-width="1.2"/>
+  <text x="78" y="153" font-size="11" font-weight="700" fill="#059669" text-anchor="middle">1</text>
+  <text x="98" y="154" font-size="12" font-weight="700" fill="#e2e8f0">benchmark datasets</text>
+  <text x="98" y="172" font-size="10" font-weight="400" fill="#94a3b8">LangSmith mirrors published by make -C evals data-*</text>
+  <text x="98" y="188" font-size="10" font-weight="400" fill="#94a3b8">Martian CRB · SWE-bench V · SWE-QA-Pro · SWT-Bench</text>
+  <circle cx="78" cy="255" r="11" fill="#3b82f6" fill-opacity="0.18" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="78" y="259" font-size="11" font-weight="700" fill="#3b82f6" text-anchor="middle">2</text>
+  <text x="98" y="260" font-size="12" font-weight="700" fill="#e2e8f0">Inspect AI task — one per benchmark</text>
+  <text x="98" y="278" font-size="10" font-weight="400" fill="#94a3b8">evals/tasks/: review_martian · fix_swe_bench ·</text>
+  <text x="98" y="293" font-size="10" font-weight="400" fill="#94a3b8">chat_swe_qa · test_swt_bench</text>
+  <text x="98" y="308" font-size="10" font-weight="400" fill="#64748b">dataset + solver + scorers wired per task</text>
+  <circle cx="78" cy="369" r="11" fill="#3b82f6" fill-opacity="0.18" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="78" y="373" font-size="11" font-weight="700" fill="#3b82f6" text-anchor="middle">3</text>
+  <text x="98" y="374" font-size="12" font-weight="700" fill="#e2e8f0">thin solver → openbot.evaluation</text>
+  <text x="98" y="392" font-size="10" font-weight="400" fill="#94a3b8">evals/solvers/*.py call runner.run_*_sample and adapt</text>
+  <text x="98" y="407" font-size="10" font-weight="400" fill="#94a3b8">the domain result into scorer / prediction shape</text>
+  <text x="98" y="422" font-size="10" font-weight="400" fill="#64748b">forbidden here: eval-only agents, sandboxes, tools</text>
+  <circle cx="78" cy="483" r="11" fill="#7c3aed" fill-opacity="0.18" stroke="#7c3aed" stroke-width="1.2"/>
+  <text x="78" y="487" font-size="11" font-weight="700" fill="#7c3aed" text-anchor="middle">4</text>
+  <text x="98" y="488" font-size="12" font-weight="700" fill="#e2e8f0">production agent + real sandbox</text>
+  <text x="98" y="506" font-size="10" font-weight="400" fill="#94a3b8">the facade opens the prod sandbox, clones at base_sha,</text>
+  <text x="98" y="521" font-size="10" font-weight="400" fill="#94a3b8">then calls DeepAgents review / fix / chat / repro —</text>
+  <text x="98" y="536" font-size="10" font-weight="400" fill="#94a3b8">the same code the worker runs in production</text>
+  <circle cx="78" cy="603" r="11" fill="#ea580c" fill-opacity="0.18" stroke="#ea580c" stroke-width="1.2"/>
+  <text x="78" y="607" font-size="11" font-weight="700" fill="#ea580c" text-anchor="middle">5</text>
+  <text x="98" y="608" font-size="12" font-weight="700" fill="#e2e8f0">scorers + prediction export</text>
+  <text x="98" y="626" font-size="10" font-weight="400" fill="#94a3b8">review: LLM judge + overlap · chat: SWE-QA-Pro judge</text>
+  <text x="98" y="641" font-size="10" font-weight="400" fill="#94a3b8">fix / test: JSONL → official harness (Modal / docker)</text>
+  <text x="98" y="656" font-size="10" font-weight="400" fill="#64748b">→ grade writeback as pass@1 feedback</text>
+  <circle cx="590" cy="149" r="11" fill="#3b82f6" fill-opacity="0.18" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="590" y="153" font-size="11" font-weight="700" fill="#3b82f6" text-anchor="middle">1</text>
+  <text x="610" y="154" font-size="12" font-weight="700" fill="#e2e8f0">production workflow runs</text>
+  <text x="610" y="172" font-size="10" font-weight="400" fill="#94a3b8">triage · review · fix · chat on real repositories</text>
+  <text x="610" y="188" font-size="10" font-weight="400" fill="#64748b">live traffic, no benchmark dataset</text>
+  <circle cx="590" cy="255" r="11" fill="#059669" fill-opacity="0.18" stroke="#059669" stroke-width="1.2"/>
+  <text x="590" y="259" font-size="11" font-weight="700" fill="#059669" text-anchor="middle">2</text>
+  <text x="610" y="260" font-size="12" font-weight="700" fill="#e2e8f0">auto-instrumented traces</text>
+  <text x="610" y="278" font-size="10" font-weight="400" fill="#94a3b8">LANGSMITH_TRACING on the web and worker processes;</text>
+  <text x="610" y="293" font-size="10" font-weight="400" fill="#94a3b8">every agent run already lands in LangSmith today</text>
+  <text x="610" y="308" font-size="10" font-weight="400" fill="#64748b">this half of the online lane exists now</text>
+  <circle cx="590" cy="369" r="11" fill="#64748b" fill-opacity="0.18" stroke="#64748b" stroke-width="1.2"/>
+  <text x="590" y="373" font-size="11" font-weight="700" fill="#64748b" text-anchor="middle">3</text>
+  <text x="610" y="374" font-size="12" font-weight="700" fill="#e2e8f0">outcome signals from GitHub</text>
+  <text x="610" y="392" font-size="10" font-weight="400" fill="#94a3b8">was the review comment resolved or acted on; did the</text>
+  <text x="610" y="407" font-size="10" font-weight="400" fill="#94a3b8">chat answer need a follow-up; was a triage label fixed</text>
+  <text x="610" y="422" font-size="10" font-weight="400" fill="#64748b">collector not built yet</text>
+  <circle cx="590" cy="483" r="11" fill="#7c3aed" fill-opacity="0.18" stroke="#7c3aed" stroke-width="1.2"/>
+  <text x="590" y="487" font-size="11" font-weight="700" fill="#7c3aed" text-anchor="middle">4</text>
+  <text x="610" y="488" font-size="12" font-weight="700" fill="#e2e8f0">online eval + annotation queue</text>
+  <text x="610" y="506" font-size="10" font-weight="400" fill="#94a3b8">sampled LLM judge over live runs, plus human labels</text>
+  <text x="610" y="521" font-size="10" font-weight="400" fill="#94a3b8">from the LangSmith annotation queue</text>
+  <text x="610" y="536" font-size="10" font-weight="400" fill="#64748b">suites: triage_online · review_online · chat_online</text>
+  <circle cx="590" cy="603" r="11" fill="#eab308" fill-opacity="0.18" stroke="#eab308" stroke-width="1.2"/>
+  <text x="590" y="607" font-size="11" font-weight="700" fill="#eab308" text-anchor="middle">5</text>
+  <text x="610" y="608" font-size="12" font-weight="700" fill="#e2e8f0">30-day trend metrics</text>
+  <text x="610" y="626" font-size="10" font-weight="400" fill="#94a3b8">action_rate · resolved_rate · correct_30d ·</text>
+  <text x="610" y="641" font-size="10" font-weight="400" fill="#94a3b8">macro_f1_30d · followup_rate · pass@1_90d</text>
+  <text x="610" y="656" font-size="10" font-weight="400" fill="#64748b">trend observation only — never blocks a merge</text>
+  <text x="530" y="746" font-size="13" font-weight="700" fill="#e2e8f0" text-anchor="middle">LangSmith — one substrate for both lanes</text>
+  <text x="530" y="765" font-size="11" font-weight="400" fill="#94a3b8" text-anchor="middle">datasets · experiment rows · per-sample feedback · traces · annotation queue</text>
+  <text x="530" y="781" font-size="10" font-weight="400" fill="#64748b" text-anchor="middle">every row carries dataset_version · solver_family=openbot_agent · capability · openbot_git_sha · mode</text>
+  <text x="70" y="878" font-size="12" font-weight="700" fill="#e2e8f0">triage</text>
+  <text x="70" y="894" font-size="10" font-weight="400" fill="#94a3b8">off · triage_gitbugs (v0.2)</text>
+  <text x="70" y="909" font-size="10" font-weight="400" fill="#94a3b8">on · macro_f1_30d (v0.3)</text>
+  <text x="70" y="924" font-size="10" font-weight="400" fill="#64748b">no solver in evals/ yet</text>
+  <text x="317" y="878" font-size="12" font-weight="700" fill="#e2e8f0">review</text>
+  <text x="317" y="894" font-size="10" font-weight="400" fill="#94a3b8">off · review_martian — mean F1</text>
+  <text x="317" y="909" font-size="10" font-weight="400" fill="#94a3b8">on · action / resolved rate</text>
+  <text x="317" y="924" font-size="10" font-weight="400" fill="#64748b">10% F1 drop blocks merge</text>
+  <text x="564" y="878" font-size="12" font-weight="700" fill="#e2e8f0">fix</text>
+  <text x="564" y="894" font-size="10" font-weight="400" fill="#94a3b8">off · fix_swe_bench — pass@1</text>
+  <text x="564" y="909" font-size="10" font-weight="400" fill="#94a3b8">on · fix_swe_bench_live 90d</text>
+  <text x="564" y="924" font-size="10" font-weight="400" fill="#64748b">rolling benchmark, not prod</text>
+  <text x="811" y="878" font-size="12" font-weight="700" fill="#e2e8f0">chat</text>
+  <text x="811" y="894" font-size="10" font-weight="400" fill="#94a3b8">off · chat_swe_qa — 5-dim</text>
+  <text x="811" y="909" font-size="10" font-weight="400" fill="#94a3b8">on · correct_30d · followup</text>
+  <text x="811" y="924" font-size="10" font-weight="400" fill="#64748b">judge must exist; warn only</text>
+  <text data-graph-role="label" data-owner="ea1" x="286" y="221" font-size="10" fill="#3b82f6">sample</text>
+  <text data-graph-role="label" data-owner="ea2" x="286" y="335" font-size="10" fill="#3b82f6">solve()</text>
+  <text data-graph-role="label" data-owner="ea3" x="286" y="449" font-size="10" fill="#3b82f6">run_*_sample</text>
+  <text data-graph-role="label" data-owner="ea4" x="286" y="569" font-size="10" fill="#3b82f6">domain result</text>
+  <text data-graph-role="label" data-owner="ea5" x="286" y="697" font-size="10" fill="#10b981">experiment row</text>
+  <text data-graph-role="label" data-owner="eb1" x="798" y="221" font-size="10" fill="#a855f7">traced</text>
+  <text data-graph-role="label" data-owner="eb2" x="798" y="335" font-size="10" fill="#a855f7">run id</text>
+  <text data-graph-role="label" data-owner="eb3" x="798" y="449" font-size="10" fill="#a855f7">sampled</text>
+  <text data-graph-role="label" data-owner="eb4" x="798" y="569" font-size="10" fill="#a855f7">scored</text>
+  <text data-graph-role="label" data-owner="eb5" x="798" y="697" font-size="10" fill="#10b981">trend rows</text>
+  <g data-graph-role="legend">
+    <path d="M 36,970 L 58,970" stroke="#3b82f6" stroke-width="1.8" fill="none" marker-end="url(#m-flow)"/>
+    <text x="66" y="974" font-size="10" fill="#94a3b8">offline path — built</text>
+    <path d="M 206,970 L 228,970" stroke="#a855f7" stroke-width="1.8" fill="none" marker-end="url(#m-llm)" stroke-dasharray="5,4"/>
+    <text x="236" y="974" font-size="10" fill="#94a3b8">online path — planned</text>
+    <path d="M 382,970 L 404,970" stroke="#10b981" stroke-width="1.8" fill="none" marker-end="url(#m-state)"/>
+    <text x="412" y="974" font-size="10" fill="#94a3b8">writes to LangSmith</text>
+    <text x="36" y="998" font-size="10" fill="#64748b">solid = built today · dashed = specified in the eval PRD but not built · test_swt_bench is a fifth surface, not a workflow</text>
+  </g>
+</svg>
