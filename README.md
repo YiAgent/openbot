@@ -1,10 +1,18 @@
-# OpenBot
+<p align="center">
+  <img src="./docs/assets/openbot-logo.svg" alt="OpenBot" width="128" height="128">
+</p>
 
-> Open-source, self-hosted GitHub maintenance automation for teams that want to own their bot, prompts, models, data, and cost controls.
+<h1 align="center">OpenBot</h1>
 
-[![status](https://img.shields.io/badge/status-pre--alpha-orange)](./docs/prd/openbot-prd.md)
-[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](./LICENSE)
-[![python](https://img.shields.io/badge/python-3.12%2B-blue)](./pyproject.toml)
+<p align="center">
+  <em>Open-source, self-hosted GitHub maintenance automation for teams that want to own their bot, prompts, models, data, and cost controls.</em>
+</p>
+
+<p align="center">
+  <a href="./docs/prd/openbot-prd.md"><img alt="status" src="https://img.shields.io/badge/status-pre--alpha-orange"></a>
+  <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+  <a href="./pyproject.toml"><img alt="python" src="https://img.shields.io/badge/python-3.12%2B-blue"></a>
+</p>
 
 OpenBot is a GitHub App backend for maintainer workflows:
 
@@ -249,6 +257,17 @@ point yet. The alpha readiness criteria are documented in
 ## Evals
 
 OpenBot uses evals as product verification, not as a separate demo agent.
+
+![OpenBot eval architecture: an offline lane runs benchmark datasets through Inspect AI tasks, thin solvers and the openbot.evaluation facade into the production agent and sandbox, then scores and exports predictions; a planned online lane harvests traces and GitHub outcome signals from production runs into online eval and 30-day trend metrics. Both lanes write to LangSmith. A coverage strip lists the four product workflows: triage, review, fix and chat.](./docs/assets/openbot-eval-architecture.svg)
+
+Two lanes over one LangSmith substrate. The **offline** lane is what exists
+today: a benchmark dataset is driven through the *production* agent and
+sandbox via `openbot.evaluation`, so a suite measures the shipped code path
+rather than an eval-only copy of it. The **online** lane is v0.3 in the
+[eval PRD](./docs/prd/openbot-eval-prd.md) and is mostly unbuilt — the traces
+are already there, the outcome-signal collector and the online judge are not.
+Solid borders in the diagram are built; dashed borders are specified but not
+implemented.
 
 The target architecture is:
 

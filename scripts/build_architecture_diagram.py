@@ -17,27 +17,11 @@ keep them on any element you add.
 
 from __future__ import annotations
 
-import html
 from pathlib import Path
 
+from _diagram_svg import EVAL, FLOW, LLM, MUTE, POLICY, STATE, SUB, THEMES, TXT, Canvas
+
 W, H = 1000, 960
-
-BG_A, BG_B = "#0f0f1a", "#1a1a2e"
-TXT, SUB, MUTE, LINE = "#e2e8f0", "#94a3b8", "#64748b", "#334155"
-
-THEMES = {
-    "external": ("#132a47", "#3b82f6"),
-    "compute": ("#1c1917", "#ea580c"),
-    "queue": ("#052e16", "#059669"),
-    "agent": ("#1e1b4b", "#7c3aed"),
-    "store": ("#052e16", "#059669"),
-    "sandbox": ("#292214", "#eab308"),
-    "config": ("#0f172a", "#334155"),
-    "eval": ("#0f172a", "#475569"),
-}
-
-FLOW, STATE, LLM, POLICY, EVAL = "#3b82f6", "#10b981", "#a855f7", "#f97316", "#64748b"
-MARKER_OF = {FLOW: "m-flow", STATE: "m-state", LLM: "m-llm", POLICY: "m-policy", EVAL: "m-eval"}
 
 # --------------------------------------------------------------- geometry grid
 SPINE_X, SPINE_W = 296, 410  # centre column, centre line x = 501
@@ -320,154 +304,56 @@ LEGEND = [
     (EVAL, "4,3", False, "eval reuse (offline)"),
 ]
 
-lines: list[str] = []
-A = lines.append
-
-
-def esc(s: str) -> str:
-    return html.escape(s, quote=True)
-
-
-# --------------------------------------------------------------- header + defs
-A(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}"')
-A(
-    '     role="img" aria-label="OpenBot runtime architecture: a GitHub webhook enters the FastAPI'
-    " web process, is deduplicated and enqueued as a TaskSpec on a Redis Stream, then a worker"
-    " process classifies it, runs the preflight gate chain, and executes a DeepAgents workflow"
-    ' inside a sandbox before writing results back to GitHub."'
+canvas = Canvas(
+    W,
+    H,
+    title="OpenBot runtime architecture",
+    aria_label=(
+        "OpenBot runtime architecture: a GitHub webhook enters the FastAPI web process, is"
+        " deduplicated and enqueued as a TaskSpec on a Redis Stream, then a worker process"
+        " classifies it, runs the preflight gate chain, and executes a DeepAgents workflow inside"
+        " a sandbox before writing results back to GitHub."
+    ),
 )
-A('     data-quality-profile="showcase">')
-A("  <title>OpenBot runtime architecture</title>")
-A("  <style>")
-A(
-    "    text { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono',"
-    " 'Courier New', 'Microsoft YaHei', monospace; letter-spacing: 0.02em; }"
-)
-A("  </style>")
-A("  <defs>")
-A('    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">')
-A(f'      <stop offset="0%" stop-color="{BG_A}"/>')
-A(f'      <stop offset="100%" stop-color="{BG_B}"/>')
-A("    </linearGradient>")
-for colour, mid in MARKER_OF.items():
-    A(f'    <marker id="{mid}" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">')
-    A(f'      <polygon points="0 0, 8 3, 0 6" fill="{colour}"/>')
-    A("    </marker>")
-    A(
-        f'    <marker id="{mid}-start" markerWidth="8" markerHeight="6" refX="0.5" refY="3"'
-        ' orient="auto">'
-    )
-    A(f'      <polygon points="8 0, 0 3, 8 6" fill="{colour}"/>')
-    A("    </marker>")
-A("  </defs>")
 
-# --------------------------------------------------------------- 1. background
-A(f'  <rect data-graph-role="background" width="{W}" height="{H}" fill="url(#bg-grad)"/>')
-
-# --------------------------------------------------------------- title block
-A(
-    f'  <text x="36" y="42" font-size="18" font-weight="700" fill="{TXT}">'
-    "OpenBot — runtime architecture</text>"
+canvas.title_block(
+    "OpenBot — runtime architecture",
+    "self-hosted GitHub App: webhook → preflight gates → queued worker → sandboxed agent"
+    " → write-back",
+    "v0.1 · pre-alpha",
 )
-A(
-    f'  <text x="36" y="62" font-size="11" fill="{SUB}">self-hosted GitHub App: webhook →'
-    " preflight gates → queued worker → sandboxed agent → write-back</text>"
-)
-A(f'  <text x="964" y="42" font-size="11" fill="{MUTE}" text-anchor="end">v0.1 · pre-alpha</text>')
 
-# --------------------------------------------------------------- 2. containers
 for cid, cx, cy, cw, ch, label, lx, ly in CONTAINERS:
-    A(
-        f'  <rect data-graph-role="container" id="{cid}" x="{cx}" y="{cy}" width="{cw}" height="{ch}"'
-        f' rx="10" fill="none" stroke="{LINE}" stroke-width="1" stroke-dasharray="6,5"/>'
-    )
-    A(
-        f'  <text x="{lx}" y="{ly}" font-size="10" font-weight="700" fill="{MUTE}"'
-        f' letter-spacing="0.18em">{esc(label)}</text>'
-    )
+    canvas.container(cid, cx, cy, cw, ch, label, lx, ly)
 
-# --------------------------------------------------------------- 3. edges
 for eid, src, tgt, d, colour, dash, twoway, *_ in EDGES:
-    mid = MARKER_OF[colour]
-    attrs = [
-        'data-graph-role="edge"',
-        f'data-edge-id="{eid}"',
-        f'data-source="{src}"',
-        f'data-target="{tgt}"',
-        f'd="{d}"',
-        'fill="none"',
-        f'stroke="{colour}"',
-        'stroke-width="1.8"',
-        f'marker-end="url(#{mid})"',
-    ]
-    if twoway:
-        attrs.append(f'marker-start="url(#{mid}-start)"')
-    if dash:
-        attrs.append(f'stroke-dasharray="{dash}"')
-    A(f"  <path {' '.join(attrs)}/>")
+    canvas.edge(eid, src, tgt, d, colour, dash=dash, twoway=twoway)
 
-# --------------------------------------------------------------- 4. node shapes
 for nid, (x, y, w, h, theme) in NODES.items():
-    fill, stroke = THEMES[theme]
-    dash = ' stroke-dasharray="6,4"' if theme == "eval" else ""
-    A(
-        f'  <rect data-graph-role="node" data-node-id="{nid}" x="{x}" y="{y}" width="{w}"'
-        f' height="{h}" rx="6" fill="{fill}" stroke="{stroke}" stroke-width="1.5"{dash}/>'
-    )
+    canvas.node(nid, x, y, w, h, theme, dashed=theme == "eval")
 
-# --------------------------------------------------------------- 5. node text
 for nid, (badge, text_x, rows) in BODY.items():
     x, y, w, h, theme = NODES[nid]
     _, stroke = THEMES[theme]
     if badge:
-        cy = y + rows[0][0] - 5
-        A(
-            f'  <circle cx="{x + 20}" cy="{cy}" r="11" fill="{stroke}" fill-opacity="0.18"'
-            f' stroke="{stroke}" stroke-width="1.2"/>'
-        )
-        A(
-            f'  <text x="{x + 20}" y="{cy + 4}" font-size="11" font-weight="700" fill="{stroke}"'
-            f' text-anchor="middle">{badge}</text>'
-        )
+        canvas.badge(x + 20, y + rows[0][0] - 5, badge, stroke)
     for dy, size, weight, fill_c, txt in rows:
         if text_x is None:
-            A(
-                f'  <text x="{x + w // 2}" y="{y + dy}" font-size="{size}" font-weight="{weight}"'
-                f' fill="{fill_c}" text-anchor="middle">{esc(txt)}</text>'
-            )
+            canvas.text(x + w // 2, y + dy, size, weight, fill_c, txt, anchor="middle")
         else:
-            A(
-                f'  <text x="{text_x}" y="{y + dy}" font-size="{size}" font-weight="{weight}"'
-                f' fill="{fill_c}">{esc(txt)}</text>'
-            )
+            canvas.text(text_x, y + dy, size, weight, fill_c, txt)
 
-# --------------------------------------------------------------- 6. edge labels
 for eid, _src, _tgt, _d, colour, _dash, _twoway, label, lx, ly, anchor, size in EDGES:
-    anchor_attr = f' text-anchor="{anchor}"' if anchor != "start" else ""
-    A(
-        f'  <text data-graph-role="label" data-owner="{eid}" x="{lx}" y="{ly}"'
-        f' font-size="{size}" fill="{colour}"{anchor_attr}>{esc(label)}</text>'
-    )
+    canvas.edge_label(eid, lx, ly, size, colour, label, anchor=anchor)
 
-# --------------------------------------------------------------- 7. legend
-A('  <g data-graph-role="legend">')
-lx = 36.0
-for colour, dash, twoway, text in LEGEND:
-    mid = MARKER_OF[colour]
-    extra = f' stroke-dasharray="{dash}"' if dash else ""
-    start = f' marker-start="url(#{mid}-start)"' if twoway else ""
-    A(
-        f'    <path d="M {lx:.0f},912 L {lx + 22:.0f},912" stroke="{colour}" stroke-width="1.8"'
-        f' fill="none" marker-end="url(#{mid})"{start}{extra}/>'
-    )
-    A(f'    <text x="{lx + 30:.0f}" y="916" font-size="10" fill="{SUB}">{esc(text)}</text>')
-    lx += 22 + 30 + len(text) * 5.9
-A(
-    f'    <text x="36" y="942" font-size="10" fill="{MUTE}">cross-cutting — Sentry · LangSmith ·'
-    " Langfuse · Prometheus tracing on both processes; audit_log is the product-facing ledger</text>"
+canvas.legend(
+    LEGEND,
+    y=916,
+    footer="cross-cutting — Sentry · LangSmith · Langfuse · Prometheus tracing on both"
+    " processes; audit_log is the product-facing ledger",
+    footer_y=942,
 )
-A("  </g>")
-A("</svg>")
+canvas.add("</svg>")
 
 OUT = Path(__file__).resolve().parent.parent / "docs" / "assets" / "openbot-architecture.svg"
 
@@ -480,8 +366,8 @@ def main() -> int:
     produce an untracked copy the README cannot see.
     """
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"wrote {OUT} ({len(lines)} lines)")
+    OUT.write_text(canvas.render(), encoding="utf-8")
+    print(f"wrote {OUT} ({len(canvas.lines)} lines)")
     return 0
 
 
