@@ -63,11 +63,11 @@ NODES["ls"] = (36, LS_Y, 988, LS_H, "store", False)
 for _i, _cx in enumerate(CARD_X, start=1):
     NODES[f"c{_i}"] = (_cx, CARD_Y, CARD_W, CARD_H, "eval" if _i == 1 else "external", _i == 1)
 
-# id, x, y, w, h, label, label x, label y
+# id, x, y, w, h, label, label x, label y, dashed (dashed == not built yet)
 CONTAINERS = [
-    ("cA", 36, 96, 476, 586, "OFFLINE · v0.1 · BUILT", 50, 116),
-    ("cB", 548, 96, 476, 586, "ONLINE · v0.3 · PLANNED", 562, 116),
-    ("cC", 36, 822, 988, 126, "COVERAGE — THE FOUR PRODUCT WORKFLOWS", 50, 842),
+    ("cA", 36, 96, 476, 586, "OFFLINE · v0.1 · BUILT", 50, 116, False),
+    ("cB", 548, 96, 476, 586, "ONLINE · v0.3 · PLANNED", 562, 116, True),
+    ("cC", 36, 822, 988, 126, "COVERAGE — THE FOUR PRODUCT WORKFLOWS", 50, 842, False),
 ]
 
 # id, source, target, d, colour, dash, label, label x, label y
@@ -275,8 +275,8 @@ canvas.title_block(
     "v0.1 built · v0.3 planned",
 )
 
-for cid, cx, cy, cw, ch, label, lx, ly in CONTAINERS:
-    canvas.container(cid, cx, cy, cw, ch, label, lx, ly)
+for cid, cx, cy, cw, ch, label, lx, ly, dashed in CONTAINERS:
+    canvas.container(cid, cx, cy, cw, ch, label, lx, ly, dashed=dashed)
 
 for eid, src, tgt, d, colour, dash, *_ in EDGES:
     canvas.edge(eid, src, tgt, d, colour, dash=dash)

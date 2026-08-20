@@ -119,12 +119,30 @@ class Canvas:
 
     # ── graph elements ─────────────────────────────────────────────────────
     def container(
-        self, cid: str, x: int, y: int, w: int, h: int, label: str, lx: int, ly: int
+        self,
+        cid: str,
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        label: str,
+        lx: int,
+        ly: int,
+        *,
+        dashed: bool = True,
     ) -> None:
+        """Draw a grouping boundary.
+
+        ``dashed`` defaults to True because a dashed boundary is the plain
+        grouping convention. Pass ``dashed=False`` in a diagram that also
+        uses dash to mean "not built yet", so a built group is not drawn in
+        the unbuilt style.
+        """
+        dash_attr = ' stroke-dasharray="6,5"' if dashed else ""
         self.add(
             f'  <rect data-graph-role="container" id="{cid}" x="{x}" y="{y}" width="{w}"'
             f' height="{h}" rx="10" fill="none" stroke="{LINE}" stroke-width="1"'
-            ' stroke-dasharray="6,5"/>'
+            f"{dash_attr}/>"
         )
         self.add(
             f'  <text x="{lx}" y="{ly}" font-size="10" font-weight="700" fill="{MUTE}"'
