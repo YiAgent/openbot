@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 960" width="1000" height="960"
+     role="img" aria-label="OpenBot runtime architecture: a GitHub webhook enters the FastAPI web process, is deduplicated and enqueued as a TaskSpec on a Redis Stream, then a worker process classifies it, runs the preflight gate chain, and executes a DeepAgents workflow inside a sandbox before writing results back to GitHub."
+     data-quality-profile="showcase">
+  <title>OpenBot runtime architecture</title>
+  <style>
+    text { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'JetBrains Mono', 'Courier New', 'Microsoft YaHei', monospace; letter-spacing: 0.02em; }
+  </style>
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f0f1a"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <marker id="m-flow" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="m-flow-start" markerWidth="8" markerHeight="6" refX="0.5" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#3b82f6"/>
+    </marker>
+    <marker id="m-state" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#10b981"/>
+    </marker>
+    <marker id="m-state-start" markerWidth="8" markerHeight="6" refX="0.5" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#10b981"/>
+    </marker>
+    <marker id="m-llm" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#a855f7"/>
+    </marker>
+    <marker id="m-llm-start" markerWidth="8" markerHeight="6" refX="0.5" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#a855f7"/>
+    </marker>
+    <marker id="m-policy" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f97316"/>
+    </marker>
+    <marker id="m-policy-start" markerWidth="8" markerHeight="6" refX="0.5" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#f97316"/>
+    </marker>
+    <marker id="m-eval" markerWidth="8" markerHeight="6" refX="7.5" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#64748b"/>
+    </marker>
+    <marker id="m-eval-start" markerWidth="8" markerHeight="6" refX="0.5" refY="3" orient="auto">
+      <polygon points="8 0, 0 3, 8 6" fill="#64748b"/>
+    </marker>
+  </defs>
+  <rect data-graph-role="background" width="1000" height="960" fill="url(#bg-grad)"/>
+  <text x="36" y="42" font-size="18" font-weight="700" fill="#e2e8f0">OpenBot — runtime architecture</text>
+  <text x="36" y="62" font-size="11" fill="#94a3b8">self-hosted GitHub App: webhook → preflight gates → queued worker → sandboxed agent → write-back</text>
+  <text x="964" y="42" font-size="11" fill="#64748b" text-anchor="end">v0.1 · pre-alpha</text>
+  <rect data-graph-role="container" id="cA" x="276" y="150" width="450" height="248" rx="10" fill="none" stroke="#334155" stroke-width="1" stroke-dasharray="6,5"/>
+  <text x="290" y="170" font-size="10" font-weight="700" fill="#64748b" letter-spacing="0.18em">WEB PROCESS</text>
+  <rect data-graph-role="container" id="cB" x="276" y="520" width="450" height="280" rx="10" fill="none" stroke="#334155" stroke-width="1" stroke-dasharray="6,5"/>
+  <text x="290" y="540" font-size="10" font-weight="700" fill="#64748b" letter-spacing="0.18em">WORKER PROCESS</text>
+  <path data-graph-role="edge" data-edge-id="e1" data-source="n1" data-target="n2" d="M 501,138 L 501,178" fill="none" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#m-flow)"/>
+  <path data-graph-role="edge" data-edge-id="e2" data-source="n2" data-target="n3" d="M 501,254 L 501,294" fill="none" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#m-flow)"/>
+  <path data-graph-role="edge" data-edge-id="e3" data-source="n3" data-target="n4" d="M 501,378 L 501,434" fill="none" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#m-flow)"/>
+  <path data-graph-role="edge" data-edge-id="e4" data-source="n4" data-target="n5" d="M 501,496 L 501,552" fill="none" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#m-flow)"/>
+  <path data-graph-role="edge" data-edge-id="e5" data-source="n5" data-target="n6" d="M 501,646 L 501,686" fill="none" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#m-flow)"/>
+  <path data-graph-role="edge" data-edge-id="e6" data-source="n6" data-target="n7" d="M 501,780 L 501,828" fill="none" stroke="#3b82f6" stroke-width="1.8" marker-end="url(#m-flow)"/>
+  <path data-graph-role="edge" data-edge-id="e7" data-source="l1" data-target="n5" d="M 216,599 L 296,599" fill="none" stroke="#f97316" stroke-width="1.8" marker-end="url(#m-policy)"/>
+  <path data-graph-role="edge" data-edge-id="e8" data-source="n6" data-target="l2" d="M 296,733 L 216,733" fill="none" stroke="#f97316" stroke-width="1.8" marker-end="url(#m-policy)"/>
+  <path data-graph-role="edge" data-edge-id="e9" data-source="l3" data-target="n6" d="M 216,857 L 246,857 L 246,770 L 296,770" fill="none" stroke="#64748b" stroke-width="1.8" marker-end="url(#m-eval)" stroke-dasharray="5,4"/>
+  <path data-graph-role="edge" data-edge-id="e10" data-source="n3" data-target="r1" d="M 706,336 L 766,336" fill="none" stroke="#10b981" stroke-width="1.8" marker-end="url(#m-state)" marker-start="url(#m-state-start)"/>
+  <path data-graph-role="edge" data-edge-id="e11" data-source="n5" data-target="r2" d="M 706,599 L 766,599" fill="none" stroke="#10b981" stroke-width="1.8" marker-end="url(#m-state)" marker-start="url(#m-state-start)"/>
+  <path data-graph-role="edge" data-edge-id="e12" data-source="n6" data-target="r3" d="M 706,733 L 766,733" fill="none" stroke="#a855f7" stroke-width="1.8" marker-end="url(#m-llm)" marker-start="url(#m-llm-start)"/>
+  <rect data-graph-role="node" data-node-id="n1" x="296" y="84" width="410" height="54" rx="6" fill="#132a47" stroke="#3b82f6" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="n2" x="296" y="178" width="410" height="76" rx="6" fill="#1c1917" stroke="#ea580c" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="n3" x="296" y="294" width="410" height="84" rx="6" fill="#1c1917" stroke="#ea580c" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="n4" x="296" y="434" width="410" height="62" rx="6" fill="#052e16" stroke="#059669" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="n5" x="296" y="552" width="410" height="94" rx="6" fill="#1c1917" stroke="#ea580c" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="n6" x="296" y="686" width="410" height="94" rx="6" fill="#1e1b4b" stroke="#7c3aed" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="n7" x="296" y="828" width="410" height="58" rx="6" fill="#132a47" stroke="#3b82f6" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="l1" x="36" y="558" width="180" height="82" rx="6" fill="#0f172a" stroke="#334155" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="l2" x="36" y="692" width="180" height="82" rx="6" fill="#292214" stroke="#eab308" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="l3" x="36" y="828" width="180" height="58" rx="6" fill="#0f172a" stroke="#475569" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <rect data-graph-role="node" data-node-id="r1" x="766" y="300" width="198" height="72" rx="6" fill="#052e16" stroke="#059669" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="r2" x="766" y="558" width="198" height="82" rx="6" fill="#052e16" stroke="#059669" stroke-width="1.5"/>
+  <rect data-graph-role="node" data-node-id="r3" x="766" y="692" width="198" height="82" rx="6" fill="#1e1b4b" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="501" y="112" font-size="14" font-weight="700" fill="#e2e8f0" text-anchor="middle">GitHub</text>
+  <text x="501" y="131" font-size="11" font-weight="400" fill="#94a3b8" text-anchor="middle">issues · pull requests · comments · labels</text>
+  <circle cx="316" cy="199" r="11" fill="#ea580c" fill-opacity="0.18" stroke="#ea580c" stroke-width="1.2"/>
+  <text x="316" y="203" font-size="11" font-weight="700" fill="#ea580c" text-anchor="middle">1</text>
+  <text x="336" y="204" font-size="13" font-weight="700" fill="#e2e8f0">POST /webhook/github — FastAPI ingress</text>
+  <text x="336" y="225" font-size="11" font-weight="400" fill="#94a3b8">raw body → HMAC verify → parse → UnifiedEvent</text>
+  <text x="336" y="243" font-size="11" font-weight="400" fill="#64748b">202 Accepted returned before any agent work</text>
+  <circle cx="316" cy="314" r="11" fill="#ea580c" fill-opacity="0.18" stroke="#ea580c" stroke-width="1.2"/>
+  <text x="316" y="318" font-size="11" font-weight="700" fill="#ea580c" text-anchor="middle">2</text>
+  <text x="336" y="319" font-size="13" font-weight="700" fill="#e2e8f0">ingest_webhook</text>
+  <text x="336" y="338" font-size="11" font-weight="400" fill="#94a3b8">dedup · router → feature + task_id</text>
+  <text x="336" y="355" font-size="11" font-weight="400" fill="#94a3b8">run state: start / supersede / cancel / ignore</text>
+  <text x="336" y="372" font-size="11" font-weight="400" fill="#64748b">check run created · TaskSpec v3 enqueued</text>
+  <circle cx="316" cy="455" r="11" fill="#059669" fill-opacity="0.18" stroke="#059669" stroke-width="1.2"/>
+  <text x="316" y="459" font-size="11" font-weight="700" fill="#059669" text-anchor="middle">3</text>
+  <text x="336" y="460" font-size="13" font-weight="700" fill="#e2e8f0">Redis Stream — task queue</text>
+  <text x="336" y="482" font-size="11" font-weight="400" fill="#94a3b8">consumer group · XAUTOCLAIM reclaim · retry → DLQ</text>
+  <circle cx="316" cy="573" r="11" fill="#ea580c" fill-opacity="0.18" stroke="#ea580c" stroke-width="1.2"/>
+  <text x="316" y="577" font-size="11" font-weight="700" fill="#ea580c" text-anchor="middle">4</text>
+  <text x="336" y="578" font-size="13" font-weight="700" fill="#e2e8f0">LLM classifier → preflight chain</text>
+  <text x="336" y="600" font-size="11" font-weight="400" fill="#94a3b8">intent · severity · sandbox need (Redis-cached)</text>
+  <text x="336" y="618" font-size="11" font-weight="400" fill="#94a3b8">sanitize · kill switch · feature toggle · cancel</text>
+  <text x="336" y="636" font-size="11" font-weight="400" fill="#94a3b8">fork-PR · actor role · rate limit · budget · audit</text>
+  <circle cx="316" cy="707" r="11" fill="#7c3aed" fill-opacity="0.18" stroke="#7c3aed" stroke-width="1.2"/>
+  <text x="316" y="711" font-size="11" font-weight="700" fill="#7c3aed" text-anchor="middle">5</text>
+  <text x="336" y="712" font-size="13" font-weight="700" fill="#e2e8f0">workflow handler → DeepAgents runtime</text>
+  <text x="336" y="734" font-size="11" font-weight="400" fill="#94a3b8">triage (+ reproduce) · review · fix · chat</text>
+  <text x="336" y="752" font-size="11" font-weight="400" fill="#94a3b8">LangGraph loop · repo tools · budget guard</text>
+  <text x="336" y="770" font-size="11" font-weight="400" fill="#64748b">structured result → domain object</text>
+  <circle cx="316" cy="849" r="11" fill="#3b82f6" fill-opacity="0.18" stroke="#3b82f6" stroke-width="1.2"/>
+  <text x="316" y="853" font-size="11" font-weight="700" fill="#3b82f6" text-anchor="middle">6</text>
+  <text x="336" y="854" font-size="13" font-weight="700" fill="#e2e8f0">GitHub write-back</text>
+  <text x="336" y="874" font-size="11" font-weight="400" fill="#94a3b8">PR review · sticky comment · labels · branch + PR</text>
+  <text x="50" y="582" font-size="12" font-weight="700" fill="#e2e8f0">.openbot/config.yaml</text>
+  <text x="50" y="603" font-size="10" font-weight="400" fill="#94a3b8">features · budgets</text>
+  <text x="50" y="618" font-size="10" font-weight="400" fill="#94a3b8">rate limits · actors</text>
+  <text x="50" y="633" font-size="10" font-weight="400" fill="#64748b">reviewed like code</text>
+  <text x="50" y="716" font-size="12" font-weight="700" fill="#e2e8f0">Sandbox</text>
+  <text x="50" y="737" font-size="10" font-weight="400" fill="#94a3b8">daytona · docker · fake</text>
+  <text x="50" y="752" font-size="10" font-weight="400" fill="#94a3b8">clone · exec · diff · push</text>
+  <text x="50" y="767" font-size="10" font-weight="400" fill="#64748b">SandboxPort protocol</text>
+  <text x="50" y="853" font-size="12" font-weight="700" fill="#e2e8f0">evals/ · Inspect AI</text>
+  <text x="50" y="874" font-size="10" font-weight="400" fill="#94a3b8">openbot.evaluation facade</text>
+  <text x="780" y="327" font-size="12" font-weight="700" fill="#e2e8f0">Redis</text>
+  <text x="780" y="348" font-size="10" font-weight="400" fill="#94a3b8">delivery dedup · run locks</text>
+  <text x="780" y="363" font-size="10" font-weight="400" fill="#94a3b8">cancel signals · rate limit</text>
+  <text x="780" y="582" font-size="12" font-weight="700" fill="#e2e8f0">Postgres</text>
+  <text x="780" y="603" font-size="10" font-weight="400" fill="#94a3b8">task_runs · audit_log</text>
+  <text x="780" y="618" font-size="10" font-weight="400" fill="#94a3b8">cost_meter → budget gate</text>
+  <text x="780" y="633" font-size="10" font-weight="400" fill="#64748b">the product ledger</text>
+  <text x="780" y="716" font-size="12" font-weight="700" fill="#e2e8f0">LLM providers</text>
+  <text x="780" y="737" font-size="10" font-weight="400" fill="#94a3b8">LiteLLM model router</text>
+  <text x="780" y="752" font-size="10" font-weight="400" fill="#94a3b8">primary + fallback</text>
+  <text x="780" y="767" font-size="10" font-weight="400" fill="#64748b">bring your own keys</text>
+  <text data-graph-role="label" data-owner="e1" x="513" y="162" font-size="11" fill="#3b82f6">webhook delivery</text>
+  <text data-graph-role="label" data-owner="e2" x="513" y="278" font-size="11" fill="#3b82f6">UnifiedEvent</text>
+  <text data-graph-role="label" data-owner="e3" x="513" y="418" font-size="11" fill="#3b82f6">TaskSpec v3</text>
+  <text data-graph-role="label" data-owner="e4" x="513" y="538" font-size="11" fill="#3b82f6">XREADGROUP</text>
+  <text data-graph-role="label" data-owner="e5" x="513" y="670" font-size="11" fill="#3b82f6">PreflightContext</text>
+  <text data-graph-role="label" data-owner="e6" x="513" y="816" font-size="11" fill="#3b82f6">review · comment · PR</text>
+  <text data-graph-role="label" data-owner="e7" x="246" y="591" font-size="10" fill="#f97316" text-anchor="middle">config</text>
+  <text data-graph-role="label" data-owner="e8" x="246" y="725" font-size="10" fill="#f97316" text-anchor="middle">exec</text>
+  <text data-graph-role="label" data-owner="e9" x="252" y="816" font-size="10" fill="#64748b">reuse</text>
+  <text data-graph-role="label" data-owner="e10" x="746" y="328" font-size="10" fill="#10b981" text-anchor="middle">state</text>
+  <text data-graph-role="label" data-owner="e11" x="746" y="591" font-size="10" fill="#10b981" text-anchor="middle">audit</text>
+  <text data-graph-role="label" data-owner="e12" x="746" y="725" font-size="10" fill="#a855f7" text-anchor="middle">model</text>
+  <g data-graph-role="legend">
+    <path d="M 36,912 L 58,912" stroke="#3b82f6" stroke-width="1.8" fill="none" marker-end="url(#m-flow)"/>
+    <text x="66" y="916" font-size="10" fill="#94a3b8">runtime request path</text>
+    <path d="M 206,912 L 228,912" stroke="#10b981" stroke-width="1.8" fill="none" marker-end="url(#m-state)" marker-start="url(#m-state-start)"/>
+    <text x="236" y="916" font-size="10" fill="#94a3b8">state read / write</text>
+    <path d="M 364,912 L 386,912" stroke="#a855f7" stroke-width="1.8" fill="none" marker-end="url(#m-llm)" marker-start="url(#m-llm-start)"/>
+    <text x="394" y="916" font-size="10" fill="#94a3b8">LLM call</text>
+    <path d="M 463,912 L 485,912" stroke="#f97316" stroke-width="1.8" fill="none" marker-end="url(#m-policy)"/>
+    <text x="493" y="916" font-size="10" fill="#94a3b8">policy &amp; execution</text>
+    <path d="M 622,912 L 644,912" stroke="#64748b" stroke-width="1.8" fill="none" marker-end="url(#m-eval)" stroke-dasharray="4,3"/>
+    <text x="652" y="916" font-size="10" fill="#94a3b8">eval reuse (offline)</text>
+    <text x="36" y="942" font-size="10" fill="#64748b">cross-cutting — Sentry · LangSmith · Langfuse · Prometheus tracing on both processes; audit_log is the product-facing ledger</text>
+  </g>
+</svg>

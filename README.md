@@ -64,15 +64,26 @@ The current alpha closure work is tracked in:
 
 OpenBot is organized around a small set of product boundaries.
 
+![OpenBot runtime architecture: a GitHub webhook enters the FastAPI web process, is deduplicated and enqueued as a TaskSpec v3 on a Redis Stream, then a worker process classifies it, runs the preflight gate chain, and executes a DeepAgents workflow inside a sandbox before writing results back to GitHub.](./docs/assets/openbot-architecture.svg)
+
+Two processes with one queue between them. The `web` dyno does only cheap,
+bounded work so GitHub always gets its 202 inside the delivery deadline
+(steps 1-2). Everything expensive — the LLM classifier, the preflight gate
+chain, the agent loop, and the sandbox — runs in the `worker` dyno, off that
+deadline (steps 4-5). `evals/` re-enters at step 5 through
+`openbot.evaluation`, so eval runs exercise the production agent rather than
+an eval-only copy.
+
 ```text
 GitHub webhook
   -> FastAPI ingress
   -> GitHubAdapter
   -> router
-  -> preflight middleware
   -> TaskSpec v3
   -> Redis Stream
   -> worker
+  -> LLM classifier
+  -> preflight middleware
   -> dispatcher
   -> workflow handler
   -> production agent / sandbox / GitHub writeback
