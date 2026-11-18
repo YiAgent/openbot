@@ -90,7 +90,7 @@ dependencies = [
     # Retry decorator for transient GitHub 5xx + connect/read timeouts.
     # NOT a circuit breaker (we don't need one at v0.1 scale) — pure
     # exponential-backoff retry with bounded attempts.
-    "tenacity>=9.0",
+    "tenacity>=9.1.4",
     # /metrics endpoint for Heroku dyno metrics + future Prometheus
     # scraping. Default instrumentator exposes request count / latency
     # histograms; no PII, no body sampling.
