@@ -3,11 +3,13 @@
 Read-only operator tool. Closes the v0.2-deferred item from the archived
 harness spec §1.2 / §8.
 
-Two subcommands:
+Subcommands:
 
-    python -m openbot.entrypoints.cli.audit cost  [--repo R] [--since 30] [--json]
-    python -m openbot.entrypoints.cli.audit log   [--repo R] [--since 7]  [--limit 50] [--json]
-                                                  [--phase started|completed|failed|...]
+    python -m openbot.entrypoints.cli.audit cost   [--repo R] [--since 30] [--json]
+    python -m openbot.entrypoints.cli.audit log    [--repo R] [--since 7]  [--limit 50] [--json]
+    python -m openbot.entrypoints.cli.audit show   <task_id>  [--json]
+    python -m openbot.entrypoints.cli.audit export [--since 30] [--format csv|json]
+    python -m openbot.entrypoints.cli.audit budget reset [--repo R] [--global]
 
 Defaults aim at "show me what just happened" — `cost` summarizes the last
 30 days, `log` lists the most recent 50 entries from the last 7 days.
@@ -21,6 +23,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
+import io
 import json
 import logging
 import sys
@@ -31,7 +35,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import case, desc, func, select
+from sqlalchemy import case, delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from openbot.core.settings import get_settings
@@ -97,6 +101,24 @@ class AuditRow:
             "workflow": self.workflow,
             "phase": self.phase,
             "outcome": self.outcome,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TaskDetail:
+    """Full detail view for a single task_id (audit_log + cost_meter rows)."""
+
+    task_id: str
+    audit_entries: list[dict[str, Any]]
+    cost_entries: list[dict[str, Any]]
+    total_cost_usd: Decimal
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "audit_entries": self.audit_entries,
+            "cost_entries": self.cost_entries,
+            "total_cost_usd": str(self.total_cost_usd),
         }
 
 
@@ -206,6 +228,111 @@ async def fetch_audit_rows(
         ]
 
 
+async def fetch_task_detail(
+    engine: AsyncEngine,
+    task_id: str,
+) -> TaskDetail:
+    """Full detail for a single task_id: audit_log + cost_meter rows."""
+    factory = make_session_factory(engine)
+    async with session_scope(factory) as session:
+        # Audit entries for this delivery_id
+        audit_stmt = (
+            select(AuditLog).where(AuditLog.delivery_id == task_id).order_by(AuditLog.created_at)
+        )
+        audit_result = await session.execute(audit_stmt)
+        audit_entries: list[dict[str, Any]] = []
+        for r in audit_result.scalars().all():
+            entry: dict[str, Any] = {
+                "created_at": r.created_at.isoformat(),
+                "phase": str(r.phase),
+                "workflow": str(r.workflow) if r.workflow else None,
+                "repo": r.repo,
+                "actor": r.actor,
+                "outcome": r.outcome,
+            }
+            if r.details:
+                entry["details"] = r.details
+            audit_entries.append(entry)
+
+        # Cost entries for this task_id
+        cost_stmt = (
+            select(CostMeter).where(CostMeter.task_id == task_id).order_by(CostMeter.created_at)
+        )
+        cost_result = await session.execute(cost_stmt)
+        cost_entries: list[dict[str, Any]] = []
+        total = Decimal("0")
+        for r in cost_result.scalars().all():
+            cost_entries.append(
+                {
+                    "created_at": r.created_at.isoformat(),
+                    "feature": str(r.feature),
+                    "model": r.model,
+                    "cost_usd": str(r.cost_usd),
+                    "cost_status": str(r.cost_status),
+                    "prompt_tokens": r.prompt_tokens,
+                    "completion_tokens": r.completion_tokens,
+                }
+            )
+            if r.cost_status == CostStatus.RECORDED:
+                total += r.cost_usd
+
+        return TaskDetail(
+            task_id=task_id,
+            audit_entries=audit_entries,
+            cost_entries=cost_entries,
+            total_cost_usd=total,
+        )
+
+
+async def export_cost_rows(
+    engine: AsyncEngine,
+    *,
+    since: datetime,
+) -> list[dict[str, Any]]:
+    """Export all cost_meter rows since `since` as flat dicts for CSV/JSON."""
+    factory = make_session_factory(engine)
+    async with session_scope(factory) as session:
+        stmt = select(CostMeter).where(CostMeter.created_at >= since).order_by(CostMeter.created_at)
+        result = await session.execute(stmt)
+        rows: list[dict[str, Any]] = []
+        for r in result.scalars().all():
+            rows.append(
+                {
+                    "created_at": r.created_at.isoformat(),
+                    "task_id": r.task_id,
+                    "repo": r.repo,
+                    "feature": str(r.feature),
+                    "model": r.model,
+                    "cost_usd": str(r.cost_usd),
+                    "cost_status": str(r.cost_status),
+                    "prompt_tokens": r.prompt_tokens,
+                    "completion_tokens": r.completion_tokens,
+                }
+            )
+        return rows
+
+
+async def reset_budget(
+    engine: AsyncEngine,
+    *,
+    repo: str | None,
+    global_reset: bool,
+) -> int:
+    """Delete cost_meter rows for reset.
+
+    If global_reset: delete all rows (emergency reset).
+    If repo: delete rows for that repo only.
+    Returns count of deleted rows.
+    """
+    factory = make_session_factory(engine)
+    async with session_scope(factory) as session:
+        if global_reset:
+            result = await session.execute(delete(CostMeter))
+        else:
+            result = await session.execute(delete(CostMeter).where(CostMeter.repo == repo))
+        return result.rowcount
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Rendering
 # ──────────────────────────────────────────────────────────────────────────
@@ -268,6 +395,53 @@ def render_audit_markdown(rows: Sequence[AuditRow], *, since: datetime) -> str:
     return "\n".join(out)
 
 
+def render_task_detail_markdown(detail: TaskDetail) -> str:
+    """Markdown view of a single task's audit trail + cost breakdown."""
+    out: list[str] = []
+    out.append(f"## Task `{detail.task_id}`")
+    out.append("")
+    out.append(f"**Total cost (RECORDED):** ${detail.total_cost_usd:.4f}")
+    out.append("")
+
+    if detail.audit_entries:
+        out.append("### Audit trail")
+        out.append("")
+        out.append("| time (UTC) | phase | workflow | outcome |")
+        out.append("|------------|-------|----------|---------|")
+        for e in detail.audit_entries:
+            out.append(
+                f"| {e['created_at']} | {e['phase']} | "
+                f"{e.get('workflow') or '—'} | {(e.get('outcome') or '')[:60]} |"
+            )
+        out.append("")
+
+    if detail.cost_entries:
+        out.append("### Cost breakdown")
+        out.append("")
+        out.append("| time (UTC) | feature | model | cost USD | status | tokens (p/c) |")
+        out.append("|------------|---------|-------|----------|--------|--------------|")
+        for e in detail.cost_entries:
+            out.append(
+                f"| {e['created_at']} | {e['feature']} | {e['model']} | "
+                f"{e['cost_usd']} | {e['cost_status']} | "
+                f"{e['prompt_tokens']}/{e['completion_tokens']} |"
+            )
+        out.append("")
+
+    return "\n".join(out)
+
+
+def export_csv(rows: Sequence[dict[str, Any]]) -> str:
+    """Convert flat dicts to CSV string."""
+    if not rows:
+        return ""
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    return buf.getvalue()
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # CLI plumbing
 # ──────────────────────────────────────────────────────────────────────────
@@ -280,35 +454,41 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    # cost
     cost = sub.add_parser("cost", help="Cost summary grouped by (repo, feature).")
     cost.add_argument("--repo", help="Filter to a single repo (owner/name).")
-    cost.add_argument(
-        "--since",
-        type=int,
-        default=30,
-        help="How many days back (default 30).",
-    )
+    cost.add_argument("--since", type=int, default=30, help="How many days back (default 30).")
     cost.add_argument("--json", action="store_true", help="Emit JSON instead of markdown.")
 
+    # log
     log = sub.add_parser("log", help="Recent audit_log entries.")
     log.add_argument("--repo", help="Filter to a single repo.")
     log.add_argument(
-        "--phase",
-        help="Filter to a single phase (e.g. started / completed / failed / rejected).",
+        "--phase", help="Filter to a single phase (e.g. started / completed / failed / rejected)."
     )
-    log.add_argument(
-        "--since",
-        type=int,
-        default=7,
-        help="How many days back (default 7).",
-    )
-    log.add_argument(
-        "--limit",
-        type=int,
-        default=50,
-        help="Max rows to show (default 50).",
-    )
+    log.add_argument("--since", type=int, default=7, help="How many days back (default 7).")
+    log.add_argument("--limit", type=int, default=50, help="Max rows to show (default 50).")
     log.add_argument("--json", action="store_true", help="Emit JSON instead of markdown.")
+
+    # show <task_id>
+    show = sub.add_parser("show", help="Full detail for a single task.")
+    show.add_argument("task_id", help="The delivery_id / task_id to inspect.")
+    show.add_argument("--json", action="store_true", help="Emit JSON instead of markdown.")
+
+    # export
+    export = sub.add_parser("export", help="Export cost_meter rows.")
+    export.add_argument("--since", type=int, default=30, help="How many days back (default 30).")
+    export.add_argument("--format", choices=["csv", "json"], default="csv", help="Output format.")
+
+    # budget reset
+    budget = sub.add_parser("budget", help="Budget management.")
+    budget_sub = budget.add_subparsers(dest="budget_cmd", required=True)
+    reset = budget_sub.add_parser("reset", help="Delete cost_meter rows (emergency reset).")
+    reset.add_argument("--repo", help="Reset for a specific repo only.")
+    reset.add_argument(
+        "--global", action="store_true", dest="global_reset", help="Reset ALL cost rows."
+    )
+    reset.add_argument("--yes", action="store_true", help="Skip confirmation prompt.")
 
     return p
 
@@ -321,17 +501,19 @@ async def _run(argv: list[str]) -> int:
         print("OPENBOT_POSTGRES_URL is not set.", file=sys.stderr)
         return 2
 
-    since = datetime.now(UTC) - timedelta(days=args.since)
     engine = make_engine(settings.postgres_url, echo=settings.debug)
     try:
         if args.cmd == "cost":
+            since = datetime.now(UTC) - timedelta(days=args.since)
             rows = await fetch_cost_rows(engine, repo=args.repo, since=since)
             if args.json:
                 print(json.dumps([r.to_json() for r in rows], ensure_ascii=False, indent=2))
             else:
                 print(render_cost_markdown(rows, since=since))
             return 0
+
         if args.cmd == "log":
+            since = datetime.now(UTC) - timedelta(days=args.since)
             rows = await fetch_audit_rows(
                 engine,
                 repo=args.repo,
@@ -344,9 +526,40 @@ async def _run(argv: list[str]) -> int:
             else:
                 print(render_audit_markdown(rows, since=since))
             return 0
+
+        if args.cmd == "show":
+            detail = await fetch_task_detail(engine, args.task_id)
+            if args.json:
+                print(json.dumps(detail.to_json(), ensure_ascii=False, indent=2))
+            else:
+                print(render_task_detail_markdown(detail))
+            return 0
+
+        if args.cmd == "export":
+            since = datetime.now(UTC) - timedelta(days=args.since)
+            rows = await export_cost_rows(engine, since=since)
+            if args.format == "csv":
+                print(export_csv(rows))
+            else:
+                print(json.dumps(rows, ensure_ascii=False, indent=2))
+            return 0
+
+        if args.cmd == "budget" and args.budget_cmd == "reset":
+            if not args.repo and not args.global_reset:
+                print("Specify --repo or --global", file=sys.stderr)
+                return 2
+            if not args.yes:
+                scope = "ALL repos (GLOBAL)" if args.global_reset else f"repo={args.repo}"
+                confirm = input(f"Delete all cost_meter rows for {scope}? [y/N] ")
+                if confirm.lower() != "y":
+                    print("Aborted.")
+                    return 1
+            count = await reset_budget(engine, repo=args.repo, global_reset=args.global_reset)
+            print(f"Deleted {count} cost_meter rows.")
+            return 0
     finally:
         await engine.dispose()
-    return 1  # unreachable; argparse already enforced `required=True`
+    return 1
 
 
 def main() -> int:

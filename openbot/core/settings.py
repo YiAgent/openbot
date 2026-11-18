@@ -75,6 +75,26 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ─── Linear channel (PRD v0.2 §2.1) ───
+    # Optional second ingress. When the webhook secret is set, the
+    # /webhook/linear route is mounted and the LinearAdapter is wired
+    # onto app.state; otherwise the route 503s (same pattern as GitHub).
+    linear_webhook_secret: SecretStr | None = Field(
+        default=None,
+        description=(
+            "HMAC-SHA-256 signing secret from the Linear webhook settings. "
+            "If unset, /webhook/linear responds 503 — the Linear channel is "
+            "off until this is provided."
+        ),
+    )
+    linear_oauth_token: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Linear OAuth access token used for GraphQL write-back "
+            "(comments / labels). Receive-only deployments may leave it unset."
+        ),
+    )
+
     # ─── Persistence ───
     # If unset, webhook dedup falls open (logs WARNING). Production MUST set it.
     redis_url: str | None = Field(

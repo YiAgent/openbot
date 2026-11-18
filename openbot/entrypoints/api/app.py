@@ -36,8 +36,10 @@ from openbot.core.logging import configure_root_logger
 from openbot.core.settings import Settings, get_settings
 from openbot.entrypoints.api.routes.github_webhook import router as _webhook_router
 from openbot.entrypoints.api.routes.health import router as _health_router
+from openbot.entrypoints.api.routes.linear_webhook import router as _linear_webhook_router
 from openbot.infrastructure.adapters.github import GitHubAdapter
 from openbot.infrastructure.adapters.github_auth import GitHubAppAuth
+from openbot.infrastructure.adapters.linear import LinearAdapter
 from openbot.infrastructure.config_loader import YamlConfigLoader
 from openbot.infrastructure.observability import init_langfuse, init_langsmith, init_sentry
 from openbot.infrastructure.persistence import (
@@ -178,12 +180,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.github_adapter = github_adapter
     app.state.raw_github_adapter = raw_github_adapter
+
+    # Linear channel (PRD v0.2 §2.1) — wired only when the webhook secret is
+    # set. Without it, /webhook/linear 503s via verified_linear_event, mirroring
+    # the GitHub receive-only fallback.
+    linear_adapter: LinearAdapter | None = (
+        LinearAdapter(
+            webhook_secret=settings.linear_webhook_secret.get_secret_value(),
+            oauth_token=(
+                settings.linear_oauth_token.get_secret_value()
+                if settings.linear_oauth_token is not None
+                else None
+            ),
+        )
+        if settings.linear_webhook_secret is not None
+        else None
+    )
+    app.state.linear_adapter = linear_adapter
+
     _logger.info(
         "openbot_startup",
         extra={
             "version": __version__,
             "webhook_configured": settings.github_webhook_secret is not None,
             "write_back_configured": auth is not None,
+            "linear_configured": linear_adapter is not None,
             "redis_configured": redis_client is not None,
             "postgres_configured": db_engine is not None,
         },
@@ -200,6 +221,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         adapter: GitHubAdapter | None = app.state.raw_github_adapter
         if adapter is not None:
             await adapter.aclose()
+        if linear_adapter is not None:
+            await linear_adapter.aclose()
         if auth is not None:
             await auth.aclose()
         if redis_client is not None:
@@ -323,3 +346,4 @@ _attach_prometheus_metrics(app)
 
 app.include_router(_health_router)
 app.include_router(_webhook_router)
+app.include_router(_linear_webhook_router)
